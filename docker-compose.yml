@@ -1,0 +1,84 @@
+services:
+  video-agent-db-init:
+    image: postgres:16-alpine
+    container_name: video-agent-db-init
+    restart: "no"
+    environment:
+      PGPASSWORD: postgres
+    command:
+      - sh
+      - -lc
+      - |
+        if psql -h biga-postgres -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'video_agent'" | grep -q 1; then
+          echo "database video_agent already exists"
+        else
+          psql -h biga-postgres -U postgres -d postgres -c "CREATE DATABASE video_agent"
+        fi
+    depends_on:
+      - biga-postgres
+
+  video-agent-api:
+    build:
+      context: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/video-agent}/backend
+      dockerfile: Dockerfile
+    container_name: video-agent-api
+    working_dir: /app
+    command: cargo run --bin video-agent-api
+    ports:
+      - "18180:8080"
+    volumes:
+      - ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/video-agent}/backend:/app
+    environment:
+      VIDEO_AGENT_ENV: development
+      DATABASE_URL: postgres://postgres:postgres@biga-postgres:5432/video_agent
+      REDIS_URL: redis://bs-redis:6379/2
+    depends_on:
+      video-agent-db-init:
+        condition: service_completed_successfully
+      bs-redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+  video-agent-worker:
+    build:
+      context: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/video-agent}/python-worker
+      dockerfile: Dockerfile
+    container_name: video-agent-worker
+    working_dir: /app
+    command: uvicorn video_worker.main:app --host 0.0.0.0 --port 8081 --reload
+    ports:
+      - "18181:8081"
+    volumes:
+      - ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/video-agent}/python-worker:/app
+    environment:
+      VIDEO_AGENT_ENV: development
+      DATABASE_URL: postgres://postgres:postgres@biga-postgres:5432/video_agent
+      REDIS_URL: redis://bs-redis:6379/2
+    depends_on:
+      video-agent-db-init:
+        condition: service_completed_successfully
+      bs-redis:
+        condition: service_started
+
+  video-agent-web:
+    build:
+      context: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/video-agent}/frontend
+      dockerfile: Dockerfile
+    container_name: video-agent-web
+    working_dir: /app
+    command: sh -lc "npm install && npm run dev"
+    ports:
+      - "18182:3000"
+    volumes:
+      - ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/video-agent}/frontend:/app
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:18180
+      NEXT_PUBLIC_WORKER_BASE_URL: http://localhost:18181
+    depends_on:
+      video-agent-api:
+        condition: service_healthy
