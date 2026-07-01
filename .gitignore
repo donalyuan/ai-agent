@@ -1,8 +1,9 @@
 /.claude/settings.local.json
 /backend/target/
-/frontend/.next/
-/frontend/node_modules/
-/frontend/*.tsbuildinfo
-/python-worker/.pytest_cache/
-/python-worker/**/__pycache__/
-/python-worker/src/*.egg-info/
+/target/
+/admin/.next/
+/admin/node_modules/
+/admin/*.tsbuildinfo
+/services/video-worker/.pytest_cache/
+/services/video-worker/**/__pycache__/
+/services/video-worker/src/*.egg-info/

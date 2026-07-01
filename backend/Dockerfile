@@ -8,4 +8,4 @@ RUN apt-get update \
 
 EXPOSE 8080
 
-CMD ["cargo", "run", "--bin", "video-agent-api"]
+CMD ["cargo", "run", "--bin", "novex-api"]

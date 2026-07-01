@@ -8,6 +8,9 @@ use axum::{
 use serde::Serialize;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
+pub mod agents;
+pub mod repositories;
+
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub environment: String,
@@ -18,7 +21,8 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn from_env() -> Self {
         Self {
-            environment: std::env::var("VIDEO_AGENT_ENV").unwrap_or_else(|_| "development".to_string()),
+            environment: std::env::var("NOVEX_ENV")
+                .unwrap_or_else(|_| "development".to_string()),
             database_url: std::env::var("DATABASE_URL").unwrap_or_else(|_| {
                 "postgres://postgres:postgres@biga-postgres:5432/video_agent".to_string()
             }),
@@ -91,7 +95,7 @@ pub async fn build_runtime_state() -> Result<AppState, Box<dyn std::error::Error
 
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
-        service: "video-agent-api",
+        service: "novex-api",
         status: "ok",
         environment: state.config.environment,
     })
@@ -125,7 +129,7 @@ async fn ready(State(state): State<AppState>) -> impl IntoResponse {
     };
 
     let body = ReadyResponse {
-        service: "video-agent-api",
+        service: "novex-api",
         status: if postgres_ok && redis_ok { "ready" } else { "not_ready" },
         postgres: if postgres_ok { "ok" } else { "error" },
         redis: if redis_ok { "ok" } else { "error" },

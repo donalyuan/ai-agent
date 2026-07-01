@@ -5,7 +5,7 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn health_returns_service_status() {
-    let app = video_agent_api::build_app();
+    let app = novex_api::build_app();
 
     let response = app
         .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
@@ -19,6 +19,6 @@ async fn health_returns_service_status() {
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(payload["service"], "video-agent-api");
+    assert_eq!(payload["service"], "novex-api");
     assert_eq!(payload["status"], "ok");
 }

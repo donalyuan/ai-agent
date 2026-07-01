@@ -11,16 +11,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目记忆
 
-1. video-agent 项目记忆采用"总索引 + 分文件"结构：`/server/video-agent/MEMORY.md` 作为项目级总索引和全局稳定约束，`/server/video-agent/memory/MEMORY.md` 作为子目录索引，`/server/video-agent/memory/*.md` 作为具体主题记忆。
-2. 每次新会话开始前、每次上下文压缩后恢复继续执行前，必须先读取 `/server/video-agent/MEMORY.md`；涉及具体主题、长期决策或历史背景时，再读取 `/server/video-agent/memory/` 下对应文件。
-3. 写入 memory 时，优先更新对应主题文件；当新增主题、调整索引、变更全局约束或跨文件稳定规则时，再同步更新 `/server/video-agent/MEMORY.md`，必要时更新 `/server/video-agent/memory/MEMORY.md`。
+1. Novex 项目记忆采用"总索引 + 分文件"结构：`/server/video-agent/MEMORY.md` 作为项目级总索引和全局稳定约束，`/server/video-agent/docs/memory/README.md` 作为文档区索引，`/server/video-agent/docs/memory/*.md` 作为具体主题记忆。
+2. 每次新会话开始前、每次上下文压缩后恢复继续执行前，必须先读取 `/server/video-agent/MEMORY.md`；涉及具体主题、长期决策或历史背景时，再读取 `/server/video-agent/docs/memory/` 或 `/server/video-agent/docs/requirements/` 下对应文件。
+3. 写入 memory 时，优先更新对应主题文件；当新增主题、调整索引、变更全局约束或跨文件稳定规则时，再同步更新 `/server/video-agent/MEMORY.md`，必要时更新 `/server/video-agent/docs/memory/README.md`。
 4. 只保存已确认并在后续仍可能复用的关键信息，包括长期偏好、稳定规则、历史决策，以及跨轮或压缩恢复后继续执行仍必需的上下文。
 5. 禁止写入临时探索、一次性报错、未确认猜测、仅当前局部步骤短暂有效的信息，以及口令、密钥、令牌、隐私数据等敏感信息。
 6. 需求明确或架构决策一旦确认，必须在当轮同步写入对应的主题 memory 文件；若影响总索引或全局约束，再同步更新 `/server/video-agent/MEMORY.md`。
 
 ## 当前仓库状态
 
-1. 项目已完成最小 Docker Compose 开发环境初始化，已有 Rust/Axum API、Python/FastAPI Worker、Next.js 前端的可运行骨架。
+1. 项目正在从根级 video-agent MVP 结构迁移为 Novex AI Agent Foundation monorepo；`apps/video-agent` 是首个业务应用。
 2. 技术栈已确定：Rust + Axum + SQLx + PostgreSQL + Milvus + Redis + Python Worker + Next.js。
 3. 后续实例在进入实现前，必须先重新检查仓库实际内容，以真实文件为准，不能从历史对话或其他项目推断当前实现状态。
 
@@ -46,7 +46,7 @@ find . -maxdepth 2 -type f | sort
 启动开发环境：
 
 ```bash
-docker compose -f /server/docker-compose.yml up -d --build video-agent-api video-agent-worker video-agent-web
+docker compose -f /server/docker-compose.yml up -d --build novex-api novex-video-worker novex-admin
 ```
 
 检查顶层 Compose 服务：
@@ -58,43 +58,43 @@ docker compose -f /server/docker-compose.yml config --services
 Rust API 构建：
 
 ```bash
-docker compose -f /server/docker-compose.yml exec -T video-agent-api sh -lc 'cd /app && /usr/local/cargo/bin/cargo build'
+docker compose -f /server/docker-compose.yml exec -T novex-api sh -lc 'cd /app && /usr/local/cargo/bin/cargo build --workspace'
 ```
 
 Rust API 全量测试：
 
 ```bash
-docker compose -f /server/docker-compose.yml exec -T video-agent-api sh -lc 'cd /app && /usr/local/cargo/bin/cargo test'
+docker compose -f /server/docker-compose.yml exec -T novex-api sh -lc 'cd /app && /usr/local/cargo/bin/cargo test --workspace'
 ```
 
 Rust API 单个测试文件：
 
 ```bash
-docker compose -f /server/docker-compose.yml exec -T video-agent-api sh -lc 'cd /app && /usr/local/cargo/bin/cargo test --test health'
+docker compose -f /server/docker-compose.yml exec -T novex-api sh -lc 'cd /app && /usr/local/cargo/bin/cargo test -p novex-api --test health'
 ```
 
 Python Worker 全量测试：
 
 ```bash
-docker compose -f /server/docker-compose.yml exec -T video-agent-worker sh -lc 'cd /app && pytest tests -q'
+docker compose -f /server/docker-compose.yml exec -T novex-video-worker sh -lc 'cd /app && pytest tests -q'
 ```
 
 Python Worker 单个测试文件：
 
 ```bash
-docker compose -f /server/docker-compose.yml exec -T video-agent-worker sh -lc 'cd /app && pytest tests/test_health.py -q'
+docker compose -f /server/docker-compose.yml exec -T novex-video-worker sh -lc 'cd /app && pytest tests/test_health.py -q'
 ```
 
 前端 lint：
 
 ```bash
-docker compose -f /server/docker-compose.yml exec -T video-agent-web sh -lc 'cd /app && npm run lint'
+docker compose -f /server/docker-compose.yml exec -T novex-admin sh -lc 'cd /app && npm run lint'
 ```
 
 前端构建：
 
 ```bash
-docker compose -f /server/docker-compose.yml exec -T video-agent-web sh -lc 'cd /app && npm run build'
+docker compose -f /server/docker-compose.yml exec -T novex-admin sh -lc 'cd /app && npm run build'
 ```
 
 ## 测试与验证
@@ -125,10 +125,10 @@ docker compose -f /server/docker-compose.yml exec -T video-agent-web sh -lc 'cd 
 
 ## 架构判断
 
-1. 项目定位为 AI 驱动的视频生成 Agent 系统，核心是可持续优化的内容生产与增长闭环。
-2. 系统架构分层：用户层 → 业务层 → Agent 层 → 模型层 → 外部服务层。
-3. MVP 不做权限系统（无租户、无 RBAC、无多用户），只做核心功能闭环。
-4. 如果后续开始建设项目，应先根据用户需求明确当前阶段范围，再围绕真实落地的目录和入口更新本文件。
+1. 项目定位为 Novex AI Agent Foundation，video-agent 是 `apps/video-agent` 下的首个业务应用。
+2. 系统边界以 `ARCHITECTURE.md` 为长期基准：`backend/admin/apps/crates/services/templates/infra/docs`。
+3. 可复用 AI 基建能力优先沉淀到 `crates/*`，业务应用放入 `apps/*`，Python sidecar/runtime 放入 `services/*`。
+4. 如果后续建设 video-agent 业务，应先确认它是应用私有能力还是可复用基座能力，再选择落点。
 
 ## OpenSpec 规范
 

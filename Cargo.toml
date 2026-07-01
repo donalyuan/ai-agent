@@ -1,0 +1,17 @@
+[workspace]
+members = [
+    "backend",
+    "crates/novex-ai-core",
+    "crates/novex-model",
+    "crates/novex-agent",
+    "crates/novex-rag",
+    "crates/novex-tools",
+    "crates/novex-memory",
+    "crates/novex-eval",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "UNLICENSED"

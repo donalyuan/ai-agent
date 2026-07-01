@@ -1,156 +1,84 @@
-# AI 视频生成 Agent 系统
+# Novex AI Agent Foundation
 
-> AI 驱动的视频内容生产系统，从选题到发布的全流程自动化
+> 可复用 AI Agent 基座。`apps/video-agent` 是当前第一个业务应用，用于视频内容生产链路。
 
 ## 项目状态
 
-🚧 **当前阶段：开发环境初始化完成，业务功能待实现**
+🚧 **当前阶段：Novex 基座结构已归档，准备恢复 script-agent MVP**
 
-- ✅ 完成完整需求文档
-- ✅ 完成数据库设计
-- ✅ 确认技术栈选型
 - ✅ Docker Compose 开发环境已接入顶层 `/server/docker-compose.yml`
-- 🔄 进入基础 API 与 Agent 链路开发阶段
+- ✅ 已建立 Rust API、Next.js admin、Python video worker 的可运行骨架
+- ✅ `script-agent-mvp` 已完成数据库、领域模型、请求/响应模型和 Repository 初始能力
+- 🔄 当前优先级：恢复 `script-agent-mvp`，从 T2.3 继续
 
-## 核心能力
+## 目录结构
 
-### 六大 Agent
-
-1. **选题 Agent** - 热点分析 + 爆款选题生成
-2. **脚本 Agent** - 结构化脚本 + 分镜生成
-3. **素材 Agent** - 语义检索 + 智能匹配
-4. **视频 Agent** - 多平台视频生成编排
-5. **发布 Agent** - 多平台自动发布
-6. **优化 Agent** - 数据回流 + 策略优化
-
-### 完整闭环
-
+```text
+backend/                 Rust 控制面 API
+admin/                   Next.js 管理后台
+apps/
+  video-agent/           视频内容生产业务应用
+crates/
+  novex-ai-core/         Run Graph、Trace、Policy 等通用 AI 领域边界
+  novex-model/           模型注册、路由、能力描述和用量边界
+  novex-agent/           Agent runtime、planner、tool loop 边界
+  novex-rag/             chunk、embedding、retrieval、rerank、citation 边界
+  novex-tools/           tool registry、executor、permission、audit 边界
+  novex-memory/          session/user/org/project memory 边界
+  novex-eval/            eval runner、指标和报告边界
+services/
+  video-worker/          Python 视频生成和平台发布 sidecar
+templates/               客户交付模板
+infra/                   部署与环境配置
+docs/                    架构、需求、项目记忆、实施计划和交付文档
 ```
-选题 → 脚本 → 素材匹配 → 视频生成 → 发布分发 → 数据回流 → 策略优化
-```
-
-## 技术栈
-
-### 后端
-- **Rust + Axum** - API 服务和 Agent 编排
-- **SQLx + PostgreSQL** - 类型安全的数据库操作
-- **Milvus Standalone** - 素材向量检索（20万规模）
-- **Redis** - 任务队列 + 缓存
-
-### Python Worker
-- **FastAPI** - Worker HTTP 服务
-- **视频生成 SDK** - Runway、可灵
-- **平台 SDK** - 抖音、小红书
-
-### 前端
-- **Next.js 14 + TypeScript**
-- **shadcn/ui** - UI 组件库
-
-## MVP 范围
-
-### ✅ 核心功能（必做）
-- 素材库管理与语义检索
-- 选题与脚本生成
-- 视频生成（Runway + 可灵）
-- 平台发布（抖音 + 小红书）
-- 数据回流与分析
-
-### ❌ 暂不实现
-- 多租户与 RBAC 权限系统
-- 可视化 Workflow 编排
-- 多 Agent 协作
-- 账号矩阵运营
-
-## 文档导航
-
-### 核心文档
-- [`CLAUDE.md`](./CLAUDE.md) - Claude Code 工作规范
-- [`MEMORY.md`](./MEMORY.md) - 项目记忆统一入口
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) - 系统架构设计
-- [`ai_video_agent_full_spec.md`](./ai_video_agent_full_spec.md) - 完整需求文档
-
-### 项目记忆
-- [`memory/project-tech-stack.md`](./memory/project-tech-stack.md) - 技术栈与架构
-- [`memory/mvp-requirements.md`](./memory/mvp-requirements.md) - MVP 需求边界
-- [`memory/database-schema.md`](./memory/database-schema.md) - 数据库设计
-
-## 开发计划
-
-### Month 1-2（P0）
-- 数据库 + 基础 API
-- LLM 调用层
-- 选题 Agent + 脚本 Agent
-- 素材上传 + 检索
-
-### Month 3（P1）
-- 视频生成 Agent
-- Python Worker（Runway + 可灵）
-- 发布 Agent（抖音 + 小红书）
-- 任务队列
-
-### Month 4（P2）
-- 爆款分析
-- 优化 Agent
-- 数据 Dashboard
-- 打磨体验
 
 ## 快速开始
 
 本项目开发环境必须从顶层 Compose 入口启动，并复用 `/server/docker-compose.yml` 中已经运行的 `biga-postgres` 与 `bs-redis`。
 
-### 启动环境
-
 ```bash
-docker compose -f /server/docker-compose.yml up -d --build video-agent-api video-agent-worker video-agent-web
+docker compose -f /server/docker-compose.yml up -d --build novex-api novex-video-worker novex-admin
 ```
 
 ### 访问地址
 
 - API health: `http://127.0.0.1:18180/health`
 - API ready: `http://127.0.0.1:18180/ready`
-- Worker health: `http://127.0.0.1:18181/health`
-- Web: `http://127.0.0.1:18182`
-
-### 环境依赖
-
-- PostgreSQL：复用 `biga-postgres`，自动创建独立数据库 `video_agent`
-- Redis：复用 `bs-redis`，使用 DB index `/2`
+- Video worker health: `http://127.0.0.1:18181/health`
+- Admin: `http://127.0.0.1:18182`
 
 ### 常用验证
 
 ```bash
 docker compose -f /server/docker-compose.yml config --services
-docker compose -f /server/docker-compose.yml exec -T video-agent-api sh -lc 'cd /app && /usr/local/cargo/bin/cargo test'
-docker compose -f /server/docker-compose.yml exec -T video-agent-worker sh -lc 'cd /app && pytest tests -q'
-docker compose -f /server/docker-compose.yml exec -T video-agent-web sh -lc 'cd /app && npm run lint'
-docker compose -f /server/docker-compose.yml exec -T video-agent-web sh -lc 'cd /app && npm run build'
+docker compose -f /server/docker-compose.yml exec -T novex-api sh -lc 'cd /app && /usr/local/cargo/bin/cargo test --workspace'
+docker compose -f /server/docker-compose.yml exec -T novex-video-worker sh -lc 'cd /app && pytest tests -q'
+docker compose -f /server/docker-compose.yml exec -T novex-admin sh -lc 'cd /app && npm run lint'
+docker compose -f /server/docker-compose.yml exec -T novex-admin sh -lc 'cd /app && npm run build'
 ```
 
-## 设计原则
+## 架构原则
 
-1. **极简优先** - MVP 不做权限系统，复杂结构先用 JSONB
-2. **并发稳定** - 支持 20 个视频生成任务/分钟
-3. **模块清晰** - Python 只做视频 SDK 和平台对接，核心逻辑在 Rust
-4. **AI 辅助** - 使用 Claude/Cursor 生成样板代码
+1. `backend/` 承担控制面 API 和业务编排入口。
+2. 可复用 AI 能力沉淀到 `crates/*`，避免堆进 `backend/src`。
+3. Python 只作为 `services/*` sidecar/runtime，不进入核心控制面。
+4. 业务应用放入 `apps/*`；video-agent 是第一个业务应用。
+5. 后续功能新增、行为修改、协议改造和测试规则变化必须走 OpenSpec。
 
-## 系统规模
+## 文档导航
 
-- 素材量：初期 < 10 万，最多 20 万
-- 并发量：最多 20 个视频生成任务/分钟
-- 平台：MVP 只做抖音和小红书
-- 部署：Docker Compose 本地开发，容器化云部署
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) - Novex 长期架构基准
+- [`MEMORY.md`](./MEMORY.md) - 项目记忆统一入口
+- [`CLAUDE.md`](./CLAUDE.md) - Claude Code 工作规范
+- [`docs/README.md`](./docs/README.md) - 文档入口
+- [`docs/memory/README.md`](./docs/memory/README.md) - 项目记忆主题索引
+- [`docs/requirements/README.md`](./docs/requirements/README.md) - 需求文档索引
+- [`apps/video-agent/README.md`](./apps/video-agent/README.md) - video-agent 应用说明
 
-## License
+## 当前 OpenSpec
 
-待定
-
-## 贡献指南
-
-开发前请先阅读：
-1. [`CLAUDE.md`](./CLAUDE.md) - 工作规范与约束
-2. [`MEMORY.md`](./MEMORY.md) - 项目长期决策
-3. [`memory/mvp-requirements.md`](./memory/mvp-requirements.md) - MVP 边界
-
----
+- `align-novex-foundation-architecture`：已归档
+- `script-agent-mvp`：可恢复开发，从 T2.3 继续
 
 📅 最后更新：2026-07-01
