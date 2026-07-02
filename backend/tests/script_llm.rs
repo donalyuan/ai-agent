@@ -22,6 +22,7 @@ fn script_prompt_builder_includes_topic_style_and_scene_count() {
     assert!(prompt.user.contains("ChatGPT如何改变程序员工作流"));
     assert!(prompt.user.contains("教程讲解类"));
     assert!(prompt.user.contains("7个分镜"));
+    assert!(prompt.user.contains("narration 为 50-150 个中文字符"));
 }
 
 #[test]
@@ -175,6 +176,8 @@ async fn openai_client_sends_chat_completion_request_and_reads_content() {
         base_url: format!("http://{address}/v1"),
         model: "test-model".to_string(),
         timeout_seconds: 5,
+        responses_reasoning_effort: Some("low".to_string()),
+        responses_max_output_tokens: 3000,
     })
     .unwrap();
 
@@ -190,4 +193,168 @@ async fn openai_client_sends_chat_completion_request_and_reads_content() {
         .unwrap();
 
     assert!(response.contains("测试标题"));
+}
+
+#[tokio::test]
+async fn openai_client_sends_responses_request_and_reads_output_text() {
+    async fn handler(Json(payload): Json<Value>) -> Json<Value> {
+        assert_eq!(payload["model"], "test-model");
+        assert_eq!(payload["input"][0]["role"], "system");
+        assert_eq!(payload["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(payload["input"][1]["role"], "user");
+        assert_eq!(payload["input"][1]["content"][0]["type"], "input_text");
+        assert_eq!(payload["text"]["format"]["type"], "json_object");
+        assert_eq!(payload["reasoning"]["effort"], "low");
+        assert_eq!(payload["max_output_tokens"], 3000);
+
+        Json(json!({
+            "id": "resp_test",
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "{\"title\":\"响应测试标题\",\"hook\":\"测试hook\",\"scenes\":[]}"
+                        }
+                    ]
+                }
+            ]
+        }))
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route("/responses", post(handler));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = OpenAIClient::new(OpenAIConfig {
+        api_key: "test-key".to_string(),
+        base_url: format!("http://{address}/responses"),
+        model: "test-model".to_string(),
+        timeout_seconds: 5,
+        responses_reasoning_effort: Some("low".to_string()),
+        responses_max_output_tokens: 3000,
+    })
+    .unwrap();
+
+    let response = client
+        .generate_script(ScriptPromptBuilder::build(&GenerateScriptRequest {
+            project_id: Uuid::new_v4(),
+            topic: "ChatGPT如何改变程序员工作流".to_string(),
+            style: None,
+            scene_count: Some(6),
+            parent_id: None,
+        }))
+        .await
+        .unwrap();
+
+    assert!(response.contains("响应测试标题"));
+}
+
+#[tokio::test]
+async fn openai_client_uses_configured_responses_reasoning_and_token_limit() {
+    async fn handler(Json(payload): Json<Value>) -> Json<Value> {
+        assert_eq!(payload["reasoning"]["effort"], "high");
+        assert_eq!(payload["max_output_tokens"], 4096);
+
+        Json(json!({
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "{\"title\":\"配置测试标题\",\"hook\":\"测试hook\",\"scenes\":[]}"
+                        }
+                    ]
+                }
+            ]
+        }))
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route("/responses", post(handler));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = OpenAIClient::new(OpenAIConfig {
+        api_key: "test-key".to_string(),
+        base_url: format!("http://{address}/responses"),
+        model: "test-model".to_string(),
+        timeout_seconds: 5,
+        responses_reasoning_effort: Some("high".to_string()),
+        responses_max_output_tokens: 4096,
+    })
+    .unwrap();
+
+    let response = client
+        .generate_script(ScriptPromptBuilder::build(&GenerateScriptRequest {
+            project_id: Uuid::new_v4(),
+            topic: "ChatGPT如何改变程序员工作流".to_string(),
+            style: None,
+            scene_count: Some(6),
+            parent_id: None,
+        }))
+        .await
+        .unwrap();
+
+    assert!(response.contains("配置测试标题"));
+}
+
+#[tokio::test]
+async fn openai_client_omits_responses_reasoning_when_disabled() {
+    async fn handler(Json(payload): Json<Value>) -> Json<Value> {
+        assert!(payload.get("reasoning").is_none());
+        assert_eq!(payload["max_output_tokens"], 3000);
+
+        Json(json!({
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "{\"title\":\"关闭推理测试\",\"hook\":\"测试hook\",\"scenes\":[]}"
+                        }
+                    ]
+                }
+            ]
+        }))
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route("/responses", post(handler));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = OpenAIClient::new(OpenAIConfig {
+        api_key: "test-key".to_string(),
+        base_url: format!("http://{address}/responses"),
+        model: "test-model".to_string(),
+        timeout_seconds: 5,
+        responses_reasoning_effort: None,
+        responses_max_output_tokens: 3000,
+    })
+    .unwrap();
+
+    let response = client
+        .generate_script(ScriptPromptBuilder::build(&GenerateScriptRequest {
+            project_id: Uuid::new_v4(),
+            topic: "ChatGPT如何改变程序员工作流".to_string(),
+            style: None,
+            scene_count: Some(6),
+            parent_id: None,
+        }))
+        .await
+        .unwrap();
+
+    assert!(response.contains("关闭推理测试"));
 }

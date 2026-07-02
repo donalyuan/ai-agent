@@ -24,6 +24,9 @@ services:
     container_name: ai-agent-api
     working_dir: /app
     command: cargo run -p novex-api --bin novex-api
+    env_file:
+      - path: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/.env
+        required: false
     ports:
       - "18180:8080"
     volumes:
@@ -32,10 +35,6 @@ services:
       AI_AGENT_ENV: development
       DATABASE_URL: postgres://postgres:postgres@biga-postgres:5432/video_agent
       REDIS_URL: redis://bs-redis:6379/2
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4-turbo}
-      OPENAI_TIMEOUT_SECONDS: ${OPENAI_TIMEOUT_SECONDS:-30}
     depends_on:
       ai-agent-db-init:
         condition: service_completed_successfully

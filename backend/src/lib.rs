@@ -33,6 +33,8 @@ pub struct AppConfig {
     pub openai_base_url: String,
     pub openai_model: String,
     pub openai_timeout_seconds: u64,
+    pub openai_reasoning_effort: Option<String>,
+    pub openai_max_output_tokens: u32,
 }
 
 impl AppConfig {
@@ -55,6 +57,16 @@ impl AppConfig {
                 .ok()
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(30),
+            openai_reasoning_effort: std::env::var("OPENAI_REASONING_EFFORT")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"))
+                .or_else(|| Some("low".to_string())),
+            openai_max_output_tokens: std::env::var("OPENAI_MAX_OUTPUT_TOKENS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(3000),
         }
     }
 }
@@ -125,6 +137,8 @@ impl AppState {
                 base_url: self.config.openai_base_url.clone(),
                 model: self.config.openai_model.clone(),
                 timeout_seconds: self.config.openai_timeout_seconds,
+                responses_reasoning_effort: self.config.openai_reasoning_effort.clone(),
+                responses_max_output_tokens: self.config.openai_max_output_tokens,
             },
         }))
     }

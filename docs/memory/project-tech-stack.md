@@ -19,6 +19,7 @@ Novex 是可复用 AI Agent Foundation。`apps/video-agent` 是第一个业务�
 - **Rust + Axum**：`backend/` 控制面 API 和业务编排入口
 - **SQLx + PostgreSQL**：类型安全数据库访问
 - **Redis**：任务队列与缓存
+- **LLM 接入**：脚本 Agent 的 OpenAI-compatible 客户端同时支持 Chat Completions 与 Responses API；当 `OPENAI_BASE_URL` 以 `/responses` 结尾时直接走 Responses endpoint，并使用 JSON object 输出约束。Responses 分支支持 `OPENAI_REASONING_EFFORT` 和 `OPENAI_MAX_OUTPUT_TOKENS` 配置，`OPENAI_REASONING_EFFORT=none` 时不发送 `reasoning` 字段。
 
 ### Rust 基座 crates
 - `crates/novex-ai-core`：Run Graph、Trace、Policy、通用 AI 领域模型
@@ -47,6 +48,7 @@ Novex 是可复用 AI Agent Foundation。`apps/video-agent` 是第一个业务�
 - Video Worker：`novex-video-worker`，宿主机端口 `18181`，容器端口 `8081`
 - Admin：`novex-admin`，宿主机端口 `18182`，容器端口 `3000`
 - 容器内项目路径：`/app`
+- 当前已验证脚本生成链路可通过 Responses API 使用 `gpt-5.4-mini` 完成端到端生成；`gpt-5.5` 在完整脚本生成场景下存在上游 502 风险，不作为当前稳定验证模型。
 
 ## video-agent 业务边界
 

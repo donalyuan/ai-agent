@@ -18,7 +18,7 @@ impl ScriptPromptBuilder {
         let style = request.style_or_default();
         let scene_count = request.scene_count_or_default();
         let variant_instruction = if request.parent_id.is_some() {
-            "\n6. 这是 A/B 测试的差异化版本，必须避免复用相同表达、相同开场结构和相同分镜节奏。"
+            "\n7. 这是 A/B 测试的差异化版本，必须避免复用相同表达、相同开场结构和相同分镜节奏。"
         } else {
             ""
         };
@@ -36,7 +36,8 @@ impl ScriptPromptBuilder {
 2. hook 必须能在前3秒抓住观众注意力。
 3. 必须严格输出 {scene_count} 个分镜，sequence 从 1 连续递增。
 4. 每个分镜包含 narration、visual_description、emotion、duration_sec。
-5. 每个分镜 duration_sec 为 1-30 秒，总时长建议 45-60 秒。{variant_instruction}
+5. 每个分镜 narration 为 50-150 个中文字符，不能少于50字。
+6. 每个分镜 duration_sec 为 1-30 秒，总时长建议 45-60 秒。{variant_instruction}
 
 JSON Schema：
 {{
@@ -94,6 +95,8 @@ pub struct OpenAIConfig {
     pub base_url: String,
     pub model: String,
     pub timeout_seconds: u64,
+    pub responses_reasoning_effort: Option<String>,
+    pub responses_max_output_tokens: u32,
 }
 
 impl OpenAIConfig {
@@ -107,7 +110,26 @@ impl OpenAIConfig {
                 .ok()
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(30),
+            responses_reasoning_effort: responses_reasoning_effort_from_env(),
+            responses_max_output_tokens: std::env::var("OPENAI_MAX_OUTPUT_TOKENS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(3000),
         }
+    }
+}
+
+fn responses_reasoning_effort_from_env() -> Option<String> {
+    let effort = std::env::var("OPENAI_REASONING_EFFORT")
+        .unwrap_or_else(|_| "low".to_string())
+        .trim()
+        .to_string();
+
+    if effort.eq_ignore_ascii_case("none") || effort.is_empty() {
+        None
+    } else {
+        Some(effort)
     }
 }
 
@@ -138,6 +160,26 @@ impl OpenAIClient {
 #[async_trait]
 impl LLMClient for OpenAIClient {
     async fn generate_script(&self, prompt: ScriptPrompt) -> Result<String, LLMError> {
+        if self.uses_responses_api() {
+            self.generate_script_with_responses(prompt).await
+        } else {
+            self.generate_script_with_chat_completions(prompt).await
+        }
+    }
+}
+
+impl OpenAIClient {
+    fn uses_responses_api(&self) -> bool {
+        self.config
+            .base_url
+            .trim_end_matches('/')
+            .ends_with("/responses")
+    }
+
+    async fn generate_script_with_chat_completions(
+        &self,
+        prompt: ScriptPrompt,
+    ) -> Result<String, LLMError> {
         let endpoint = format!(
             "{}/chat/completions",
             self.config.base_url.trim_end_matches('/')
@@ -192,6 +234,79 @@ impl LLMClient for OpenAIClient {
             .filter(|content| !content.trim().is_empty())
             .ok_or_else(|| LLMError::Provider("missing assistant content".to_string()))
     }
+
+    async fn generate_script_with_responses(
+        &self,
+        prompt: ScriptPrompt,
+    ) -> Result<String, LLMError> {
+        let endpoint = self.config.base_url.trim_end_matches('/').to_string();
+        let payload = OpenAIResponsesRequest {
+            model: self.config.model.clone(),
+            temperature: 0.8,
+            max_output_tokens: self.config.responses_max_output_tokens,
+            input: vec![
+                OpenAIResponsesMessage {
+                    role: "system".to_string(),
+                    content: vec![OpenAIResponsesContent {
+                        content_type: "input_text".to_string(),
+                        text: prompt.system,
+                    }],
+                },
+                OpenAIResponsesMessage {
+                    role: "user".to_string(),
+                    content: vec![OpenAIResponsesContent {
+                        content_type: "input_text".to_string(),
+                        text: prompt.user,
+                    }],
+                },
+            ],
+            text: OpenAIResponsesTextConfig {
+                format: OpenAIResponseFormat {
+                    response_type: "json_object".to_string(),
+                },
+            },
+            reasoning: self
+                .config
+                .responses_reasoning_effort
+                .clone()
+                .map(|effort| OpenAIResponsesReasoningConfig { effort }),
+        };
+
+        let response = self
+            .http_client
+            .post(endpoint)
+            .bearer_auth(&self.config.api_key)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|error| {
+                if error.is_timeout() {
+                    LLMError::Timeout
+                } else {
+                    LLMError::Transport(error.to_string())
+                }
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(LLMError::Provider(format_provider_error(status, &body)));
+        }
+
+        let body: OpenAIResponsesResponse = response
+            .json()
+            .await
+            .map_err(|error| LLMError::Provider(error.to_string()))?;
+
+        body.output
+            .into_iter()
+            .flat_map(|item| item.content.into_iter())
+            .find(|content| {
+                content.content_type == "output_text" && !content.text.trim().is_empty()
+            })
+            .map(|content| content.text)
+            .ok_or_else(|| LLMError::Provider("missing response output text".to_string()))
+    }
 }
 
 fn format_provider_error(status: StatusCode, body: &str) -> String {
@@ -223,6 +338,40 @@ struct OpenAIResponseFormat {
     response_type: String,
 }
 
+#[derive(Serialize)]
+struct OpenAIResponsesRequest {
+    model: String,
+    input: Vec<OpenAIResponsesMessage>,
+    temperature: f32,
+    max_output_tokens: u32,
+    text: OpenAIResponsesTextConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<OpenAIResponsesReasoningConfig>,
+}
+
+#[derive(Serialize)]
+struct OpenAIResponsesMessage {
+    role: String,
+    content: Vec<OpenAIResponsesContent>,
+}
+
+#[derive(Serialize)]
+struct OpenAIResponsesContent {
+    #[serde(rename = "type")]
+    content_type: String,
+    text: String,
+}
+
+#[derive(Serialize)]
+struct OpenAIResponsesTextConfig {
+    format: OpenAIResponseFormat,
+}
+
+#[derive(Serialize)]
+struct OpenAIResponsesReasoningConfig {
+    effort: String,
+}
+
 #[derive(Deserialize)]
 struct OpenAIChatCompletionResponse {
     choices: Vec<OpenAIChoice>,
@@ -236,6 +385,24 @@ struct OpenAIChoice {
 #[derive(Deserialize)]
 struct OpenAIChoiceMessage {
     content: String,
+}
+
+#[derive(Deserialize)]
+struct OpenAIResponsesResponse {
+    output: Vec<OpenAIResponsesOutputItem>,
+}
+
+#[derive(Deserialize)]
+struct OpenAIResponsesOutputItem {
+    #[serde(default)]
+    content: Vec<OpenAIResponsesOutputContent>,
+}
+
+#[derive(Deserialize)]
+struct OpenAIResponsesOutputContent {
+    #[serde(rename = "type")]
+    content_type: String,
+    text: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
