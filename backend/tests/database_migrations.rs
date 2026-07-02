@@ -14,7 +14,9 @@ fn with_database_name(database_url: &str, database_name: &str) -> String {
         None => (database_url, ""),
     };
 
-    let slash_index = base.rfind('/').expect("DATABASE_URL must include database name");
+    let slash_index = base
+        .rfind('/')
+        .expect("DATABASE_URL must include database name");
     format!("{}{}{}", &base[..=slash_index], database_name, query)
 }
 
@@ -143,7 +145,10 @@ async fn migrations_create_video_agent_core_schema() {
         "viral_videos",
         "content_strategies",
     ] {
-        assert!(table_exists(&test_pool, table).await, "{table} table should exist");
+        assert!(
+            table_exists(&test_pool, table).await,
+            "{table} table should exist"
+        );
     }
 
     for index in [
@@ -154,7 +159,10 @@ async fn migrations_create_video_agent_core_schema() {
         "idx_publish_tasks_status",
         "idx_agent_runs_type",
     ] {
-        assert!(index_exists(&test_pool, index).await, "{index} index should exist");
+        assert!(
+            index_exists(&test_pool, index).await,
+            "{index} index should exist"
+        );
     }
 
     assert!(

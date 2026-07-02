@@ -1,13 +1,22 @@
 use chrono::Utc;
+use novex_api::agents::models::{Scene, Script, ScriptStatus};
 use serde_json::json;
 use uuid::Uuid;
-use novex_api::agents::models::{Scene, Script, ScriptStatus};
 
 #[test]
 fn script_status_round_trips_database_values() {
-    assert_eq!(ScriptStatus::try_from("draft").unwrap(), ScriptStatus::Draft);
-    assert_eq!(ScriptStatus::try_from("approved").unwrap(), ScriptStatus::Approved);
-    assert_eq!(ScriptStatus::try_from("archived").unwrap(), ScriptStatus::Archived);
+    assert_eq!(
+        ScriptStatus::try_from("draft").unwrap(),
+        ScriptStatus::Draft
+    );
+    assert_eq!(
+        ScriptStatus::try_from("approved").unwrap(),
+        ScriptStatus::Approved
+    );
+    assert_eq!(
+        ScriptStatus::try_from("archived").unwrap(),
+        ScriptStatus::Archived
+    );
 
     assert_eq!(String::from(ScriptStatus::Draft), "draft");
     assert_eq!(String::from(ScriptStatus::Approved), "approved");

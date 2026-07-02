@@ -1,12 +1,10 @@
 use chrono::Utc;
+use novex_api::agents::models::{Scene, Script, ScriptListFilter, ScriptStatus};
+use novex_api::repositories::{PostgresScriptRepository, ScriptRepository, ScriptRepositoryError};
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use novex_api::agents::models::{Scene, Script, ScriptListFilter, ScriptStatus};
-use novex_api::repositories::{
-    PostgresScriptRepository, ScriptRepository, ScriptRepositoryError,
-};
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -157,6 +155,29 @@ async fn postgres_script_repository_persists_and_reads_script_aggregate() {
         .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, script.id);
+
+    let summaries = repository
+        .list_script_summaries(
+            project_id,
+            ScriptListFilter {
+                status: Some(ScriptStatus::Draft),
+                limit: Some(20),
+                offset: Some(0),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].script_id, script.id);
+    assert_eq!(summaries[0].scene_count, 2);
+
+    assert_eq!(
+        repository
+            .count_scripts(project_id, Some(ScriptStatus::Draft))
+            .await
+            .unwrap(),
+        1
+    );
 
     let approved = repository
         .update_script_status(script.id, ScriptStatus::Approved)

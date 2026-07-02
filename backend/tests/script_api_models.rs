@@ -1,11 +1,11 @@
 use chrono::Utc;
-use serde_json::{json, Value};
-use uuid::Uuid;
-use validator::Validate;
 use novex_api::agents::models::{
     GenerateScriptRequest, Scene, Script, ScriptListFilter, ScriptResponse, ScriptStatus,
     ScriptStyle,
 };
+use serde_json::{json, Value};
+use uuid::Uuid;
+use validator::Validate;
 
 #[test]
 fn generate_script_request_deserializes_and_validates() {

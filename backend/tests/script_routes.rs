@@ -1,0 +1,481 @@
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use axum::{routing::post, Json, Router};
+use novex_api::{build_app_with_state, AppConfig, AppState};
+use serde_json::{json, Value};
+use sqlx::{postgres::PgPoolOptions, PgPool};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::net::TcpListener;
+use tower::ServiceExt;
+use uuid::Uuid;
+
+fn database_url() -> String {
+    std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:postgres@biga-postgres:5432/video_agent".to_string()
+    })
+}
+
+fn with_database_name(database_url: &str, database_name: &str) -> String {
+    let query_start = database_url.find('?');
+    let (base, query) = match query_start {
+        Some(index) => (&database_url[..index], &database_url[index..]),
+        None => (database_url, ""),
+    };
+
+    let slash_index = base
+        .rfind('/')
+        .expect("DATABASE_URL must include database name");
+    format!("{}{}{}", &base[..=slash_index], database_name, query)
+}
+
+async fn create_database(admin_pool: &PgPool, database_name: &str) {
+    let query = format!(r#"CREATE DATABASE "{}""#, database_name);
+    sqlx::query(&query)
+        .execute(admin_pool)
+        .await
+        .expect("temporary route database should be created");
+}
+
+async fn drop_database(admin_pool: &PgPool, database_name: &str) {
+    let disconnect = format!(
+        r#"
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE datname = '{}'
+        "#,
+        database_name
+    );
+    let drop = format!(r#"DROP DATABASE IF EXISTS "{}""#, database_name);
+
+    let _ = sqlx::query(&disconnect).execute(admin_pool).await;
+    let _ = sqlx::query(&drop).execute(admin_pool).await;
+}
+
+async fn migrated_pool() -> (PgPool, PgPool, String, String) {
+    let base_url = database_url();
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_nanos();
+    let database_name = format!("video_agent_route_test_{}", suffix);
+    let admin_url = with_database_name(&base_url, "postgres");
+    let test_url = with_database_name(&base_url, &database_name);
+
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&admin_url)
+        .await
+        .expect("admin database should be reachable");
+    create_database(&admin_pool, &database_name).await;
+
+    let test_pool = PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&test_url)
+        .await
+        .expect("temporary route database should be reachable");
+    sqlx::migrate!("./migrations")
+        .run(&test_pool)
+        .await
+        .expect("migrations should run for route test database");
+
+    (admin_pool, test_pool, database_name, test_url)
+}
+
+async fn insert_project(pool: &PgPool) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO projects (name, positioning, description)
+        VALUES ('科技博主', '科技知识账号', '脚本路由测试项目')
+        RETURNING id
+        "#,
+    )
+    .fetch_one(pool)
+    .await
+    .expect("project fixture should be inserted")
+}
+
+async fn insert_script_with_scene(pool: &PgPool, project_id: Uuid) -> Uuid {
+    let script_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO scripts (project_id, title, hook, content, status)
+        VALUES ($1, '程序员必看：ChatGPT工作流', '还在手写重复代码？', $2, 'draft')
+        RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .bind(json!({"topic": "ChatGPT如何改变程序员工作流"}))
+    .fetch_one(pool)
+    .await
+    .expect("script fixture should be inserted");
+
+    sqlx::query(
+        r#"
+        INSERT INTO scenes (script_id, sequence, narration, visual_description, emotion, duration_sec)
+        VALUES ($1, 1, '传统程序员每天要写大量重复代码。', '程序员盯着屏幕，快速切换多个代码文件。', '焦虑', 8)
+        "#,
+    )
+    .bind(script_id)
+    .execute(pool)
+    .await
+    .expect("scene fixture should be inserted");
+
+    script_id
+}
+
+async fn openai_handler(Json(_payload): Json<Value>) -> Json<Value> {
+    Json(json!({
+        "choices": [
+            {
+                "message": {
+                    "content": json!({
+                        "title": "程序员必看：ChatGPT工作流",
+                        "hook": "还在手写重复代码？",
+                        "scenes": [
+                            {
+                                "sequence": 1,
+                                "narration": "传统程序员每天要写大量重复代码，复制粘贴改参数，枯燥又容易出错，团队还要花很多时间检查这些重复劳动带来的隐藏问题。",
+                                "visual_description": "程序员盯着屏幕，快速切换多个代码文件。",
+                                "emotion": "焦虑",
+                                "duration_sec": 8
+                            },
+                            {
+                                "sequence": 2,
+                                "narration": "现在只要描述需求，AI 就能快速生成初稿，让开发者把时间放回设计和验证，从重复劳动转向架构判断、边界测试和真实业务理解。",
+                                "visual_description": "屏幕上弹出代码建议，程序员露出惊喜表情。",
+                                "emotion": "惊喜",
+                                "duration_sec": 9
+                            },
+                            {
+                                "sequence": 3,
+                                "narration": "更重要的是，AI 可以帮你解释陌生代码，让新人快速理解项目结构、关键流程和历史取舍，减少只靠猜测修改代码的风险。",
+                                "visual_description": "代码结构图展开，重点模块被高亮标注。",
+                                "emotion": "好奇",
+                                "duration_sec": 9
+                            },
+                            {
+                                "sequence": 4,
+                                "narration": "遇到报错时，把日志和上下文交给 AI，它能给出排查方向，但最终仍要由程序员验证证据、复现实验并确认根因。",
+                                "visual_description": "终端错误日志旁边出现排查清单。",
+                                "emotion": "紧张",
+                                "duration_sec": 10
+                            },
+                            {
+                                "sequence": 5,
+                                "narration": "未来的竞争不是谁会复制答案，而是谁能把 AI 产出的初稿打磨成可靠系统，并用工程纪律保证结果长期可维护。",
+                                "visual_description": "程序员提交通过测试的代码，仪表盘显示绿色通过。",
+                                "emotion": "平静",
+                                "duration_sec": 10
+                            }
+                        ]
+                    }).to_string()
+                }
+            }
+        ]
+    }))
+}
+
+async fn local_openai_base_url() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route("/v1/chat/completions", post(openai_handler));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{address}/v1")
+}
+
+async fn response_json(response: axum::response::Response) -> Value {
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[tokio::test]
+async fn script_routes_generate_read_list_and_update_status() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let app = build_app_with_state(
+        AppState::new(
+            AppConfig {
+                environment: "test".to_string(),
+                database_url: test_url,
+                redis_url: "redis://127.0.0.1:6379/15".to_string(),
+                openai_api_key: "test-key".to_string(),
+                openai_base_url: local_openai_base_url().await,
+                openai_model: "test-model".to_string(),
+                openai_timeout_seconds: 5,
+            },
+            test_pool.clone(),
+            None,
+        )
+        .unwrap(),
+    );
+
+    let generate_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/scripts/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "project_id": project_id,
+                        "topic": "ChatGPT如何改变程序员工作流",
+                        "style": "knowledge",
+                        "scene_count": 5
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(generate_response.status(), StatusCode::OK);
+    let generated = response_json(generate_response).await;
+    let script_id = generated["script_id"].as_str().unwrap();
+    assert_eq!(generated["project_id"], project_id.to_string());
+    assert_eq!(generated["scenes"].as_array().unwrap().len(), 5);
+
+    let get_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/scripts/{script_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_id}/scripts?status=draft"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let listed = response_json(list_response).await;
+    assert_eq!(listed["total"], 1);
+    assert_eq!(listed["scripts"][0]["script_id"], script_id);
+
+    let update_response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/scripts/{script_id}/status"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"status": "approved"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update_response.status(), StatusCode::OK);
+    let updated = response_json(update_response).await;
+    assert_eq!(updated["status"], "approved");
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn script_read_routes_do_not_require_openai_config() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let script_id = insert_script_with_scene(&test_pool, project_id).await;
+    let app = build_app_with_state(
+        AppState::new(
+            AppConfig {
+                environment: "test".to_string(),
+                database_url: test_url,
+                redis_url: "redis://127.0.0.1:6379/15".to_string(),
+                openai_api_key: "".to_string(),
+                openai_base_url: "https://example.invalid/v1".to_string(),
+                openai_model: "test-model".to_string(),
+                openai_timeout_seconds: 5,
+            },
+            test_pool.clone(),
+            None,
+        )
+        .unwrap(),
+    );
+
+    let get_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/scripts/{script_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_id}/scripts"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+
+    let update_response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/scripts/{script_id}/status"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"status": "approved"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update_response.status(), StatusCode::OK);
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn generate_route_checks_project_before_openai_config() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let missing_project_id = Uuid::new_v4();
+    let app = build_app_with_state(
+        AppState::new(
+            AppConfig {
+                environment: "test".to_string(),
+                database_url: test_url,
+                redis_url: "redis://127.0.0.1:6379/15".to_string(),
+                openai_api_key: "".to_string(),
+                openai_base_url: "https://example.invalid/v1".to_string(),
+                openai_model: "test-model".to_string(),
+                openai_timeout_seconds: 5,
+            },
+            test_pool.clone(),
+            None,
+        )
+        .unwrap(),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/scripts/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "project_id": missing_project_id,
+                        "topic": "ChatGPT如何改变程序员工作流",
+                        "style": "knowledge",
+                        "scene_count": 5
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn script_routes_return_structured_error_payloads() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let missing_project_id = Uuid::new_v4();
+    let missing_script_id = Uuid::new_v4();
+    let app = build_app_with_state(
+        AppState::new(
+            AppConfig {
+                environment: "test".to_string(),
+                database_url: test_url,
+                redis_url: "redis://127.0.0.1:6379/15".to_string(),
+                openai_api_key: "".to_string(),
+                openai_base_url: "https://example.invalid/v1".to_string(),
+                openai_model: "test-model".to_string(),
+                openai_timeout_seconds: 5,
+            },
+            test_pool.clone(),
+            None,
+        )
+        .unwrap(),
+    );
+
+    let missing_project_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{missing_project_id}/scripts"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_project_response.status(), StatusCode::NOT_FOUND);
+    let missing_project_body = response_json(missing_project_response).await;
+    assert_eq!(missing_project_body["error"], "项目不存在");
+    assert_eq!(
+        missing_project_body["project_id"],
+        missing_project_id.to_string()
+    );
+
+    let missing_script_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/scripts/{missing_script_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_script_response.status(), StatusCode::NOT_FOUND);
+    let missing_script_body = response_json(missing_script_response).await;
+    assert_eq!(missing_script_body["error"], "脚本不存在");
+    assert_eq!(
+        missing_script_body["script_id"],
+        missing_script_id.to_string()
+    );
+
+    let invalid_status_response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/scripts/{missing_script_id}/status"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"status": "deleted"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_status_response.status(), StatusCode::BAD_REQUEST);
+    let invalid_status_body = response_json(invalid_status_response).await;
+    assert_eq!(invalid_status_body["error"], "无效的状态值");
+    assert_eq!(
+        invalid_status_body["allowed"],
+        json!(["draft", "approved", "archived"])
+    );
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}

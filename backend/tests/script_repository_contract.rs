@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use chrono::Utc;
+use novex_api::agents::models::{Scene, Script, ScriptListFilter, ScriptStatus, ScriptSummary};
+use novex_api::repositories::{ScriptRepository, ScriptRepositoryError};
 use serde_json::json;
 use uuid::Uuid;
-use novex_api::agents::models::{Scene, Script, ScriptListFilter, ScriptStatus};
-use novex_api::repositories::{ScriptRepository, ScriptRepositoryError};
 
 fn sample_script(project_id: Uuid, status: ScriptStatus) -> Script {
     let now = Utc::now();
@@ -55,11 +55,54 @@ impl ScriptRepository for MemoryScriptRepository {
             return Ok(Vec::new());
         }
 
-        if filter.status.as_ref().is_some_and(|status| status != &self.script.status) {
+        if filter
+            .status
+            .as_ref()
+            .is_some_and(|status| status != &self.script.status)
+        {
             return Ok(Vec::new());
         }
 
         Ok(vec![self.script.clone()])
+    }
+
+    async fn list_script_summaries(
+        &self,
+        project_id: Uuid,
+        filter: ScriptListFilter,
+    ) -> Result<Vec<ScriptSummary>, ScriptRepositoryError> {
+        Ok(self
+            .list_scripts(project_id, filter)
+            .await?
+            .into_iter()
+            .map(|script| ScriptSummary {
+                script_id: script.id,
+                title: script.title,
+                status: script.status,
+                scene_count: script.scenes.len() as i64,
+                parent_id: script.parent_id,
+                created_at: script.created_at,
+            })
+            .collect())
+    }
+
+    async fn count_scripts(
+        &self,
+        project_id: Uuid,
+        status: Option<ScriptStatus>,
+    ) -> Result<i64, ScriptRepositoryError> {
+        if self.script.project_id != project_id {
+            return Ok(0);
+        }
+
+        if status
+            .as_ref()
+            .is_some_and(|status| status != &self.script.status)
+        {
+            return Ok(0);
+        }
+
+        Ok(1)
     }
 
     async fn update_script_status(
@@ -92,8 +135,31 @@ async fn script_repository_trait_supports_script_lifecycle_operations() {
         limit: Some(20),
         offset: Some(0),
     };
-    let listed = repository.list_scripts(project_id, draft_filter).await.unwrap();
+    let listed = repository
+        .list_scripts(project_id, draft_filter)
+        .await
+        .unwrap();
     assert_eq!(listed.len(), 1);
+    let summaries = repository
+        .list_script_summaries(
+            project_id,
+            ScriptListFilter {
+                status: Some(ScriptStatus::Draft),
+                limit: Some(20),
+                offset: Some(0),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(summaries[0].script_id, script.id);
+    assert_eq!(summaries[0].scene_count, 1);
+    assert_eq!(
+        repository
+            .count_scripts(project_id, Some(ScriptStatus::Draft))
+            .await
+            .unwrap(),
+        1
+    );
 
     let approved = repository
         .update_script_status(script.id, ScriptStatus::Approved)

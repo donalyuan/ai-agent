@@ -1,7 +1,8 @@
 # environment-bootstrap Specification
 
 ## Purpose
-定义 Novex 本地 Docker Compose 开发环境的稳定启动、依赖复用与健康检查口径。
+定义 Novex 本地 Docker Compose 开发环境的稳定启动、依赖复用与健康检查口径，确保开发者通过统一入口获得可重复、可验证的基础服务环境。
+
 ## Requirements
 ### Requirement: 环境必须从顶层 Compose 入口启动
 

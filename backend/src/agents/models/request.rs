@@ -1,4 +1,4 @@
-use super::{Scene, Script, ScriptStatus};
+use super::{Scene, Script, ScriptStatus, ScriptSummary};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -15,6 +15,24 @@ pub enum ScriptStyle {
 impl Default for ScriptStyle {
     fn default() -> Self {
         Self::Knowledge
+    }
+}
+
+impl ScriptStyle {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Knowledge => "knowledge",
+            Self::Story => "story",
+            Self::Tutorial => "tutorial",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Knowledge => "知识科普类",
+            Self::Story => "故事叙述类",
+            Self::Tutorial => "教程讲解类",
+        }
     }
 }
 
@@ -87,6 +105,72 @@ impl From<Script> for ScriptResponse {
             status: script.status,
             parent_id: script.parent_id,
             created_at: script.created_at,
+            updated_at: script.updated_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ScriptSummaryResponse {
+    pub script_id: Uuid,
+    pub title: String,
+    pub status: ScriptStatus,
+    pub scene_count: usize,
+    pub parent_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<Script> for ScriptSummaryResponse {
+    fn from(script: Script) -> Self {
+        Self {
+            script_id: script.id,
+            title: script.title,
+            status: script.status,
+            scene_count: script.scenes.len(),
+            parent_id: script.parent_id,
+            created_at: script.created_at,
+        }
+    }
+}
+
+impl From<ScriptSummary> for ScriptSummaryResponse {
+    fn from(summary: ScriptSummary) -> Self {
+        Self {
+            script_id: summary.script_id,
+            title: summary.title,
+            status: summary.status,
+            scene_count: usize::try_from(summary.scene_count).unwrap_or(usize::MAX),
+            parent_id: summary.parent_id,
+            created_at: summary.created_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ScriptListResponse {
+    pub scripts: Vec<ScriptSummaryResponse>,
+    pub total: i64,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct UpdateScriptStatusRequest {
+    pub status: ScriptStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UpdateScriptStatusResponse {
+    pub script_id: Uuid,
+    pub status: ScriptStatus,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<Script> for UpdateScriptStatusResponse {
+    fn from(script: Script) -> Self {
+        Self {
+            script_id: script.id,
+            status: script.status,
             updated_at: script.updated_at,
         }
     }

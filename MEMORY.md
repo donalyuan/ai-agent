@@ -38,11 +38,11 @@
 5. video-agent 业务范围仍参考 `docs/requirements/video-agent-mvp.md`
 
 ### 开发环境
-- 环境初始化必须从 `/server/docker-compose.yml` 进入，并 include `/server/video-agent/docker-compose.yml`
+- 环境初始化必须从 `/server/docker-compose.yml` 进入，并 include `/server/ai-agent/docker-compose.yml`
 - 已复用现有 PostgreSQL 服务 `biga-postgres`，本项目使用独立数据库 `video_agent`
 - 已复用现有 Redis 服务 `bs-redis`，本项目使用 Redis DB index `/2`
 - 当前服务端口：API `18180->8080`，Video Worker `18181->8081`，Admin `18182->3000`
-- Compose 服务名：`novex-api`、`novex-video-worker`、`novex-admin`
+- Compose 服务名：`ai-agent-api`、`ai-agent-video-worker`、`ai-agent-admin`
 - 本项目服务容器内工作目录统一为 `/app`
 
 ### 六大Agent

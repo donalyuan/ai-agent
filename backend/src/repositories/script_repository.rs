@@ -1,4 +1,4 @@
-use crate::agents::models::{Script, ScriptListFilter, ScriptStatus};
+use crate::agents::models::{Script, ScriptListFilter, ScriptStatus, ScriptSummary};
 use async_trait::async_trait;
 use sqlx::{postgres::PgRow, PgPool, Row};
 use std::fmt;
@@ -14,7 +14,10 @@ impl PostgresScriptRepository {
         Self { pool }
     }
 
-    async fn load_scenes(&self, script_id: Uuid) -> Result<Vec<crate::agents::models::Scene>, ScriptRepositoryError> {
+    async fn load_scenes(
+        &self,
+        script_id: Uuid,
+    ) -> Result<Vec<crate::agents::models::Scene>, ScriptRepositoryError> {
         sqlx::query(
             r#"
             SELECT id, sequence, narration, visual_description, emotion, duration_sec
@@ -66,6 +69,18 @@ pub trait ScriptRepository: Send + Sync {
         filter: ScriptListFilter,
     ) -> Result<Vec<Script>, ScriptRepositoryError>;
 
+    async fn list_script_summaries(
+        &self,
+        project_id: Uuid,
+        filter: ScriptListFilter,
+    ) -> Result<Vec<ScriptSummary>, ScriptRepositoryError>;
+
+    async fn count_scripts(
+        &self,
+        project_id: Uuid,
+        status: Option<ScriptStatus>,
+    ) -> Result<i64, ScriptRepositoryError>;
+
     async fn update_script_status(
         &self,
         script_id: Uuid,
@@ -76,7 +91,11 @@ pub trait ScriptRepository: Send + Sync {
 #[async_trait]
 impl ScriptRepository for PostgresScriptRepository {
     async fn save_script(&self, script: Script) -> Result<Script, ScriptRepositoryError> {
-        let mut transaction = self.pool.begin().await.map_err(ScriptRepositoryError::from)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(ScriptRepositoryError::from)?;
         let status = script.status.as_str();
 
         sqlx::query(
@@ -121,7 +140,10 @@ impl ScriptRepository for PostgresScriptRepository {
             .map_err(ScriptRepositoryError::from)?;
         }
 
-        transaction.commit().await.map_err(ScriptRepositoryError::from)?;
+        transaction
+            .commit()
+            .await
+            .map_err(ScriptRepositoryError::from)?;
         self.get_script(script.id).await
     }
 
@@ -191,6 +213,100 @@ impl ScriptRepository for PostgresScriptRepository {
         Ok(scripts)
     }
 
+    async fn list_script_summaries(
+        &self,
+        project_id: Uuid,
+        filter: ScriptListFilter,
+    ) -> Result<Vec<ScriptSummary>, ScriptRepositoryError> {
+        let limit = i64::from(filter.limit_or_default());
+        let offset = i64::from(filter.offset_or_default());
+        let rows = if let Some(status) = filter.status {
+            sqlx::query(
+                r#"
+                SELECT
+                    s.id,
+                    s.title,
+                    s.status,
+                    s.parent_id,
+                    s.created_at,
+                    COUNT(sc.id) AS scene_count
+                FROM scripts s
+                LEFT JOIN scenes sc ON sc.script_id = s.id
+                WHERE s.project_id = $1 AND s.status = $2
+                GROUP BY s.id
+                ORDER BY s.created_at DESC
+                LIMIT $3 OFFSET $4
+                "#,
+            )
+            .bind(project_id)
+            .bind(status.as_str())
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(ScriptRepositoryError::from)?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT
+                    s.id,
+                    s.title,
+                    s.status,
+                    s.parent_id,
+                    s.created_at,
+                    COUNT(sc.id) AS scene_count
+                FROM scripts s
+                LEFT JOIN scenes sc ON sc.script_id = s.id
+                WHERE s.project_id = $1
+                GROUP BY s.id
+                ORDER BY s.created_at DESC
+                LIMIT $2 OFFSET $3
+                "#,
+            )
+            .bind(project_id)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(ScriptRepositoryError::from)?
+        };
+
+        rows.into_iter().map(script_summary_from_row).collect()
+    }
+
+    async fn count_scripts(
+        &self,
+        project_id: Uuid,
+        status: Option<ScriptStatus>,
+    ) -> Result<i64, ScriptRepositoryError> {
+        if let Some(status) = status {
+            sqlx::query_scalar::<_, i64>(
+                r#"
+                SELECT COUNT(*)
+                FROM scripts
+                WHERE project_id = $1 AND status = $2
+                "#,
+            )
+            .bind(project_id)
+            .bind(status.as_str())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(ScriptRepositoryError::from)
+        } else {
+            sqlx::query_scalar::<_, i64>(
+                r#"
+                SELECT COUNT(*)
+                FROM scripts
+                WHERE project_id = $1
+                "#,
+            )
+            .bind(project_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(ScriptRepositoryError::from)
+        }
+    }
+
     async fn update_script_status(
         &self,
         script_id: Uuid,
@@ -246,5 +362,20 @@ fn scene_from_row(row: PgRow) -> Result<crate::agents::models::Scene, ScriptRepo
         visual_description: row.get("visual_description"),
         emotion: row.get("emotion"),
         duration_sec: row.get("duration_sec"),
+    })
+}
+
+fn script_summary_from_row(row: PgRow) -> Result<ScriptSummary, ScriptRepositoryError> {
+    let status_value: String = row.get("status");
+    let status = ScriptStatus::try_from(status_value.as_str())
+        .map_err(|error| ScriptRepositoryError::Storage(error.to_string()))?;
+
+    Ok(ScriptSummary {
+        script_id: row.get("id"),
+        title: row.get("title"),
+        status,
+        scene_count: row.get("scene_count"),
+        parent_id: row.get("parent_id"),
+        created_at: row.get("created_at"),
     })
 }

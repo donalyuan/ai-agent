@@ -32,36 +32,36 @@
 
 - [x] **T2.1 实现ScriptRepository trait**
 - [x] **T2.2 实现PostgreSQL Repository**
-- [ ] **T2.3 ProjectRepository存在性检查**
+- [x] **T2.3 ProjectRepository存在性检查**
 
 ---
 
 ## Phase 3: LLM抽象层
 
-- [ ] **T3.1 定义LLMClient trait**
-- [ ] **T3.2 实现Prompt Builder**
-- [ ] **T3.3 实现OpenAI Client**
-- [ ] **T3.4 实现JSON解析与验证**
+- [x] **T3.1 定义LLMClient trait**
+- [x] **T3.2 实现Prompt Builder**
+- [x] **T3.3 实现OpenAI Client**
+- [x] **T3.4 实现JSON解析与验证**
 
 ---
 
 ## Phase 4: 业务服务层
 
-- [ ] **T4.1 创建ScriptAgentService**
-- [ ] **T4.2 实现generate_script方法**
-- [ ] **T4.3 实现重试机制**
-- [ ] **T4.4 实现其他方法**
+- [x] **T4.1 创建ScriptAgentService**
+- [x] **T4.2 实现generate_script方法**
+- [x] **T4.3 实现重试机制**
+- [x] **T4.4 实现其他方法**
 
 ---
 
 ## Phase 5: HTTP路由层
 
-- [ ] **T5.1 创建scripts路由**
-- [ ] **T5.2 实现POST /api/scripts/generate**
-- [ ] **T5.3 实现GET /api/scripts/:script_id**
-- [ ] **T5.4 实现GET /api/projects/:project_id/scripts**
-- [ ] **T5.5 实现PUT /api/scripts/:script_id/status**
-- [ ] **T5.6 注册路由到main.rs**
+- [x] **T5.1 创建scripts路由**
+- [x] **T5.2 实现POST /api/scripts/generate**
+- [x] **T5.3 实现GET /api/scripts/:script_id**
+- [x] **T5.4 实现GET /api/projects/:project_id/scripts**
+- [x] **T5.5 实现PUT /api/scripts/:script_id/status**
+- [x] **T5.6 注册路由到main.rs**
 
 ---
 

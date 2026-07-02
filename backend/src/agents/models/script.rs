@@ -84,6 +84,16 @@ pub struct Script {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScriptSummary {
+    pub script_id: Uuid,
+    pub title: String,
+    pub status: ScriptStatus,
+    pub scene_count: i64,
+    pub parent_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
 impl Script {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
