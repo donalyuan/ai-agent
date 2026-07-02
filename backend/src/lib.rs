@@ -1,7 +1,4 @@
-use agents::{
-    llm::{OpenAIClient, OpenAIConfig, ScriptPrompt},
-    LLMClient, ScriptAgentError, ScriptAgentService,
-};
+use agents::{LLMClient, ScriptAgentError, ScriptAgentService};
 use axum::{
     extract::{rejection::JsonRejection, FromRequest, Path, Query, State},
     http::StatusCode,
@@ -9,6 +6,7 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
+use novex_model::{LLMError, LLMPrompt, OpenAIClient, OpenAIConfig};
 use repositories::{PostgresProjectRepository, PostgresScriptRepository};
 use serde::Serialize;
 use serde_json::json;
@@ -150,7 +148,7 @@ struct LazyOpenAIClient {
 
 #[async_trait::async_trait]
 impl LLMClient for LazyOpenAIClient {
-    async fn generate_script(&self, prompt: ScriptPrompt) -> Result<String, agents::LLMError> {
+    async fn generate_script(&self, prompt: LLMPrompt) -> Result<String, LLMError> {
         let client = OpenAIClient::new(self.config.clone())?;
         client.generate_script(prompt).await
     }
@@ -160,8 +158,8 @@ struct UnconfiguredLLMClient;
 
 #[async_trait::async_trait]
 impl LLMClient for UnconfiguredLLMClient {
-    async fn generate_script(&self, _prompt: ScriptPrompt) -> Result<String, agents::LLMError> {
-        Err(agents::LLMError::Config(
+    async fn generate_script(&self, _prompt: LLMPrompt) -> Result<String, LLMError> {
+        Err(LLMError::Config(
             "LLM client is not configured for this route".to_string(),
         ))
     }

@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use novex_api::agents::llm::ScriptPrompt;
 use novex_api::agents::models::{
     GenerateScriptRequest, Script, ScriptListFilter, ScriptStatus, ScriptStyle, ScriptSummary,
 };
@@ -8,6 +7,7 @@ use novex_api::agents::{LLMClient, LLMError, ScriptAgentError, ScriptAgentServic
 use novex_api::repositories::{
     ProjectRepository, ProjectRepositoryError, ScriptRepository, ScriptRepositoryError,
 };
+use novex_model::LLMPrompt;
 use serde_json::json;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -128,7 +128,7 @@ struct ScriptedLLMClient {
 
 #[async_trait]
 impl LLMClient for ScriptedLLMClient {
-    async fn generate_script(&self, _prompt: ScriptPrompt) -> Result<String, LLMError> {
+    async fn generate_script(&self, _prompt: LLMPrompt) -> Result<String, LLMError> {
         self.responses
             .lock()
             .unwrap()

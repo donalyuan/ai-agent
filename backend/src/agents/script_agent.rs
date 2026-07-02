@@ -1,6 +1,4 @@
-use crate::agents::llm::{
-    LLMClient, LLMError, LLMOutputError, ScriptLLMOutput, ScriptPromptBuilder,
-};
+use crate::agents::llm::{LLMOutputError, ScriptLLMOutput, ScriptPromptBuilder};
 use crate::agents::models::{
     GenerateScriptRequest, Scene, Script, ScriptListFilter, ScriptStatus, ScriptSummary,
 };
@@ -8,6 +6,7 @@ use crate::repositories::{
     ProjectRepository, ProjectRepositoryError, ScriptRepository, ScriptRepositoryError,
 };
 use chrono::Utc;
+use novex_model::{LLMClient, LLMError};
 use serde_json::json;
 use std::fmt;
 use std::sync::Arc;
@@ -56,7 +55,7 @@ impl ScriptAgentService {
         for attempt_index in 0..MAX_LLM_PARSE_ATTEMPTS {
             let raw = self
                 .llm_client
-                .generate_script(prompt.clone())
+                .generate_script(prompt.clone().into())
                 .await
                 .map_err(ScriptAgentError::from)?;
 

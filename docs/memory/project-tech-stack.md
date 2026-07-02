@@ -19,11 +19,11 @@ Novex 是可复用 AI Agent Foundation。`apps/video-agent` 是第一个业务�
 - **Rust + Axum**：`backend/` 控制面 API 和业务编排入口
 - **SQLx + PostgreSQL**：类型安全数据库访问
 - **Redis**：任务队列与缓存
-- **LLM 接入**：脚本 Agent 的 OpenAI-compatible 客户端同时支持 Chat Completions 与 Responses API；当 `OPENAI_BASE_URL` 以 `/responses` 结尾时直接走 Responses endpoint，并使用 JSON object 输出约束。Responses 分支支持 `OPENAI_REASONING_EFFORT` 和 `OPENAI_MAX_OUTPUT_TOKENS` 配置，`OPENAI_REASONING_EFFORT=none` 时不发送 `reasoning` 字段。
+- **LLM 接入**：通用 OpenAI-compatible provider 客户端归属 `crates/novex-model`，暴露 `LLMClient`、`LLMPrompt`、`LLMError`、`OpenAIConfig` 和 `OpenAIClient`；`backend/` 只保留脚本 Agent 的业务 Prompt 构造、LLM 输出解析和脚本业务校验。客户端同时支持 Chat Completions 与 Responses API；当 `OPENAI_BASE_URL` 以 `/responses` 结尾时直接走 Responses endpoint，并使用 JSON object 输出约束。Responses 分支使用 SSE 流式响应以避开上游同步请求 30 秒窗口，并发送 Codex-compatible `User-Agent`。Responses 分支支持 `OPENAI_REASONING_EFFORT` 和 `OPENAI_MAX_OUTPUT_TOKENS` 配置，`OPENAI_REASONING_EFFORT=none` 时不发送 `reasoning` 字段。
 
 ### Rust 基座 crates
 - `crates/novex-ai-core`：Run Graph、Trace、Policy、通用 AI 领域模型
-- `crates/novex-model`：模型注册、能力描述、路由、用量和健康检查
+- `crates/novex-model`：模型注册、能力描述、路由、用量、健康检查和 OpenAI-compatible LLM provider 客户端
 - `crates/novex-agent`：Agent runtime、planner、tool loop
 - `crates/novex-rag`：chunk、embedding、retrieval、rerank、citation
 - `crates/novex-tools`：tool registry、executor、permission、audit
@@ -48,7 +48,7 @@ Novex 是可复用 AI Agent Foundation。`apps/video-agent` 是第一个业务�
 - Video Worker：`novex-video-worker`，宿主机端口 `18181`，容器端口 `8081`
 - Admin：`novex-admin`，宿主机端口 `18182`，容器端口 `3000`
 - 容器内项目路径：`/app`
-- 当前已验证脚本生成链路可通过 Responses API 使用 `gpt-5.4-mini` 完成端到端生成；`gpt-5.5` 在完整脚本生成场景下存在上游 502 风险，不作为当前稳定验证模型。
+- 当前已验证脚本生成链路可通过 Responses API 使用 `gpt-5.4-mini` 和 `gpt-5.5` 完成端到端生成；`gpt-5.5` 需要 Responses SSE 流式路径和 Codex-compatible `User-Agent`，同步 Responses 请求在完整脚本生成场景下会触发上游约 30 秒 502。
 
 ## video-agent 业务边界
 
