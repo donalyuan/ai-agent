@@ -142,6 +142,8 @@ async fn migrations_create_video_agent_core_schema() {
         "revenues",
         "agent_runs",
         "agent_steps",
+        "agent_conversations",
+        "agent_messages",
         "viral_videos",
         "content_strategies",
         "video_workspace_menus",
@@ -159,6 +161,8 @@ async fn migrations_create_video_agent_core_schema() {
         "idx_generation_tasks_status",
         "idx_publish_tasks_status",
         "idx_agent_runs_type",
+        "idx_agent_conversations_project",
+        "idx_agent_messages_conversation_created",
         "idx_video_workspace_menus_parent_sort",
     ] {
         assert!(
@@ -174,6 +178,19 @@ async fn migrations_create_video_agent_core_schema() {
     assert!(
         constraint_exists(&test_pool, "scenes", "scenes_script_sequence_unique").await,
         "scene sequence should be unique per script"
+    );
+    assert!(
+        constraint_exists(&test_pool, "agent_messages", "agent_messages_role_check").await,
+        "agent message role should be constrained"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "agent_conversations",
+            "agent_conversations_agent_type_check"
+        )
+        .await,
+        "conversation agent type should be constrained"
     );
     assert!(
         constraint_exists(

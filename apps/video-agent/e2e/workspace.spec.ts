@@ -47,6 +47,66 @@ const scriptDetail = {
   updated_at: "2026-07-02T00:05:00Z",
 };
 
+const refreshedScriptDetail = {
+  ...scriptDetail,
+  scenes: scriptDetail.scenes.map((scene) =>
+    scene.sequence === 2
+      ? {
+          ...scene,
+          visual_description: "屏幕切到红色告警和密集 TODO，冲突更强。",
+          emotion: "紧张",
+        }
+      : scene,
+  ),
+  updated_at: "2026-07-02T00:08:00Z",
+};
+
+const conversationId = "55555555-5555-4555-8555-555555555555";
+
+const conversation = {
+  conversation_id: conversationId,
+  project_id: projectId,
+  agent_type: "script",
+  subject_type: "script",
+  subject_id: scriptId,
+  title: "脚本 Agent 对话",
+  status: "active",
+  metadata: {},
+  created_at: "2026-07-02T00:06:00Z",
+  updated_at: "2026-07-02T00:06:00Z",
+};
+
+const userMessage = {
+  message_id: "66666666-6666-4666-8666-666666666666",
+  conversation_id: conversationId,
+  role: "user",
+  content: "把第 2 镜改得更有冲突感",
+  metadata: {},
+  created_at: "2026-07-02T00:07:00Z",
+};
+
+const assistantMessage = {
+  message_id: "77777777-7777-4777-8777-777777777777",
+  conversation_id: conversationId,
+  role: "assistant",
+  content: "已更新第 2 镜，时间轴已刷新。",
+  metadata: { script_id: scriptId, scene_sequence: 2 },
+  created_at: "2026-07-02T00:07:05Z",
+};
+
+const agentRun = {
+  run_id: "88888888-8888-4888-8888-888888888888",
+  conversation_id: conversationId,
+  project_id: projectId,
+  agent_type: "script",
+  status: "completed",
+  input: { content: userMessage.content },
+  output: { reply: assistantMessage.content },
+  error: null,
+  started_at: "2026-07-02T00:07:00Z",
+  finished_at: "2026-07-02T00:07:05Z",
+};
+
 const workspaceMenus = [
   menuNode("content-strategy", "内容策略", false, "planned", 10),
   {
@@ -87,6 +147,8 @@ function menuNode(menuKey: string, label: string, isEnabled: boolean, status: st
 }
 
 test.beforeEach(async ({ page }) => {
+  let scriptRefreshed = false;
+
   await page.route(/\/health$/, async (route) => {
     await route.fulfill({ contentType: "application/json", json: { ok: true } });
   });
@@ -103,7 +165,32 @@ test.beforeEach(async ({ page }) => {
     });
   });
   await page.route(new RegExp(`/api/scripts/${scriptId}$`), async (route) => {
-    await route.fulfill({ contentType: "application/json", json: scriptDetail });
+    await route.fulfill({ contentType: "application/json", json: scriptRefreshed ? refreshedScriptDetail : scriptDetail });
+  });
+  await page.route(/\/api\/agent\/conversations$/, async (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toMatchObject({
+      project_id: projectId,
+      agent_type: "script",
+      subject_type: "script",
+      subject_id: scriptId,
+      title: "脚本 Agent 对话",
+    });
+    await route.fulfill({ contentType: "application/json", json: conversation });
+  });
+  await page.route(new RegExp(`/api/agent/conversations/${conversationId}/messages$`), async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ contentType: "application/json", json: { messages: [] } });
+      return;
+    }
+
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({ content: userMessage.content });
+    scriptRefreshed = true;
+    await route.fulfill({
+      contentType: "application/json",
+      json: { user_message: userMessage, assistant_message: assistantMessage, run: agentRun },
+    });
   });
 });
 
@@ -147,4 +234,12 @@ test("video-agent 桌面工作台使用业务菜单并保留脚本创作闭环",
   await expect(page.getByRole("heading", { name: "画面指令" }).first()).toBeVisible();
   await expect(page.getByText("传统程序员每天要写大量重复代码。")).toBeVisible();
   await expect(page.getByText("程序员盯着屏幕，快速切换多个代码文件。"));
+
+  const agentPanel = page.getByRole("region", { name: "脚本 Agent 对话" });
+  await expect(agentPanel.getByText("绑定：科技博主 / 当前脚本")).toBeVisible();
+  await agentPanel.getByPlaceholder("输入要修改的分镜方向...").fill("把第 2 镜改得更有冲突感");
+  await agentPanel.getByRole("button", { name: "发送" }).click();
+
+  await expect(agentPanel.getByText("已更新第 2 镜，时间轴已刷新。")).toBeVisible();
+  await expect(page.getByText("屏幕切到红色告警和密集 TODO，冲突更强。")).toBeVisible();
 });

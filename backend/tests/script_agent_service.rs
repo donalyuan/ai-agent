@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use novex_api::agents::models::{
-    GenerateScriptRequest, Script, ScriptListFilter, ScriptStatus, ScriptStyle, ScriptSummary,
+    GenerateScriptRequest, Scene, Script, ScriptListFilter, ScriptStatus, ScriptStyle,
+    ScriptSummary,
 };
 use novex_api::agents::{LLMClient, LLMError, ScriptAgentError, ScriptAgentService};
 use novex_api::repositories::{
@@ -151,6 +152,31 @@ impl ScriptRepository for MemoryScriptRepository {
             .get_mut(&script_id)
             .ok_or(ScriptRepositoryError::NotFound(script_id))?;
         script.status = status;
+        script.updated_at = Utc::now();
+        Ok(script.clone())
+    }
+
+    async fn update_scene(
+        &self,
+        script_id: Uuid,
+        scene: Scene,
+    ) -> Result<Script, ScriptRepositoryError> {
+        let mut scripts = self.scripts.lock().unwrap();
+        let script = scripts
+            .get_mut(&script_id)
+            .ok_or(ScriptRepositoryError::NotFound(script_id))?;
+        let existing_scene = script
+            .scenes
+            .iter_mut()
+            .find(|current_scene| current_scene.sequence == scene.sequence)
+            .ok_or(ScriptRepositoryError::SceneNotFound {
+                script_id,
+                sequence: scene.sequence,
+            })?;
+        existing_scene.narration = scene.narration;
+        existing_scene.visual_description = scene.visual_description;
+        existing_scene.emotion = scene.emotion;
+        existing_scene.duration_sec = scene.duration_sec;
         script.updated_at = Utc::now();
         Ok(script.clone())
     }

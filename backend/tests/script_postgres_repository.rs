@@ -185,6 +185,27 @@ async fn postgres_script_repository_persists_and_reads_script_aggregate() {
         .unwrap();
     assert_eq!(approved.status, ScriptStatus::Approved);
 
+    let patched = repository
+        .update_scene(
+            script.id,
+            Scene {
+                id: saved.scenes[0].id,
+                sequence: 1,
+                narration:
+                    "深夜上线前，程序员发现 AI 建议和错误日志互相矛盾，只能重新验证每一步判断。"
+                        .to_string(),
+                visual_description: "凌晨办公室里，屏幕同时显示 AI 建议、红色日志和发布倒计时。"
+                    .to_string(),
+                emotion: "紧张".to_string(),
+                duration_sec: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(patched.scenes[0].sequence, 1);
+    assert_eq!(patched.scenes[0].emotion, "紧张");
+    assert_eq!(patched.scenes[0].duration_sec, 10);
+
     let missing = repository.get_script(Uuid::new_v4()).await.unwrap_err();
     assert!(matches!(missing, ScriptRepositoryError::NotFound(_)));
 

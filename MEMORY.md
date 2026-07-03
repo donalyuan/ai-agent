@@ -36,6 +36,9 @@
 - 用户已确认视频工作台业务流程走向：内容策略 -> 脚本创作 -> 素材管理 -> 作品生产 -> 发布运营 -> 数据分析 -> 工作流任务；前端一级菜单和开发阶段规划详见 `docs/memory/video-agent-workspace-flow.md`
 - 视频工作台导航应以数据库持久化菜单配置作为单一来源，一级菜单固定围绕业务流程组织；`apps/video-agent` 不得继续用 6 个 Agent 硬编码数组作为一级导航，Agent 状态只能作为二级菜单、模块状态或执行状态展示
 - 视频工作台不是单一脚本 Agent 页面；选题、脚本、素材、视频、发布、优化六类 Agent 能力应映射到业务菜单下的二级入口、模块状态或执行状态，不再作为前端一级导航；当前 `script-agent-workspace` 只实现脚本创作下的脚本生成模块闭环
+- `projects` 是内容项目/账号方向/内容生产边界，不是具体选题；当前脚本生成必须绑定真实 `project_id`，但选题尚无独立管理模型，只作为 `topic` 文本输入和脚本上下文保存。没有选题池前，不显示“当前选题”或选题管理入口；后续应在“内容策略/选题池”中确认选题，再进入脚本创作并让脚本引用 `topic_id` 或保存选题快照
+- 已建立第一版通用对话 Agent Runtime 后端基座：`agent_conversations` / `agent_messages` 承载连续对话，单轮消息继续写入 `agent_runs` / `agent_steps`，脚本 Agent 已接入对话式分镜修改能力；后续选题、素材、视频、发布、优化 Agent 应接入同一 Runtime/adapter 接口，不得各自实现孤立聊天逻辑。当前未实现前端聊天面板，`apps/video-agent` UI 接入仍需先走 Pencil 原型确认
+- 用户已确认新的脚本创作产品约定：脚本生成也应走脚本 Agent 对话入口；后续 `apps/video-agent` 不应在右侧并列保留独立“生成脚本”大表单和“脚本 Agent 对话”输入框，而应使用单一脚本 Agent 对话承载无脚本时生成脚本、有脚本时修改脚本。该改造通过 OpenSpec change `conversational-script-generation` 推进，前端实现前仍需更新 `docs/prototypes/video-agent/video-agent.pen` 并获得确认
 - 脚本智能体详情展示已选定“时间轴对照视图”：左侧表达分镜顺序和节奏节点，右侧并排展示旁白与画面指令；后续实现不要回退成纯卡片流或纯表格
 - 脚本 Agent 前端工作台当前仅覆盖桌面端运营后台，不涉及移动端原型、移动端适配或移动端验收；后续如需要移动端，应单独提出 OpenSpec change
 

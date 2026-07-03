@@ -8,9 +8,10 @@ use axum::{
 };
 use novex_model::{LLMError, LLMPrompt, OpenAIClient, OpenAIConfig};
 use repositories::{
-    CreateProjectInput, PostgresProjectRepository, PostgresScriptRepository,
+    ConversationRepository, ConversationRepositoryError, CreateProjectInput,
+    PostgresConversationRepository, PostgresProjectRepository, PostgresScriptRepository,
     PostgresWorkspaceMenuRepository, ProjectRepository, ProjectRepositoryError,
-    WorkspaceMenuRepositoryError,
+    ScriptRepositoryError, WorkspaceMenuRepositoryError,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -19,9 +20,13 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
+use crate::agents::conversation::CreateAgentConversationInput;
+use crate::agents::conversational_runtime::{AgentRuntime, AgentRuntimeError, AgentTurnRequest};
 use crate::agents::models::{
-    CreateProjectRequest, GenerateScriptRequest, ProjectListResponse, ProjectResponse,
-    ScriptListFilter, ScriptListResponse, ScriptResponse, UpdateScriptStatusRequest,
+    AgentConversationResponse, AgentMessageListResponse, AgentMessageResponse, AgentRunResponse,
+    AgentTurnResponseBody, CreateAgentConversationRequest, CreateProjectRequest,
+    GenerateScriptRequest, ProjectListResponse, ProjectResponse, ScriptListFilter,
+    ScriptListResponse, ScriptResponse, SendAgentMessageRequest, UpdateScriptStatusRequest,
     UpdateScriptStatusResponse, WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
 };
 
@@ -127,6 +132,31 @@ impl AppState {
         Ok(PostgresProjectRepository::new(pool))
     }
 
+    fn conversation_repository(&self) -> Result<PostgresConversationRepository, ScriptApiError> {
+        let pool = self
+            .pg_pool
+            .clone()
+            .ok_or_else(|| ScriptApiError::State("database pool is not configured".to_string()))?;
+
+        Ok(PostgresConversationRepository::new(pool))
+    }
+
+    fn agent_runtime(&self) -> Result<AgentRuntime, ScriptApiError> {
+        let pool = self
+            .pg_pool
+            .clone()
+            .ok_or_else(|| ScriptApiError::State("database pool is not configured".to_string()))?;
+        let conversation_repository = Arc::new(PostgresConversationRepository::new(pool.clone()));
+        let script_repository = Arc::new(PostgresScriptRepository::new(pool));
+        let llm_client = self.openai_client()?;
+
+        Ok(AgentRuntime::new(
+            conversation_repository,
+            script_repository,
+            llm_client,
+        ))
+    }
+
     fn workspace_menu_repository(&self) -> Result<PostgresWorkspaceMenuRepository, ScriptApiError> {
         let pool = self
             .pg_pool
@@ -227,6 +257,11 @@ pub fn build_app_with_state(state: AppState) -> Router {
         .route("/ready", get(ready))
         .route("/api/video-workspace/menus", get(list_workspace_menus))
         .route("/api/projects", get(list_projects).post(create_project))
+        .route("/api/agent/conversations", post(create_agent_conversation))
+        .route(
+            "/api/agent/conversations/:conversation_id/messages",
+            get(list_agent_messages).post(send_agent_message),
+        )
         .route("/api/scripts/generate", post(generate_script))
         .route("/api/scripts/:script_id", get(get_script))
         .route("/api/projects/:project_id/scripts", get(list_scripts))
@@ -338,6 +373,88 @@ async fn list_workspace_menus(
     }))
 }
 
+async fn create_agent_conversation(
+    State(state): State<AppState>,
+    ValidJson(request): ValidJson<CreateAgentConversationRequest>,
+) -> Result<(StatusCode, Json<AgentConversationResponse>), ScriptApiError> {
+    request
+        .validate_for_api()
+        .map_err(ScriptApiError::ConversationValidation)?;
+
+    if request.agent_type == "script" {
+        let script_id = request.subject_id.ok_or_else(|| {
+            ScriptApiError::ConversationValidation("脚本会话必须绑定 script subject".to_string())
+        })?;
+        let script = state
+            .script_agent_service_without_llm()?
+            .get_script(script_id)
+            .await?;
+        if let Some(project_id) = request.project_id {
+            if script.project_id != project_id {
+                return Err(ScriptApiError::ConversationValidation(
+                    "脚本不属于当前项目".to_string(),
+                ));
+            }
+        }
+    }
+
+    let repository = state.conversation_repository()?;
+    let conversation = repository
+        .create_conversation(CreateAgentConversationInput {
+            project_id: request.project_id,
+            agent_type: request.agent_type.trim().to_string(),
+            subject_type: request.subject_type.map(|value| value.trim().to_string()),
+            subject_id: request.subject_id,
+            title: request.title.trim().to_string(),
+            metadata: request.metadata,
+        })
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(AgentConversationResponse::from(conversation)),
+    ))
+}
+
+async fn list_agent_messages(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<Uuid>,
+) -> Result<Json<AgentMessageListResponse>, ScriptApiError> {
+    let repository = state.conversation_repository()?;
+    repository.get_conversation(conversation_id).await?;
+    let messages = repository.list_messages(conversation_id).await?;
+
+    Ok(Json(AgentMessageListResponse {
+        messages: messages
+            .into_iter()
+            .map(AgentMessageResponse::from)
+            .collect(),
+    }))
+}
+
+async fn send_agent_message(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<Uuid>,
+    ValidJson(request): ValidJson<SendAgentMessageRequest>,
+) -> Result<Json<AgentTurnResponseBody>, ScriptApiError> {
+    request
+        .validate_for_api()
+        .map_err(ScriptApiError::ConversationValidation)?;
+    let response = state
+        .agent_runtime()?
+        .handle_turn(AgentTurnRequest {
+            conversation_id,
+            user_message: request.content,
+        })
+        .await?;
+
+    Ok(Json(AgentTurnResponseBody {
+        user_message: AgentMessageResponse::from(response.user_message),
+        assistant_message: AgentMessageResponse::from(response.agent_message),
+        run: AgentRunResponse::from(response.run),
+    }))
+}
+
 async fn generate_script(
     State(state): State<AppState>,
     ValidJson(request): ValidJson<GenerateScriptRequest>,
@@ -412,9 +529,12 @@ where
 enum ScriptApiError {
     State(String),
     Agent(ScriptAgentError),
+    AgentRuntime(AgentRuntimeError),
     ProjectRepository(ProjectRepositoryError),
+    ConversationRepository(ConversationRepositoryError),
     WorkspaceMenuRepository(WorkspaceMenuRepositoryError),
     ProjectValidation(String),
+    ConversationValidation(String),
     JsonRejection(JsonRejection),
 }
 
@@ -427,6 +547,18 @@ impl From<ScriptAgentError> for ScriptApiError {
 impl From<ProjectRepositoryError> for ScriptApiError {
     fn from(error: ProjectRepositoryError) -> Self {
         Self::ProjectRepository(error)
+    }
+}
+
+impl From<ConversationRepositoryError> for ScriptApiError {
+    fn from(error: ConversationRepositoryError) -> Self {
+        Self::ConversationRepository(error)
+    }
+}
+
+impl From<AgentRuntimeError> for ScriptApiError {
+    fn from(error: AgentRuntimeError) -> Self {
+        Self::AgentRuntime(error)
     }
 }
 
@@ -449,6 +581,9 @@ impl IntoResponse for ScriptApiError {
                 Json(json!({ "error": "项目存储失败", "details": error.to_string() })),
             )
                 .into_response(),
+            Self::ConversationRepository(error) => {
+                conversation_repository_error_response(error).into_response()
+            }
             Self::WorkspaceMenuRepository(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "视频工作台菜单读取失败", "details": error.to_string() })),
@@ -457,9 +592,32 @@ impl IntoResponse for ScriptApiError {
             Self::ProjectValidation(message) => {
                 (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
             }
+            Self::ConversationValidation(message) => {
+                (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+            }
             Self::JsonRejection(error) => invalid_json_response(error).into_response(),
             Self::Agent(error) => script_agent_error_response(error).into_response(),
+            Self::AgentRuntime(error) => agent_runtime_error_response(error).into_response(),
         }
+    }
+}
+
+fn conversation_repository_error_response(
+    error: ConversationRepositoryError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match error {
+        ConversationRepositoryError::ConversationNotFound(conversation_id) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "会话不存在", "conversation_id": conversation_id })),
+        ),
+        ConversationRepositoryError::RunNotFound(run_id) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Agent 运行记录不存在", "run_id": run_id })),
+        ),
+        ConversationRepositoryError::Storage(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "会话存储失败", "details": message })),
+        ),
     }
 }
 
@@ -498,5 +656,60 @@ fn script_agent_error_response(error: ScriptAgentError) -> (StatusCode, Json<ser
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "内部错误", "details": message })),
         ),
+    }
+}
+
+fn agent_runtime_error_response(error: AgentRuntimeError) -> (StatusCode, Json<serde_json::Value>) {
+    match error {
+        AgentRuntimeError::Validation(message) => {
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": message })))
+        }
+        AgentRuntimeError::UnsupportedAgent(agent_type) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "暂不支持该 Agent 类型", "agent_type": agent_type })),
+        ),
+        AgentRuntimeError::SceneNotFound {
+            script_id,
+            sequence,
+        } => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "分镜不存在", "script_id": script_id, "sequence": sequence })),
+        ),
+        AgentRuntimeError::ConversationRepository(error) => {
+            conversation_repository_error_response(error)
+        }
+        AgentRuntimeError::ScriptRepository(error) => match error {
+            ScriptRepositoryError::NotFound(script_id) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "脚本不存在", "script_id": script_id })),
+            ),
+            ScriptRepositoryError::SceneNotFound {
+                script_id,
+                sequence,
+            } => (
+                StatusCode::NOT_FOUND,
+                Json(
+                    json!({ "error": "分镜不存在", "script_id": script_id, "sequence": sequence }),
+                ),
+            ),
+            ScriptRepositoryError::Storage(message) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "脚本存储失败", "details": message })),
+            ),
+        },
+        AgentRuntimeError::InvalidLlmOutput(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Agent 输出无效", "details": message })),
+        ),
+        AgentRuntimeError::Llm(error) => match error {
+            LLMError::Timeout => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "Agent 调用模型超时，请稍后重试" })),
+            ),
+            other => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Agent 调用模型失败", "details": other.to_string() })),
+            ),
+        },
     }
 }

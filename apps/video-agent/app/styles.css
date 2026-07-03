@@ -280,6 +280,11 @@ textarea:disabled {
   padding: 16px;
 }
 
+.agentChatPanel {
+  display: grid;
+  gap: 12px;
+}
+
 .panelHeader,
 .detailHeader {
   display: flex;
@@ -687,4 +692,115 @@ button:focus-visible {
 
 .helperText {
   margin: 10px 0 14px;
+}
+
+.agentChatPanel .helperText {
+  margin: 0;
+}
+
+.agentChatState {
+  min-width: 64px;
+  height: 26px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 9px;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.agentChatState.ready {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.agentMessages {
+  min-height: 170px;
+  max-height: 300px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  overflow: auto;
+  padding: 12px;
+  background: var(--color-surface-muted);
+}
+
+.agentMessage {
+  max-width: 92%;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  background: var(--color-surface);
+}
+
+.agentMessage span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.agentMessage p {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.agentMessage.user {
+  justify-self: end;
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.agentMessage.assistant {
+  justify-self: start;
+}
+
+.agentEmptyState {
+  min-height: 144px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.agentEmptyState strong {
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.agentEmptyState span {
+  max-width: 240px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.agentChatForm {
+  display: grid;
+  gap: 10px;
+}
+
+.agentChatForm label {
+  display: grid;
+  gap: 6px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.agentChatForm textarea {
+  min-height: 84px;
 }

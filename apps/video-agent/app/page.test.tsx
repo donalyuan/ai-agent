@@ -1,11 +1,19 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Home from "./page";
 import * as api from "./lib/api";
-import type { ProjectListResponse, ScriptDetail, ScriptListResponse, WorkspaceMenuListResponse } from "./lib/api";
+import type {
+  AgentConversation,
+  AgentMessage,
+  AgentRun,
+  ProjectListResponse,
+  ScriptDetail,
+  ScriptListResponse,
+  WorkspaceMenuListResponse,
+} from "./lib/api";
 
 vi.mock("./lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./lib/api")>();
@@ -17,6 +25,9 @@ vi.mock("./lib/api", async (importOriginal) => {
     listProjects: vi.fn(),
     listScripts: vi.fn(),
     getScript: vi.fn(),
+    createAgentConversation: vi.fn(),
+    listAgentMessages: vi.fn(),
+    sendAgentMessage: vi.fn(),
   };
 });
 
@@ -64,6 +75,32 @@ const scriptDetail: ScriptDetail = {
   updated_at: "2026-07-02T00:05:00Z",
 };
 
+const secondScriptSummary = {
+  script_id: "99999999-9999-4999-8999-999999999999",
+  title: "第二版脚本：AI 剪辑流程",
+  status: "draft" as const,
+  scene_count: 1,
+  parent_id: null,
+  created_at: "2026-07-02T00:10:00Z",
+};
+
+const secondScriptDetail: ScriptDetail = {
+  ...secondScriptSummary,
+  project_id: project.project_id,
+  hook: "剪辑还在手动拖时间线？",
+  scenes: [
+    {
+      scene_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      sequence: 1,
+      narration: "AI 可以先完成粗剪和节奏整理。",
+      visual_description: "剪辑软件时间线自动排列素材。",
+      emotion: "高效",
+      duration_sec: 10,
+    },
+  ],
+  updated_at: "2026-07-02T00:10:00Z",
+};
+
 const workspaceMenus: WorkspaceMenuListResponse = {
   menus: [
     menuNode("content-strategy", "内容策略", false, "planned", 10),
@@ -84,6 +121,50 @@ const workspaceMenus: WorkspaceMenuListResponse = {
     menuNode("analytics", "数据分析", false, "planned", 60),
     menuNode("workflow-tasks", "工作流任务", false, "planned", 70),
   ],
+};
+
+const conversation: AgentConversation = {
+  conversation_id: "55555555-5555-4555-8555-555555555555",
+  project_id: project.project_id,
+  agent_type: "script",
+  subject_type: "script",
+  subject_id: scriptSummary.script_id,
+  title: "脚本 Agent 对话",
+  status: "active",
+  metadata: {},
+  created_at: "2026-07-02T00:06:00Z",
+  updated_at: "2026-07-02T00:06:00Z",
+};
+
+const userMessage: AgentMessage = {
+  message_id: "66666666-6666-4666-8666-666666666666",
+  conversation_id: conversation.conversation_id,
+  role: "user",
+  content: "把第 2 镜改得更有冲突感",
+  metadata: {},
+  created_at: "2026-07-02T00:07:00Z",
+};
+
+const assistantMessage: AgentMessage = {
+  message_id: "77777777-7777-4777-8777-777777777777",
+  conversation_id: conversation.conversation_id,
+  role: "assistant",
+  content: "已更新第 2 镜，时间轴已刷新。",
+  metadata: { scene_sequence: 2 },
+  created_at: "2026-07-02T00:07:05Z",
+};
+
+const agentRun: AgentRun = {
+  run_id: "88888888-8888-4888-8888-888888888888",
+  conversation_id: conversation.conversation_id,
+  project_id: project.project_id,
+  agent_type: "script",
+  status: "completed",
+  input: { content: userMessage.content },
+  output: { reply: assistantMessage.content },
+  error: null,
+  started_at: "2026-07-02T00:07:00Z",
+  finished_at: "2026-07-02T00:07:05Z",
 };
 
 function menuNode(
@@ -120,6 +201,20 @@ function mockScripts(response: ScriptListResponse) {
   vi.mocked(api.listScripts).mockResolvedValue(response);
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushAsyncWork() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe("video-agent 视频工作台页面", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -127,6 +222,13 @@ describe("video-agent 视频工作台页面", () => {
     mockProjects({ projects: [] });
     mockScripts({ scripts: [], total: 0, limit: 20, offset: 0 });
     vi.mocked(api.getScript).mockResolvedValue(scriptDetail);
+    vi.mocked(api.createAgentConversation).mockResolvedValue(conversation);
+    vi.mocked(api.listAgentMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(api.sendAgentMessage).mockResolvedValue({
+      user_message: userMessage,
+      assistant_message: assistantMessage,
+      run: agentRun,
+    });
   });
 
   it("展示 VEDIO-AGENT 品牌、中文标题和业务流程菜单", async () => {
@@ -199,6 +301,128 @@ describe("video-agent 视频工作台页面", () => {
     expect(screen.getAllByText("画面指令").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("传统程序员每天要写大量重复代码。")).toBeInTheDocument();
     expect(screen.getByText("程序员盯着屏幕，快速切换多个代码文件。"));
+  });
+
+  it("脚本详情旁显示脚本 Agent 对话面板", async () => {
+    mockProjects({ projects: [project] });
+    mockScripts({ scripts: [scriptSummary], total: 1, limit: 20, offset: 0 });
+    render(createElement(Home));
+
+    const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
+
+    expect(within(panel).getByText("绑定：科技博主 / 当前脚本")).toBeInTheDocument();
+    expect(within(panel).getByPlaceholderText("输入要修改的分镜方向...")).toBeEnabled();
+    expect(within(panel).getByRole("button", { name: "发送" })).toBeEnabled();
+  });
+
+  it("首次发送消息会创建脚本会话并调用发送接口", async () => {
+    mockProjects({ projects: [project] });
+    mockScripts({ scripts: [scriptSummary], total: 1, limit: 20, offset: 0 });
+    render(createElement(Home));
+
+    const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
+    fireEvent.change(within(panel).getByPlaceholderText("输入要修改的分镜方向..."), {
+      target: { value: userMessage.content },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(api.createAgentConversation).toHaveBeenCalledWith(expect.anything(), {
+        project_id: project.project_id,
+        agent_type: "script",
+        subject_type: "script",
+        subject_id: scriptSummary.script_id,
+        title: "脚本 Agent 对话",
+      });
+    });
+    expect(api.sendAgentMessage).toHaveBeenCalledWith(expect.anything(), conversation.conversation_id, {
+      content: userMessage.content,
+    });
+    expect(await within(panel).findByText(assistantMessage.content)).toBeInTheDocument();
+  });
+
+  it("发送成功后刷新脚本详情", async () => {
+    mockProjects({ projects: [project] });
+    mockScripts({ scripts: [scriptSummary], total: 1, limit: 20, offset: 0 });
+    const refreshedScript = {
+      ...scriptDetail,
+      scenes: scriptDetail.scenes.map((scene) =>
+        scene.sequence === 2
+          ? { ...scene, visual_description: "屏幕切到红色告警和密集 TODO，冲突更强。" }
+          : scene,
+      ),
+      updated_at: "2026-07-02T00:08:00Z",
+    };
+    vi.mocked(api.getScript).mockResolvedValueOnce(scriptDetail).mockResolvedValueOnce(refreshedScript);
+    render(createElement(Home));
+
+    const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
+    fireEvent.change(within(panel).getByPlaceholderText("输入要修改的分镜方向..."), {
+      target: { value: userMessage.content },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "发送" }));
+
+    expect(await screen.findByText("屏幕切到红色告警和密集 TODO，冲突更强。")).toBeInTheDocument();
+    expect(api.getScript).toHaveBeenCalledTimes(2);
+  });
+
+  it("发送失败时错误只显示在对话面板内", async () => {
+    mockProjects({ projects: [project] });
+    mockScripts({ scripts: [scriptSummary], total: 1, limit: 20, offset: 0 });
+    vi.mocked(api.sendAgentMessage).mockRejectedValue(new Error("LLM 输出无法解析"));
+    render(createElement(Home));
+
+    const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
+    fireEvent.change(within(panel).getByPlaceholderText("输入要修改的分镜方向..."), {
+      target: { value: userMessage.content },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "发送" }));
+
+    expect(await within(panel).findByText("LLM 输出无法解析")).toBeInTheDocument();
+    expect(screen.getByText("传统程序员每天要写大量重复代码。")).toBeInTheDocument();
+  });
+
+  it("切换脚本时不会把上一脚本未完成对话写入当前面板", async () => {
+    mockProjects({ projects: [project] });
+    mockScripts({ scripts: [scriptSummary, secondScriptSummary], total: 2, limit: 20, offset: 0 });
+    const pendingTurn = deferred<{
+      user_message: AgentMessage;
+      assistant_message: AgentMessage;
+      run: AgentRun;
+    }>();
+    const pendingSecondScript = deferred<ScriptDetail>();
+    vi.mocked(api.getScript)
+      .mockResolvedValueOnce(scriptDetail)
+      .mockReturnValueOnce(pendingSecondScript.promise)
+      .mockResolvedValue(scriptDetail);
+    vi.mocked(api.sendAgentMessage).mockReturnValue(pendingTurn.promise);
+    render(createElement(Home));
+
+    const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
+    fireEvent.change(within(panel).getByPlaceholderText("输入要修改的分镜方向..."), {
+      target: { value: userMessage.content },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: /第二版脚本/ }));
+
+    await waitFor(() => expect(api.getScript).toHaveBeenCalledWith(expect.anything(), secondScriptSummary.script_id));
+
+    await act(async () => {
+      pendingTurn.resolve({ user_message: userMessage, assistant_message: assistantMessage, run: agentRun });
+      await flushAsyncWork();
+    });
+
+    expect(screen.queryByText(assistantMessage.content)).not.toBeInTheDocument();
+    expect(api.getScript).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      pendingSecondScript.resolve(secondScriptDetail);
+      await flushAsyncWork();
+    });
+
+    expect(await screen.findByRole("heading", { name: secondScriptSummary.title })).toBeInTheDocument();
   });
 
   it("使用已确认的蓝色主色板", () => {

@@ -1,4 +1,4 @@
-use crate::agents::models::{Script, ScriptListFilter, ScriptStatus, ScriptSummary};
+use crate::agents::models::{Scene, Script, ScriptListFilter, ScriptStatus, ScriptSummary};
 use async_trait::async_trait;
 use sqlx::{postgres::PgRow, PgPool, Row};
 use std::fmt;
@@ -85,6 +85,12 @@ pub trait ScriptRepository: Send + Sync {
         &self,
         script_id: Uuid,
         status: ScriptStatus,
+    ) -> Result<Script, ScriptRepositoryError>;
+
+    async fn update_scene(
+        &self,
+        script_id: Uuid,
+        scene: Scene,
     ) -> Result<Script, ScriptRepositoryError>;
 }
 
@@ -329,11 +335,57 @@ impl ScriptRepository for PostgresScriptRepository {
 
         self.get_script(updated_id).await
     }
+
+    async fn update_scene(
+        &self,
+        script_id: Uuid,
+        scene: Scene,
+    ) -> Result<Script, ScriptRepositoryError> {
+        let updated_script_id = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            UPDATE scenes
+            SET narration = $3,
+                visual_description = $4,
+                emotion = $5,
+                duration_sec = $6
+            WHERE script_id = $1 AND sequence = $2
+            RETURNING script_id
+            "#,
+        )
+        .bind(script_id)
+        .bind(scene.sequence)
+        .bind(scene.narration)
+        .bind(scene.visual_description)
+        .bind(scene.emotion)
+        .bind(scene.duration_sec)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(ScriptRepositoryError::from)?
+        .ok_or(ScriptRepositoryError::SceneNotFound {
+            script_id,
+            sequence: scene.sequence,
+        })?;
+
+        sqlx::query(
+            r#"
+            UPDATE scripts
+            SET updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(updated_script_id)
+        .execute(&self.pool)
+        .await
+        .map_err(ScriptRepositoryError::from)?;
+
+        self.get_script(updated_script_id).await
+    }
 }
 
 #[derive(Debug)]
 pub enum ScriptRepositoryError {
     NotFound(Uuid),
+    SceneNotFound { script_id: Uuid, sequence: i32 },
     Storage(String),
 }
 
@@ -347,6 +399,13 @@ impl fmt::Display for ScriptRepositoryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotFound(script_id) => write!(formatter, "script not found: {script_id}"),
+            Self::SceneNotFound {
+                script_id,
+                sequence,
+            } => write!(
+                formatter,
+                "scene not found: script_id={script_id}, sequence={sequence}"
+            ),
             Self::Storage(message) => write!(formatter, "script storage error: {message}"),
         }
     }

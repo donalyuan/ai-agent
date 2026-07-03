@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createAgentConversation,
   createApiClient,
   generateScript,
   getApiBaseUrl,
   getScript,
+  listAgentMessages,
   listProjects,
   listScripts,
   listWorkspaceMenus,
+  sendAgentMessage,
   updateScriptStatus,
 } from "./api";
 
@@ -44,6 +47,50 @@ const scriptDetail = {
     },
   ],
   updated_at: "2026-07-02T00:05:00Z",
+};
+
+const conversation = {
+  conversation_id: "55555555-5555-4555-8555-555555555555",
+  project_id: project.project_id,
+  agent_type: "script",
+  subject_type: "script",
+  subject_id: scriptSummary.script_id,
+  title: "脚本 Agent 对话",
+  status: "active",
+  metadata: {},
+  created_at: "2026-07-02T00:06:00Z",
+  updated_at: "2026-07-02T00:06:00Z",
+};
+
+const userMessage = {
+  message_id: "66666666-6666-4666-8666-666666666666",
+  conversation_id: conversation.conversation_id,
+  role: "user",
+  content: "把第 2 镜改得更有冲突感",
+  metadata: {},
+  created_at: "2026-07-02T00:07:00Z",
+};
+
+const assistantMessage = {
+  message_id: "77777777-7777-4777-8777-777777777777",
+  conversation_id: conversation.conversation_id,
+  role: "assistant",
+  content: "已更新第 2 镜，时间轴已刷新。",
+  metadata: { scene_sequence: 2 },
+  created_at: "2026-07-02T00:07:05Z",
+};
+
+const agentRun = {
+  run_id: "88888888-8888-4888-8888-888888888888",
+  conversation_id: conversation.conversation_id,
+  project_id: project.project_id,
+  agent_type: "script",
+  status: "completed",
+  input: { message: userMessage.content },
+  output: { reply: assistantMessage.content },
+  error: null,
+  started_at: "2026-07-02T00:07:00Z",
+  finished_at: "2026-07-02T00:07:05Z",
 };
 
 const workspaceMenus = [
@@ -245,5 +292,84 @@ describe("video-agent api client", () => {
       },
     );
     expect(result.status).toBe("approved");
+  });
+
+  it("创建脚本 Agent 会话", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(conversation));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await createAgentConversation(client, {
+      project_id: project.project_id,
+      agent_type: "script",
+      subject_type: "script",
+      subject_id: scriptSummary.script_id,
+      title: "脚本 Agent 对话",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/agent/conversations", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        project_id: project.project_id,
+        agent_type: "script",
+        subject_type: "script",
+        subject_id: scriptSummary.script_id,
+        title: "脚本 Agent 对话",
+      }),
+    });
+    expect(result.conversation_id).toBe(conversation.conversation_id);
+  });
+
+  it("读取 Agent 会话消息", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ messages: [userMessage, assistantMessage] }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await listAgentMessages(client, conversation.conversation_id);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://api.test/api/agent/conversations/${conversation.conversation_id}/messages`,
+      { headers: { accept: "application/json" } },
+    );
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[1].role).toBe("assistant");
+  });
+
+  it("发送 Agent 消息", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ user_message: userMessage, assistant_message: assistantMessage, run: agentRun }),
+    );
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await sendAgentMessage(client, conversation.conversation_id, {
+      content: userMessage.content,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://api.test/api/agent/conversations/${conversation.conversation_id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ content: userMessage.content }),
+      },
+    );
+    expect(result.assistant_message.content).toContain("已更新第 2 镜");
+    expect(result.run.status).toBe("completed");
+  });
+
+  it("对话 API 失败时沿用 ApiError", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: "会话不存在" }, { status: 404 }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await expect(listAgentMessages(client, conversation.conversation_id)).rejects.toMatchObject({
+      name: "ApiError",
+      status: 404,
+      message: "会话不存在",
+    });
   });
 });

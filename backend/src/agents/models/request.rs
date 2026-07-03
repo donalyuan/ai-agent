@@ -1,4 +1,7 @@
 use super::{Scene, Script, ScriptStatus, ScriptSummary};
+use crate::agents::conversation::{
+    AgentConversation, AgentConversationStatus, AgentMessage, AgentMessageRole, AgentRunRecord,
+};
 use crate::repositories::Project;
 use crate::repositories::WorkspaceMenuTreeNode;
 use chrono::{DateTime, Utc};
@@ -81,6 +84,164 @@ pub struct WorkspaceMenuNodeResponse {
     pub status: String,
     pub metadata: Value,
     pub children: Vec<WorkspaceMenuNodeResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Validate)]
+pub struct CreateAgentConversationRequest {
+    pub agent_type: String,
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
+    #[serde(default)]
+    pub subject_type: Option<String>,
+    #[serde(default)]
+    pub subject_id: Option<Uuid>,
+    #[validate(length(min = 1, max = 160))]
+    pub title: String,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+impl CreateAgentConversationRequest {
+    pub fn validate_for_api(&self) -> Result<(), String> {
+        if self.title.trim().is_empty() {
+            return Err("会话标题不能为空".to_string());
+        }
+        if self.agent_type.trim() != "script" {
+            return Err("暂不支持该 Agent 类型".to_string());
+        }
+        if self.subject_type.as_deref() != Some("script") || self.subject_id.is_none() {
+            return Err("脚本会话必须绑定 script subject".to_string());
+        }
+        self.validate()
+            .map_err(|error| format!("会话参数无效: {error}"))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Validate)]
+pub struct SendAgentMessageRequest {
+    #[validate(length(min = 1, max = 4000))]
+    pub content: String,
+}
+
+impl SendAgentMessageRequest {
+    pub fn validate_for_api(&self) -> Result<(), String> {
+        if self.content.trim().is_empty() {
+            return Err("消息不能为空".to_string());
+        }
+        self.validate()
+            .map_err(|error| format!("消息参数无效: {error}"))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentConversationResponse {
+    pub conversation_id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub agent_type: String,
+    pub subject_type: Option<String>,
+    pub subject_id: Option<Uuid>,
+    pub title: String,
+    pub status: String,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<AgentConversation> for AgentConversationResponse {
+    fn from(conversation: AgentConversation) -> Self {
+        Self {
+            conversation_id: conversation.id,
+            project_id: conversation.project_id,
+            agent_type: conversation.agent_type,
+            subject_type: conversation.subject_type,
+            subject_id: conversation.subject_id,
+            title: conversation.title,
+            status: conversation_status_value(&conversation.status).to_string(),
+            metadata: conversation.metadata,
+            created_at: conversation.created_at,
+            updated_at: conversation.updated_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentMessageResponse {
+    pub message_id: Uuid,
+    pub conversation_id: Uuid,
+    pub role: String,
+    pub content: String,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<AgentMessage> for AgentMessageResponse {
+    fn from(message: AgentMessage) -> Self {
+        Self {
+            message_id: message.id,
+            conversation_id: message.conversation_id,
+            role: message_role_value(&message.role).to_string(),
+            content: message.content,
+            metadata: message.metadata,
+            created_at: message.created_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentRunResponse {
+    pub run_id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub agent_type: String,
+    pub status: String,
+    pub input: Value,
+    pub output: Option<Value>,
+    pub error_message: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+}
+
+impl From<AgentRunRecord> for AgentRunResponse {
+    fn from(run: AgentRunRecord) -> Self {
+        Self {
+            run_id: run.id,
+            project_id: run.project_id,
+            agent_type: run.agent_type,
+            status: run.status,
+            input: run.input,
+            output: run.output,
+            error_message: run.error_message,
+            started_at: run.started_at,
+            ended_at: run.ended_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentMessageListResponse {
+    pub messages: Vec<AgentMessageResponse>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentTurnResponseBody {
+    pub user_message: AgentMessageResponse,
+    pub assistant_message: AgentMessageResponse,
+    pub run: AgentRunResponse,
+}
+
+fn conversation_status_value(status: &AgentConversationStatus) -> &'static str {
+    match status {
+        AgentConversationStatus::Active => "active",
+        AgentConversationStatus::Archived => "archived",
+    }
+}
+
+fn message_role_value(role: &AgentMessageRole) -> &'static str {
+    match role {
+        AgentMessageRole::System => "system",
+        AgentMessageRole::User => "user",
+        AgentMessageRole::Assistant => "assistant",
+        AgentMessageRole::Tool => "tool",
+    }
 }
 
 impl From<WorkspaceMenuTreeNode> for WorkspaceMenuNodeResponse {

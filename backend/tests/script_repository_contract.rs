@@ -114,6 +114,27 @@ impl ScriptRepository for MemoryScriptRepository {
         script.status = status;
         Ok(script)
     }
+
+    async fn update_scene(
+        &self,
+        script_id: Uuid,
+        scene: Scene,
+    ) -> Result<Script, ScriptRepositoryError> {
+        let mut script = self.get_script(script_id).await?;
+        let existing_scene = script
+            .scenes
+            .iter_mut()
+            .find(|current_scene| current_scene.sequence == scene.sequence)
+            .ok_or(ScriptRepositoryError::SceneNotFound {
+                script_id,
+                sequence: scene.sequence,
+            })?;
+        existing_scene.narration = scene.narration;
+        existing_scene.visual_description = scene.visual_description;
+        existing_scene.emotion = scene.emotion;
+        existing_scene.duration_sec = scene.duration_sec;
+        Ok(script)
+    }
 }
 
 #[tokio::test]
@@ -166,4 +187,20 @@ async fn script_repository_trait_supports_script_lifecycle_operations() {
         .await
         .unwrap();
     assert_eq!(approved.status, ScriptStatus::Approved);
+
+    let updated_scene_script = repository
+        .update_scene(
+            script.id,
+            Scene {
+                id: script.scenes[0].id,
+                sequence: 1,
+                narration: "修改后的旁白。".to_string(),
+                visual_description: "修改后的画面。".to_string(),
+                emotion: "紧张".to_string(),
+                duration_sec: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated_scene_script.scenes[0].emotion, "紧张");
 }

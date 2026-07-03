@@ -1,7 +1,11 @@
+pub mod conversation_repository;
 pub mod project_repository;
 pub mod script_repository;
 pub mod workspace_menu_repository;
 
+pub use conversation_repository::{
+    ConversationRepository, ConversationRepositoryError, PostgresConversationRepository,
+};
 pub use project_repository::{
     CreateProjectInput, PostgresProjectRepository, Project, ProjectRepository,
     ProjectRepositoryError,

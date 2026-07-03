@@ -1,7 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AgentMessage,
   ApiClient,
   ApiError,
   Project,
@@ -11,12 +12,14 @@ import {
   ScriptSummary,
   WorkspaceMenuNode,
   checkHealth,
+  createAgentConversation,
   createApiClient,
   generateScript,
   getScript,
   listProjects,
   listScripts,
   listWorkspaceMenus,
+  sendAgentMessage,
   updateScriptStatus,
 } from "./lib/api";
 
@@ -68,6 +71,7 @@ export default function Home() {
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [scripts, setScripts] = useState<ScriptSummary[]>([]);
   const [selectedScript, setSelectedScript] = useState<ScriptDetail | null>(null);
+  const [selectedScriptId, setSelectedScriptId] = useState<string | null>(null);
   const [workspaceMenus, setWorkspaceMenus] = useState<WorkspaceMenuNode[]>([]);
   const [selectedMenuKey, setSelectedMenuKey] = useState(defaultMenuKey);
   const [statusFilter, setStatusFilter] = useState<"all" | ScriptStatus>("all");
@@ -83,6 +87,12 @@ export default function Home() {
   const [scriptError, setScriptError] = useState("");
   const [generateError, setGenerateError] = useState("");
   const [statusError, setStatusError] = useState("");
+  const [agentConversationId, setAgentConversationId] = useState<string | null>(null);
+  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
+  const [agentDraft, setAgentDraft] = useState("");
+  const [agentError, setAgentError] = useState("");
+  const [sendingAgentMessage, setSendingAgentMessage] = useState(false);
+  const selectedScriptIdRef = useRef<string | null>(null);
 
   const selectedProject = projects.find((project) => project.project_id === selectedProjectId);
   const writesDisabled = apiAvailable === false;
@@ -166,6 +176,8 @@ export default function Home() {
     if (!selectedProjectId) {
       setScripts([]);
       setSelectedScript(null);
+      selectedScriptIdRef.current = null;
+      setSelectedScriptId(null);
       return;
     }
 
@@ -175,6 +187,8 @@ export default function Home() {
       setLoadingScripts(true);
       setScriptError("");
       setSelectedScript(null);
+      selectedScriptIdRef.current = null;
+      setSelectedScriptId(null);
 
       try {
         const response = await listScripts(client, selectedProjectId, { status: statusFilter });
@@ -184,7 +198,19 @@ export default function Home() {
         setScripts(response.scripts);
 
         if (response.scripts[0]) {
-          await openScript(client, response.scripts[0].script_id, active, setLoadingScriptDetail, setSelectedScript, setScriptError);
+          if (active) {
+            selectedScriptIdRef.current = response.scripts[0].script_id;
+            setSelectedScriptId(response.scripts[0].script_id);
+          }
+          await openScript(
+            client,
+            response.scripts[0].script_id,
+            active,
+            setLoadingScriptDetail,
+            setSelectedScript,
+            setScriptError,
+            () => selectedScriptIdRef.current === response.scripts[0].script_id,
+          );
         }
       } catch (error) {
         if (active) {
@@ -203,6 +229,15 @@ export default function Home() {
       active = false;
     };
   }, [client, selectedProjectId, statusFilter]);
+
+  useEffect(() => {
+    selectedScriptIdRef.current = selectedScriptId;
+    setAgentConversationId(null);
+    setAgentMessages([]);
+    setAgentDraft("");
+    setAgentError("");
+    setSendingAgentMessage(false);
+  }, [selectedScriptId]);
 
   async function handleGenerateScript(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -226,6 +261,8 @@ export default function Home() {
         style: generateForm.style,
         scene_count: generateForm.sceneCount,
       });
+      selectedScriptIdRef.current = script.script_id;
+      setSelectedScriptId(script.script_id);
       setSelectedScript(script);
       setScripts((currentScripts) => upsertSummary(currentScripts, script));
       setStatusFilter("all");
@@ -237,7 +274,18 @@ export default function Home() {
   }
 
   async function handleOpenScript(scriptId: string) {
-    await openScript(client, scriptId, true, setLoadingScriptDetail, setSelectedScript, setScriptError);
+    selectedScriptIdRef.current = scriptId;
+    setSelectedScriptId(scriptId);
+    setSelectedScript(null);
+    await openScript(
+      client,
+      scriptId,
+      true,
+      setLoadingScriptDetail,
+      setSelectedScript,
+      setScriptError,
+      () => selectedScriptIdRef.current === scriptId,
+    );
   }
 
   async function handleUpdateStatus(status: ScriptStatus) {
@@ -264,6 +312,69 @@ export default function Home() {
       setStatusError(errorToMessage(error));
     } finally {
       setUpdatingStatus(false);
+    }
+  }
+
+  async function handleSendAgentMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const content = agentDraft.trim();
+
+    if (!selectedProjectId || !selectedScript) {
+      setAgentError("请先选择脚本");
+      return;
+    }
+
+    if (!content) {
+      setAgentError("请输入要修改的分镜方向");
+      return;
+    }
+
+    setAgentError("");
+    setSendingAgentMessage(true);
+    const scriptIdAtSend = selectedScript.script_id;
+
+    try {
+      let conversationId = agentConversationId;
+      if (!conversationId) {
+        const conversation = await createAgentConversation(client, {
+          project_id: selectedProjectId,
+          agent_type: "script",
+          subject_type: "script",
+          subject_id: selectedScript.script_id,
+          title: "脚本 Agent 对话",
+        });
+        if (selectedScriptIdRef.current !== scriptIdAtSend) {
+          return;
+        }
+        conversationId = conversation.conversation_id;
+        setAgentConversationId(conversationId);
+      }
+
+      const response = await sendAgentMessage(client, conversationId, { content });
+      if (selectedScriptIdRef.current !== scriptIdAtSend) {
+        return;
+      }
+      setAgentMessages((currentMessages) => [
+        ...currentMessages,
+        response.user_message,
+        response.assistant_message,
+      ]);
+      setAgentDraft("");
+
+      const refreshedScript = await getScript(client, scriptIdAtSend);
+      if (selectedScriptIdRef.current !== scriptIdAtSend) {
+        return;
+      }
+      setSelectedScript(refreshedScript);
+      setScripts((currentScripts) => upsertSummary(currentScripts, refreshedScript));
+    } catch (error) {
+      if (selectedScriptIdRef.current === scriptIdAtSend) {
+        setAgentError(errorToMessage(error));
+      }
+    } finally {
+      if (selectedScriptIdRef.current === scriptIdAtSend) {
+        setSendingAgentMessage(false);
+      }
     }
   }
 
@@ -364,7 +475,7 @@ export default function Home() {
             <div className="scriptList">
               {scripts.map((script) => (
                 <button
-                  className={selectedScript?.script_id === script.script_id ? "scriptItem selected" : "scriptItem"}
+                  className={selectedScriptId === script.script_id ? "scriptItem selected" : "scriptItem"}
                   key={script.script_id}
                   onClick={() => handleOpenScript(script.script_id)}
                   type="button"
@@ -401,10 +512,96 @@ export default function Home() {
               setForm={setGenerateForm}
               onSubmit={handleGenerateScript}
             />
+            <ScriptAgentConversationPanel
+              apiUnavailable={writesDisabled}
+              draft={agentDraft}
+              error={agentError}
+              messages={agentMessages}
+              selectedProject={selectedProject}
+              selectedScript={selectedScript}
+              sending={sendingAgentMessage}
+              setDraft={setAgentDraft}
+              onSubmit={handleSendAgentMessage}
+            />
           </aside>
         </div>
       </section>
     </main>
+  );
+}
+
+function ScriptAgentConversationPanel({
+  apiUnavailable,
+  draft,
+  error,
+  messages,
+  selectedProject,
+  selectedScript,
+  sending,
+  setDraft,
+  onSubmit,
+}: {
+  apiUnavailable: boolean;
+  draft: string;
+  error: string;
+  messages: AgentMessage[];
+  selectedProject?: Project;
+  selectedScript: ScriptDetail | null;
+  sending: boolean;
+  setDraft: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const inputDisabled = apiUnavailable || !selectedScript || sending;
+  const ready = Boolean(selectedScript) && !apiUnavailable;
+  const panelLabel = ready ? "脚本 Agent 对话" : "脚本 Agent 对话（未绑定）";
+  const stateLabel = apiUnavailable ? "不可用" : selectedScript ? "可对话" : "未选择";
+  const bindingText = selectedProject && selectedScript ? `绑定：${selectedProject.name} / 当前脚本` : "请选择脚本后对话";
+
+  return (
+    <section aria-label={panelLabel} className="sidePanel agentChatPanel">
+      <div className="panelHeader">
+        <div>
+          <p className="sectionKicker">Agent</p>
+          <h2>脚本 Agent 对话</h2>
+        </div>
+        <span className={ready ? "agentChatState ready" : "agentChatState"}>{stateLabel}</span>
+      </div>
+
+      <p className="helperText">{bindingText}</p>
+      {error ? <p className="errorText" role="alert">{error}</p> : null}
+
+      <div className="agentMessages" aria-label="脚本 Agent 消息">
+        {messages.length ? (
+          messages.map((message) => (
+            <article className={`agentMessage ${message.role}`} key={message.message_id}>
+              <span>{message.role === "user" ? "你" : "Agent"}</span>
+              <p>{message.content}</p>
+            </article>
+          ))
+        ) : (
+          <div className="agentEmptyState">
+            <strong>可直接指定分镜修改方向</strong>
+            <span>例如：把第 2 镜改得更有冲突感，画面更具体。</span>
+          </div>
+        )}
+      </div>
+
+      <form className="agentChatForm" onSubmit={onSubmit}>
+        <label>
+          修改方向
+          <textarea
+            disabled={inputDisabled}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder="输入要修改的分镜方向..."
+            rows={3}
+            value={draft}
+          />
+        </label>
+        <button className="primaryButton" disabled={inputDisabled} type="submit">
+          {sending ? "发送中" : "发送"}
+        </button>
+      </form>
+    </section>
   );
 }
 
@@ -620,20 +817,21 @@ async function openScript(
   setLoading: (value: boolean) => void,
   setScript: (script: ScriptDetail | null) => void,
   setError: (message: string) => void,
+  shouldApply: () => boolean = () => true,
 ) {
   setLoading(true);
   setError("");
   try {
     const script = await getScript(client, scriptId);
-    if (active) {
+    if (active && shouldApply()) {
       setScript(script);
     }
   } catch (error) {
-    if (active) {
+    if (active && shouldApply()) {
       setError(errorToMessage(error));
     }
   } finally {
-    if (active) {
+    if (active && shouldApply()) {
       setLoading(false);
     }
   }

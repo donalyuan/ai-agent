@@ -96,6 +96,67 @@ export type UpdateScriptStatusResponse = {
   updated_at: string;
 };
 
+export type AgentType = "script" | "topic" | "material" | "video" | "publish" | "optimization";
+export type AgentMessageRole = "user" | "assistant" | "system";
+export type AgentRunStatus = "running" | "completed" | "failed";
+
+export type AgentConversation = {
+  conversation_id: string;
+  project_id: string;
+  agent_type: AgentType;
+  subject_type: string;
+  subject_id: string;
+  title: string;
+  status: "active" | "archived";
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentMessage = {
+  message_id: string;
+  conversation_id: string;
+  role: AgentMessageRole;
+  content: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AgentRun = {
+  run_id: string;
+  conversation_id: string;
+  project_id: string;
+  agent_type: AgentType;
+  status: AgentRunStatus;
+  input: Record<string, unknown>;
+  output: Record<string, unknown> | null;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+};
+
+export type CreateAgentConversationPayload = {
+  project_id: string;
+  agent_type: AgentType;
+  subject_type: string;
+  subject_id: string;
+  title?: string;
+};
+
+export type AgentMessageListResponse = {
+  messages: AgentMessage[];
+};
+
+export type SendAgentMessagePayload = {
+  content: string;
+};
+
+export type AgentTurnResponse = {
+  user_message: AgentMessage;
+  assistant_message: AgentMessage;
+  run: AgentRun;
+};
+
 export type ApiClient = {
   baseUrl: string;
   fetcher: typeof fetch;
@@ -186,6 +247,38 @@ export function updateScriptStatus(
     method: "PUT",
     body: { status },
   });
+}
+
+export function createAgentConversation(
+  client: ApiClient,
+  payload: CreateAgentConversationPayload,
+) {
+  return request<AgentConversation>(client, "/api/agent/conversations", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function listAgentMessages(client: ApiClient, conversationId: string) {
+  return request<AgentMessageListResponse>(
+    client,
+    `/api/agent/conversations/${conversationId}/messages`,
+  );
+}
+
+export function sendAgentMessage(
+  client: ApiClient,
+  conversationId: string,
+  payload: SendAgentMessagePayload,
+) {
+  return request<AgentTurnResponse>(
+    client,
+    `/api/agent/conversations/${conversationId}/messages`,
+    {
+      method: "POST",
+      body: payload,
+    },
+  );
 }
 
 async function request<T>(

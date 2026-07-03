@@ -681,7 +681,7 @@
           "name": "业务流程走向",
           "x": 296,
           "y": 96,
-          "width": 1118,
+          "width": 1142,
           "height": 116,
           "fill": "#FFFFFF",
           "layout": "none",
@@ -2094,7 +2094,7 @@
         {
           "type": "frame",
           "id": "f0151",
-          "name": "脚本生成面板",
+          "name": "脚本操作与 Agent 对话面板",
           "x": 1106,
           "y": 348,
           "width": 306,
@@ -2104,225 +2104,113 @@
           "children": [
             {
               "type": "text",
-              "id": "t0136",
-              "name": "生成标题",
+              "id": "ckykT",
+              "name": "Agent 对话标题",
               "x": 18,
-              "y": 18,
-              "width": 100,
+              "y": 16,
+              "width": 170,
               "textGrowth": "fixed-width",
-              "content": "生成脚本",
+              "content": "脚本 Agent 对话",
               "fill": "#172033",
               "fontFamily": "Inter",
               "fontSize": 16,
               "fontWeight": "800"
             },
             {
+              "type": "frame",
+              "id": "ldpfl",
+              "name": "会话状态标签",
+              "x": 204,
+              "y": 14,
+              "width": 84,
+              "height": 26,
+              "fill": "#E8F6EE",
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "UQ6vh",
+                  "name": "会话状态文本",
+                  "x": 0,
+                  "y": 5,
+                  "width": 84,
+                  "textGrowth": "fixed-width",
+                  "content": "可对话",
+                  "fill": "#17633A",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "700",
+                  "textAlign": "center"
+                }
+              ],
+              "cornerRadius": 999,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#9FD3B4"
+              }
+            },
+            {
               "type": "text",
-              "id": "t0137",
-              "name": "项目绑定",
+              "id": "uL69F",
+              "name": "Agent 绑定说明",
               "x": 18,
-              "y": 44,
-              "width": 180,
+              "y": 42,
+              "width": 270,
               "textGrowth": "fixed-width",
-              "content": "当前绑定：科技博主",
+              "content": "绑定：科技博主 / 当前脚本 / conversation_id",
               "fill": "#5D6878",
               "fontFamily": "Inter",
               "fontSize": 11,
               "fontWeight": "normal"
             },
             {
-              "type": "text",
-              "id": "t0138",
-              "name": "选题标签",
-              "x": 18,
-              "y": 78,
-              "width": 80,
-              "textGrowth": "fixed-width",
-              "content": "选题",
-              "fill": "#5D6878",
-              "fontFamily": "Inter",
-              "fontSize": 12,
-              "fontWeight": "800"
-            },
-            {
               "type": "frame",
-              "id": "f0140",
-              "name": "选题输入",
+              "id": "yt88g",
+              "name": "生成控制摘要",
               "x": 18,
-              "y": 100,
+              "y": 70,
               "width": 270,
-              "height": 50,
+              "height": 74,
               "fill": "#F8FAFC",
               "layout": "none",
               "children": [
                 {
                   "type": "text",
-                  "id": "t0139",
-                  "name": "选题内容",
+                  "id": "PJXfS",
+                  "name": "生成控制标题",
                   "x": 12,
-                  "y": 16,
-                  "width": 244,
+                  "y": 10,
+                  "width": 100,
+                  "textGrowth": "fixed-width",
+                  "content": "生成控制",
+                  "fill": "#172033",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "mciF1",
+                  "name": "生成控制选题",
+                  "x": 12,
+                  "y": 32,
+                  "width": 246,
                   "textGrowth": "fixed-width",
                   "content": "ChatGPT 如何改变程序员工作流",
-                  "fill": "#172033",
+                  "fill": "#5D6878",
                   "fontFamily": "Inter",
-                  "fontSize": 13,
-                  "fontWeight": "800"
-                }
-              ],
-              "cornerRadius": 8,
-              "stroke": {
-                "thickness": 1,
-                "fill": "#D8E0E8"
-              }
-            },
-            {
-              "type": "text",
-              "id": "t0141",
-              "name": "参数标签",
-              "x": 18,
-              "y": 172,
-              "width": 90,
-              "textGrowth": "fixed-width",
-              "content": "生成参数",
-              "fill": "#5D6878",
-              "fontFamily": "Inter",
-              "fontSize": 12,
-              "fontWeight": "800"
-            },
-            {
-              "type": "frame",
-              "id": "f0143",
-              "name": "参数一",
-              "x": 18,
-              "y": 194,
-              "width": 126,
-              "height": 50,
-              "fill": "#F8FAFC",
-              "layout": "none",
-              "children": [
-                {
-                  "type": "text",
-                  "id": "t0142",
-                  "name": "参数一值",
-                  "x": 0,
-                  "y": 16,
-                  "width": 126,
-                  "textGrowth": "fixed-width",
-                  "content": "知识科普",
-                  "fill": "#172033",
-                  "fontFamily": "Inter",
-                  "fontSize": 12,
-                  "fontWeight": "800",
-                  "textAlign": "center"
-                }
-              ],
-              "cornerRadius": 8,
-              "stroke": {
-                "thickness": 1,
-                "fill": "#D8E0E8"
-              }
-            },
-            {
-              "type": "frame",
-              "id": "f0145",
-              "name": "参数二",
-              "x": 162,
-              "y": 194,
-              "width": 126,
-              "height": 50,
-              "fill": "#F8FAFC",
-              "layout": "none",
-              "children": [
-                {
-                  "type": "text",
-                  "id": "t0144",
-                  "name": "参数二值",
-                  "x": 0,
-                  "y": 16,
-                  "width": 126,
-                  "textGrowth": "fixed-width",
-                  "content": "6 镜",
-                  "fill": "#172033",
-                  "fontFamily": "Inter",
-                  "fontSize": 12,
-                  "fontWeight": "800",
-                  "textAlign": "center"
-                }
-              ],
-              "cornerRadius": 8,
-              "stroke": {
-                "thickness": 1,
-                "fill": "#D8E0E8"
-              }
-            },
-            {
-              "type": "frame",
-              "id": "f0147",
-              "name": "生成按钮",
-              "x": 18,
-              "y": 272,
-              "width": 270,
-              "height": 36,
-              "fill": "#2860E8",
-              "layout": "none",
-              "children": [
-                {
-                  "type": "text",
-                  "id": "t0146",
-                  "name": "生成按钮文本",
-                  "x": 0,
-                  "y": 10,
-                  "width": 270,
-                  "textGrowth": "fixed-width",
-                  "content": "生成脚本",
-                  "fill": "#FFFFFF",
-                  "fontFamily": "Inter",
-                  "fontSize": 13,
-                  "fontWeight": "800",
-                  "textAlign": "center"
-                }
-              ],
-              "cornerRadius": 8,
-              "stroke": {
-                "thickness": 1,
-                "fill": "#2860E8"
-              }
-            },
-            {
-              "type": "frame",
-              "id": "f0150",
-              "name": "二级能力说明",
-              "x": 18,
-              "y": 330,
-              "width": 270,
-              "height": 86,
-              "fill": "#F9FBFE",
-              "layout": "none",
-              "children": [
-                {
-                  "type": "text",
-                  "id": "t0148",
-                  "name": "二级能力标题",
-                  "x": 14,
-                  "y": 12,
-                  "width": 80,
-                  "textGrowth": "fixed-width",
-                  "content": "二级能力",
-                  "fill": "#172033",
-                  "fontFamily": "Inter",
-                  "fontSize": 12,
-                  "fontWeight": "800"
+                  "fontSize": 11,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "text",
-                  "id": "t0149",
-                  "name": "二级能力正文",
-                  "x": 14,
-                  "y": 34,
-                  "width": 238,
+                  "id": "w7DSN5",
+                  "name": "生成控制参数",
+                  "x": 12,
+                  "y": 52,
+                  "width": 246,
                   "textGrowth": "fixed-width",
-                  "content": "脚本生成 Agent 挂在“脚本创作”菜单下，不再作为一级导航。",
+                  "content": "知识科普 · 6 镜 · 项目 ID 来自选择器",
                   "fill": "#5D6878",
                   "fontFamily": "Inter",
                   "fontSize": 11,
@@ -2334,282 +2222,199 @@
                 "thickness": 1,
                 "fill": "#D8E0E8"
               }
-            }
-          ],
-          "cornerRadius": 8,
-          "stroke": {
-            "thickness": 1,
-            "fill": "#D8E0E8"
-          }
-        },
-        {
-          "type": "frame",
-          "id": "f0169",
-          "name": "右侧菜单控制面板",
-          "x": 1106,
-          "y": 96,
-          "width": 300,
-          "height": 444,
-          "fill": "#FFFFFF",
-          "layout": "none",
-          "children": [
+            },
             {
-              "type": "text",
-              "id": "t0152",
-              "name": "控制标题",
-              "x": 20,
-              "y": 18,
-              "width": 150,
-              "textGrowth": "fixed-width",
-              "content": "菜单分级控制",
-              "fill": "#172033",
-              "fontFamily": "Inter",
-              "fontSize": 16,
-              "fontWeight": "800"
+              "type": "frame",
+              "id": "IxaH1",
+              "name": "对话消息区",
+              "x": 18,
+              "y": 158,
+              "width": 270,
+              "height": 184,
+              "fill": "#FFFFFF",
+              "layout": "none",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "N93m3P",
+                  "name": "Agent 初始提示",
+                  "x": 12,
+                  "y": 12,
+                  "width": 210,
+                  "height": 54,
+                  "fill": "#F9FBFE",
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Ni65F",
+                      "name": "Agent 初始提示文本",
+                      "x": 10,
+                      "y": 8,
+                      "width": 188,
+                      "textGrowth": "fixed-width",
+                      "content": "我会继承当前脚本上下文。可以指定第几镜、旁白、画面或节奏调整。",
+                      "fill": "#172033",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ],
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#D8E0E8"
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "nmTES",
+                  "name": "用户修改指令",
+                  "x": 48,
+                  "y": 76,
+                  "width": 210,
+                  "height": 42,
+                  "fill": "#EAF1FF",
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "cXZcH",
+                      "name": "用户修改指令文本",
+                      "x": 10,
+                      "y": 8,
+                      "width": 188,
+                      "textGrowth": "fixed-width",
+                      "content": "把第 2 镜改得更有冲突感，画面要更具体。",
+                      "fill": "#172033",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ],
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#B8CDFD"
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "P8RizM",
+                  "name": "Agent 修改回复",
+                  "x": 12,
+                  "y": 128,
+                  "width": 236,
+                  "height": 44,
+                  "fill": "#E8F6EE",
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "cFCHW",
+                      "name": "Agent 修改回复文本",
+                      "x": 10,
+                      "y": 8,
+                      "width": 214,
+                      "textGrowth": "fixed-width",
+                      "content": "已更新第 2 镜，时间轴已刷新，保留原脚本顺序。",
+                      "fill": "#17633A",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "700"
+                    }
+                  ],
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#9FD3B4"
+                  }
+                }
+              ],
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              }
+            },
+            {
+              "type": "frame",
+              "id": "rMlIL",
+              "name": "对话输入区",
+              "x": 18,
+              "y": 354,
+              "width": 270,
+              "height": 54,
+              "fill": "#F8FAFC",
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "FgH27",
+                  "name": "对话输入占位",
+                  "x": 12,
+                  "y": 10,
+                  "width": 190,
+                  "textGrowth": "fixed-width",
+                  "content": "输入要修改的分镜方向...",
+                  "fill": "#5D6878",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "uF6u7",
+                  "name": "发送按钮",
+                  "x": 210,
+                  "y": 10,
+                  "width": 48,
+                  "height": 32,
+                  "fill": "#2860E8",
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "UjgDp",
+                      "name": "发送按钮文本",
+                      "x": 0,
+                      "y": 8,
+                      "width": 48,
+                      "textGrowth": "fixed-width",
+                      "content": "发送",
+                      "fill": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "800",
+                      "textAlign": "center"
+                    }
+                  ],
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2860E8"
+                  }
+                }
+              ],
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8C2D1"
+              }
             },
             {
               "type": "text",
-              "id": "t0153",
-              "name": "控制说明",
-              "x": 20,
-              "y": 44,
-              "width": 246,
+              "id": "fZq4r",
+              "name": "对话错误与刷新说明",
+              "x": 18,
+              "y": 418,
+              "width": 270,
               "textGrowth": "fixed-width",
-              "content": "展示前端如何消费数据库菜单树，便于后续权限和灰度控制。",
-              "fill": "#5D6878",
+              "content": "失败仅显示在面板内；成功后刷新脚本详情。",
+              "fill": "#C2413A",
               "fontFamily": "Inter",
               "fontSize": 11,
-              "fontWeight": "normal"
-            },
-            {
-              "type": "frame",
-              "id": "f0156",
-              "name": "menu_key字段",
-              "x": 20,
-              "y": 84,
-              "width": 260,
-              "height": 46,
-              "fill": "#F8FAFC",
-              "layout": "none",
-              "children": [
-                {
-                  "type": "text",
-                  "id": "t0154",
-                  "name": "menu_key名",
-                  "x": 14,
-                  "y": 10,
-                  "width": 96,
-                  "textGrowth": "fixed-width",
-                  "content": "menu_key",
-                  "fill": "#5D6878",
-                  "fontFamily": "Inter",
-                  "fontSize": 11,
-                  "fontWeight": "800"
-                },
-                {
-                  "type": "text",
-                  "id": "t0155",
-                  "name": "menu_key值",
-                  "x": 118,
-                  "y": 10,
-                  "width": 128,
-                  "textGrowth": "fixed-width",
-                  "content": "script-creation",
-                  "fill": "#172033",
-                  "fontFamily": "Inter",
-                  "fontSize": 12,
-                  "fontWeight": "800"
-                }
-              ],
-              "cornerRadius": 8,
-              "stroke": {
-                "thickness": 1,
-                "fill": "#D8E0E8"
-              }
-            },
-            {
-              "type": "frame",
-              "id": "f0159",
-              "name": "child字段",
-              "x": 20,
-              "y": 142,
-              "width": 260,
-              "height": 46,
-              "fill": "#F8FAFC",
-              "layout": "none",
-              "children": [
-                {
-                  "type": "text",
-                  "id": "t0157",
-                  "name": "child名",
-                  "x": 14,
-                  "y": 10,
-                  "width": 96,
-                  "textGrowth": "fixed-width",
-                  "content": "child",
-                  "fill": "#5D6878",
-                  "fontFamily": "Inter",
-                  "fontSize": 11,
-                  "fontWeight": "800"
-                },
-                {
-                  "type": "text",
-                  "id": "t0158",
-                  "name": "child值",
-                  "x": 118,
-                  "y": 10,
-                  "width": 128,
-                  "textGrowth": "fixed-width",
-                  "content": "script-generator",
-                  "fill": "#172033",
-                  "fontFamily": "Inter",
-                  "fontSize": 12,
-                  "fontWeight": "800"
-                }
-              ],
-              "cornerRadius": 8,
-              "stroke": {
-                "thickness": 1,
-                "fill": "#D8E0E8"
-              }
-            },
-            {
-              "type": "frame",
-              "id": "f0162",
-              "name": "agent_key字段",
-              "x": 20,
-              "y": 200,
-              "width": 260,
-              "height": 46,
-              "fill": "#F8FAFC",
-              "layout": "none",
-              "children": [
-                {
-                  "type": "text",
-                  "id": "t0160",
-                  "name": "agent_key名",
-                  "x": 14,
-                  "y": 10,
-                  "width": 96,
-                  "textGrowth": "fixed-width",
-                  "content": "agent_key",
-                  "fill": "#5D6878",
-                  "fontFamily": "Inter",
-                  "fontSize": 11,
-                  "fontWeight": "800"
-                },
-                {
-                  "type": "text",
-                  "id": "t0161",
-                  "name": "agent_key值",
-                  "x": 118,
-                  "y": 10,
-                  "width": 128,
-                  "textGrowth": "fixed-width",
-                  "content": "script-generation-agent",
-                  "fill": "#172033",
-                  "fontFamily": "Inter",
-                  "fontSize": 12,
-                  "fontWeight": "800"
-                }
-              ],
-              "cornerRadius": 8,
-              "stroke": {
-                "thickness": 1,
-                "fill": "#D8E0E8"
-              }
-            },
-            {
-              "type": "frame",
-              "id": "f0165",
-              "name": "visible/enabled字段",
-              "x": 20,
-              "y": 258,
-              "width": 260,
-              "height": 46,
-              "fill": "#F8FAFC",
-              "layout": "none",
-              "children": [
-                {
-                  "type": "text",
-                  "id": "t0163",
-                  "name": "visible/enabled名",
-                  "x": 14,
-                  "y": 10,
-                  "width": 96,
-                  "textGrowth": "fixed-width",
-                  "content": "visible/enabled",
-                  "fill": "#5D6878",
-                  "fontFamily": "Inter",
-                  "fontSize": 11,
-                  "fontWeight": "800"
-                },
-                {
-                  "type": "text",
-                  "id": "t0164",
-                  "name": "visible/enabled值",
-                  "x": 118,
-                  "y": 10,
-                  "width": 128,
-                  "textGrowth": "fixed-width",
-                  "content": "true / true",
-                  "fill": "#172033",
-                  "fontFamily": "Inter",
-                  "fontSize": 12,
-                  "fontWeight": "800"
-                }
-              ],
-              "cornerRadius": 8,
-              "stroke": {
-                "thickness": 1,
-                "fill": "#D8E0E8"
-              }
-            },
-            {
-              "type": "frame",
-              "id": "f0168",
-              "name": "控制边界",
-              "x": 20,
-              "y": 326,
-              "width": 260,
-              "height": 96,
-              "fill": "#F9FBFE",
-              "layout": "none",
-              "children": [
-                {
-                  "type": "text",
-                  "id": "t0166",
-                  "name": "控制边界标题",
-                  "x": 14,
-                  "y": 12,
-                  "width": 90,
-                  "textGrowth": "fixed-width",
-                  "content": "产品边界",
-                  "fill": "#172033",
-                  "fontFamily": "Inter",
-                  "fontSize": 12,
-                  "fontWeight": "800"
-                },
-                {
-                  "type": "text",
-                  "id": "t0167",
-                  "name": "控制边界正文",
-                  "x": 14,
-                  "y": 36,
-                  "width": 228,
-                  "textGrowth": "fixed-width",
-                  "content": "平台配置、模型 Key、MCP 和系统日志仍归 admin，不进入视频生产工作台菜单。",
-                  "fill": "#5D6878",
-                  "fontFamily": "Inter",
-                  "fontSize": 11,
-                  "fontWeight": "normal"
-                }
-              ],
-              "cornerRadius": 8,
-              "stroke": {
-                "thickness": 1,
-                "fill": "#D8E0E8"
-              }
+              "fontWeight": "700"
             }
           ],
           "cornerRadius": 8,

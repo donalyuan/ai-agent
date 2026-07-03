@@ -350,6 +350,12 @@ impl From<ScriptRepositoryError> for ScriptAgentError {
     fn from(error: ScriptRepositoryError) -> Self {
         match error {
             ScriptRepositoryError::NotFound(script_id) => Self::ScriptNotFound(script_id),
+            ScriptRepositoryError::SceneNotFound {
+                script_id,
+                sequence,
+            } => Self::DatabaseError(format!(
+                "scene not found: script_id={script_id}, sequence={sequence}"
+            )),
             ScriptRepositoryError::Storage(message) => Self::DatabaseError(message),
         }
     }

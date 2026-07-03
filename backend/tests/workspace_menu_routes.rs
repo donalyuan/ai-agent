@@ -108,10 +108,12 @@ async fn response_json(response: axum::response::Response) -> Value {
 async fn workspace_menu_route_returns_visible_sorted_tree() {
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
 
-    sqlx::query("UPDATE video_workspace_menus SET is_visible = false WHERE menu_key = 'material-search'")
-        .execute(&test_pool)
-        .await
-        .expect("hidden menu fixture should update");
+    sqlx::query(
+        "UPDATE video_workspace_menus SET is_visible = false WHERE menu_key = 'material-search'",
+    )
+    .execute(&test_pool)
+    .await
+    .expect("hidden menu fixture should update");
 
     let app = build_app_with_state(app_state(test_url, test_pool.clone()));
     let response = app
