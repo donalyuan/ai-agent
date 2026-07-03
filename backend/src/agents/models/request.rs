@@ -109,8 +109,15 @@ impl CreateAgentConversationRequest {
         if self.agent_type.trim() != "script" {
             return Err("暂不支持该 Agent 类型".to_string());
         }
-        if self.subject_type.as_deref() != Some("script") || self.subject_id.is_none() {
-            return Err("脚本会话必须绑定 script subject".to_string());
+        if self.project_id.is_none() {
+            return Err("脚本会话必须绑定项目".to_string());
+        }
+        let subject_type = self.subject_type.as_deref().map(str::trim);
+        if self.subject_id.is_some() && subject_type != Some("script") {
+            return Err("脚本会话 subject_type 必须为 script".to_string());
+        }
+        if self.subject_id.is_none() && subject_type.is_some_and(|value| !value.is_empty()) {
+            return Err("未绑定脚本会话不能传 subject_type".to_string());
         }
         self.validate()
             .map_err(|error| format!("会话参数无效: {error}"))

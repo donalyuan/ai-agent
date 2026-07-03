@@ -1,7 +1,7 @@
 use crate::agents::conversation::{
     AgentConversation, AgentConversationStatus, AgentMessage, AgentMessageRole, AgentRunRecord,
-    CreateAgentConversationInput, CreateAgentMessageInput, CreateAgentRunInput,
-    CreateAgentStepInput, FinishAgentRunInput,
+    BindAgentConversationSubjectInput, CreateAgentConversationInput, CreateAgentMessageInput,
+    CreateAgentRunInput, CreateAgentStepInput, FinishAgentRunInput,
 };
 use async_trait::async_trait;
 use sqlx::{postgres::PgRow, PgPool, Row};
@@ -55,6 +55,11 @@ pub trait ConversationRepository: Send + Sync {
         &self,
         input: FinishAgentRunInput,
     ) -> Result<AgentRunRecord, ConversationRepositoryError>;
+
+    async fn bind_conversation_subject(
+        &self,
+        input: BindAgentConversationSubjectInput,
+    ) -> Result<AgentConversation, ConversationRepositoryError>;
 }
 
 #[async_trait]
@@ -226,6 +231,34 @@ impl ConversationRepository for PostgresConversationRepository {
         .ok_or(ConversationRepositoryError::RunNotFound(input.agent_run_id))?;
 
         Ok(run_from_row(row))
+    }
+
+    async fn bind_conversation_subject(
+        &self,
+        input: BindAgentConversationSubjectInput,
+    ) -> Result<AgentConversation, ConversationRepositoryError> {
+        let row = sqlx::query(
+            r#"
+            UPDATE agent_conversations
+            SET subject_type = $2,
+                subject_id = $3,
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, project_id, agent_type, subject_type, subject_id, title,
+                      status, metadata, created_at, updated_at
+            "#,
+        )
+        .bind(input.conversation_id)
+        .bind(input.subject_type)
+        .bind(input.subject_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(ConversationRepositoryError::from)?
+        .ok_or(ConversationRepositoryError::ConversationNotFound(
+            input.conversation_id,
+        ))?;
+
+        conversation_from_row(row)
     }
 }
 

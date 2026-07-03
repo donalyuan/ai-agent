@@ -272,8 +272,7 @@ textarea:disabled {
 
 .actionColumn {
   display: grid;
-  align-content: start;
-  gap: 16px;
+  align-content: stretch;
 }
 
 .sidePanel {
@@ -282,7 +281,10 @@ textarea:disabled {
 
 .agentChatPanel {
   display: grid;
+  grid-template-rows: auto auto auto auto;
   gap: 12px;
+  min-height: calc(100vh - 120px);
+  align-content: start;
 }
 
 .panelHeader,
@@ -302,6 +304,12 @@ textarea:disabled {
   color: var(--color-text-muted);
   font-size: 13px;
   white-space: nowrap;
+}
+
+.scriptHeaderActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .statusFilter,
@@ -596,43 +604,6 @@ textarea:disabled {
   line-height: 1.6;
 }
 
-.projectSummary {
-  margin: 12px 0 16px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  background: var(--color-surface-muted);
-}
-
-.projectSummary strong {
-  color: var(--color-text);
-  font-size: 15px;
-}
-
-.projectSummary span,
-.projectSummary p {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: 13px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-.stackForm {
-  display: grid;
-  gap: 12px;
-}
-
-.stackForm label {
-  display: grid;
-  gap: 6px;
-  color: var(--color-text-muted);
-  font-size: 13px;
-  font-weight: 800;
-}
-
 input,
 select,
 textarea {
@@ -678,6 +649,23 @@ button:focus-visible {
   background: var(--color-primary-hover);
 }
 
+.secondaryButton {
+  min-height: 32px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  padding: 0 11px;
+  background: var(--color-surface);
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.secondaryButton:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
 .errorText {
   margin: 0;
   border: 1px solid var(--color-danger-border);
@@ -721,8 +709,9 @@ button:focus-visible {
 }
 
 .agentMessages {
-  min-height: 170px;
-  max-height: 300px;
+  min-width: 0;
+  min-height: 240px;
+  max-height: min(300px, calc(100vh - 360px));
   border: 1px solid var(--color-border);
   border-radius: 8px;
   display: grid;
@@ -768,7 +757,7 @@ button:focus-visible {
 }
 
 .agentEmptyState {
-  min-height: 144px;
+  min-height: 120px;
   display: grid;
   align-content: center;
   justify-items: center;

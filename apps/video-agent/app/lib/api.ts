@@ -98,14 +98,15 @@ export type UpdateScriptStatusResponse = {
 
 export type AgentType = "script" | "topic" | "material" | "video" | "publish" | "optimization";
 export type AgentMessageRole = "user" | "assistant" | "system";
-export type AgentRunStatus = "running" | "completed" | "failed";
+export type AgentRunStatus = "running" | "succeeded" | "completed" | "failed";
+export type ScriptAgentIntent = "generate_script" | "edit_script";
 
 export type AgentConversation = {
   conversation_id: string;
-  project_id: string;
+  project_id: string | null;
   agent_type: AgentType;
-  subject_type: string;
-  subject_id: string;
+  subject_type: string | null;
+  subject_id: string | null;
   title: string;
   status: "active" | "archived";
   metadata: Record<string, unknown>;
@@ -122,24 +123,34 @@ export type AgentMessage = {
   created_at: string;
 };
 
+export type ScriptAgentTurnMetadata = {
+  intent: ScriptAgentIntent;
+  script_id: string | null;
+  script_created: boolean;
+  needs_input: boolean;
+  missing_fields: string[];
+};
+
 export type AgentRun = {
   run_id: string;
-  conversation_id: string;
-  project_id: string;
+  conversation_id?: string;
+  project_id: string | null;
   agent_type: AgentType;
   status: AgentRunStatus;
   input: Record<string, unknown>;
   output: Record<string, unknown> | null;
-  error: string | null;
+  error?: string | null;
+  error_message?: string | null;
   started_at: string;
-  finished_at: string | null;
+  ended_at?: string | null;
+  finished_at?: string | null;
 };
 
 export type CreateAgentConversationPayload = {
   project_id: string;
   agent_type: AgentType;
-  subject_type: string;
-  subject_id: string;
+  subject_type?: string | null;
+  subject_id?: string | null;
   title?: string;
 };
 
@@ -279,6 +290,23 @@ export function sendAgentMessage(
       body: payload,
     },
   );
+}
+
+export function getScriptAgentTurnMetadata(message: AgentMessage): ScriptAgentTurnMetadata {
+  const metadata = message.metadata;
+  return {
+    intent: getScriptAgentIntent(metadata.intent),
+    script_id: typeof metadata.script_id === "string" ? metadata.script_id : null,
+    script_created: metadata.script_created === true,
+    needs_input: metadata.needs_input === true,
+    missing_fields: Array.isArray(metadata.missing_fields)
+      ? metadata.missing_fields.filter((field): field is string => typeof field === "string")
+      : [],
+  };
+}
+
+function getScriptAgentIntent(value: unknown): ScriptAgentIntent {
+  return value === "edit_script" ? "edit_script" : "generate_script";
 }
 
 async function request<T>(

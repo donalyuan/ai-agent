@@ -5,32 +5,17 @@
 ## Requirements
 ### Requirement: 前端实现前必须完成设计上下文与 Pencil 原型
 
-系统 SHALL 在实现或迁移脚本 Agent 工作台前完成设计上下文、真实设计系统参考和 `Pencil MCP` 原型确认，避免直接凭主观描述进入编码。正式视频生产工作台的实现边界 SHALL 为 `apps/video-agent/`，并且工作台一级导航 SHALL 使用视频生产业务流程菜单，而不是只按 Agent 预留入口组织。
+系统 SHALL 在实现或迁移脚本 Agent 工作台前完成设计上下文、真实设计系统参考和 `Pencil MCP` 原型确认，避免直接凭主观描述进入编码。正式视频生产工作台的实现边界 SHALL 为 `apps/video-agent/`，并且工作台一级导航 SHALL 使用视频生产业务流程菜单，而不是只按 Agent 预留入口组织。涉及脚本生成和脚本修改入口变更时，原型 SHALL 展示二者共用单一脚本 Agent 对话入口。
 
-#### Scenario: 生成工作台实现计划前完成设计上下文
+#### Scenario: 原型覆盖对话式脚本生成
 
-- **GIVEN** 仓库尚无项目根 `DESIGN.md`，或视频工作台导航结构发生变化
-- **WHEN** 开发者准备实现或迁移脚本 Agent 工作台
-- **THEN** 系统 SHALL 先创建或更新项目根 `DESIGN.md`
-- **AND** `DESIGN.md` SHALL 定义 `VEDIO-AGENT` 工作台的颜色、字体、间距、按钮、表单、列表、状态标签和响应式规则
-- **AND** `DESIGN.md` SHALL 明确工作台展示名为“视频工作台”
-- **AND** `DESIGN.md` SHALL 明确一级导航为内容策略、脚本创作、素材管理、作品生产、发布运营、数据分析、工作流任务
-- **AND** `DESIGN.md` SHALL 明确底层 Agent 状态只能作为二级菜单、模块状态或执行状态展示，不得替代一级业务菜单
-- **AND** `DESIGN.md` SHALL 明确正式实现归属 `apps/video-agent/`
-- **AND** 设计记录 SHALL 明确参考 `Ant Design`、`IBM Carbon` 和 `GitHub Primer` 的哪些模式
-
-#### Scenario: Pencil 原型确认后才能编码
-
-- **GIVEN** 脚本 Agent 工作台涉及新增、迁移或修改前端页面
-- **WHEN** 开发者准备修改 `apps/video-agent/` 中的工作台代码
-- **THEN** 系统 SHALL 先通过 `Pencil MCP` 输出桌面工作台原型，或复用已由用户确认且未改变交互范围的桌面原型
-- **AND** 视频工作台 Pencil 原型源文件 SHALL 保存为 `docs/prototypes/video-agent/video-agent.pen`
-- **AND** 后续视频工作台原型修改 SHALL 更新 `docs/prototypes/video-agent/video-agent.pen`，而不是使用 `docs/prototypes/script-agent-workspace/` 截图目录
-- **AND** 原型 SHALL 展示 `VEDIO-AGENT` / “视频工作台”标题
-- **AND** 原型 SHALL 展示内容策略、脚本创作、素材管理、作品生产、发布运营、数据分析、工作流任务七个一级业务菜单
-- **AND** 原型 SHALL 覆盖无项目、无脚本、生成中、生成失败和状态更新失败状态
-- **AND** 用户确认原型后 SHALL 进入编码
-- **AND** 若当前环境没有 `Pencil MCP`，系统 SHALL 暂停实现并等待用户明确批准替代方案
+- **GIVEN** 开发者准备实现对话式脚本生成前端
+- **WHEN** 更新 `docs/prototypes/video-agent/video-agent.pen`
+- **THEN** 原型 SHALL 展示无脚本时的对话式脚本生成状态
+- **AND** 原型 SHALL 展示已有脚本时的对话式修改状态
+- **AND** 原型 SHALL 展示生成参数不足时的 Agent 追问状态
+- **AND** 原型 SHALL 展示生成成功后打开时间轴详情的状态
+- **AND** 用户确认原型后 SHALL 进入前端编码
 
 ### Requirement: 工作台必须支持项目选择
 
@@ -107,4 +92,52 @@
 - **THEN** 页面 SHALL 在生成面板显示错误信息
 - **AND** 页面 SHALL 保留操作者已输入的 topic、style 和 scene_count
 - **AND** 页面 SHALL 允许操作者修改后重试
+
+### Requirement: 脚本工作台必须使用单一脚本 Agent 对话入口
+
+系统 SHALL 在 `apps/video-agent` 脚本创作工作台中使用单一脚本 Agent 对话入口承载脚本生成和脚本修改，不得在右侧同时保留独立“生成脚本”大表单和脚本 Agent 对话输入框。
+
+#### Scenario: 无脚本时通过对话生成脚本
+
+- **GIVEN** 操作者已选择一个项目
+- **AND** 当前项目没有选中的脚本
+- **WHEN** 操作者在脚本 Agent 对话面板输入“生成一个关于 ChatGPT 工作流的 6 镜知识科普脚本”并发送
+- **THEN** 页面 SHALL 创建或复用未绑定脚本的 `script` Agent 会话
+- **AND** 页面 SHALL 调用对话消息接口发送用户消息
+- **AND** 成功后页面 SHALL 刷新脚本列表
+- **AND** 页面 SHALL 自动打开新生成脚本详情
+- **AND** 页面 SHALL 展示新脚本的时间轴对照视图
+
+#### Scenario: 有脚本时通过同一对话修改脚本
+
+- **GIVEN** 操作者已打开一个脚本详情
+- **WHEN** 操作者在同一个脚本 Agent 对话面板输入“把第 2 镜改得更有冲突感”并发送
+- **THEN** 页面 SHALL 复用当前脚本绑定的 `script` Agent 会话
+- **AND** 页面 SHALL 调用对话消息接口发送用户消息
+- **AND** 成功后页面 SHALL 刷新当前脚本详情
+- **AND** 页面 SHALL NOT 创建独立生成表单流程
+
+#### Scenario: 页面不得并列展示两个生成/对话输入区
+
+- **GIVEN** 操作者打开 `apps/video-agent` 脚本创作工作台
+- **WHEN** 页面完成加载
+- **THEN** 右侧操作区 SHALL 只展示一个主要自然语言输入入口
+- **AND** 页面 SHALL NOT 同时展示“生成脚本”的 `topic` textarea 和“脚本 Agent 对话”的修改 textarea
+- **AND** 若需要 `style` 或 `scene_count`，页面 MAY 在对话面板内提供紧凑快捷控件或让 Agent 追问
+- **AND** 页面 SHALL NOT 恢复为独立大表单生成入口
+
+#### Scenario: 生成参数不足时在对话面板内追问
+
+- **GIVEN** 操作者已选择一个项目
+- **WHEN** 操作者只输入“帮我生成一个脚本”
+- **THEN** 页面 SHALL 展示 Agent 的追问回复
+- **AND** 页面 SHALL NOT 新增脚本列表项
+- **AND** 页面 SHALL 保持对话输入可继续补充信息
+
+#### Scenario: 对话生成失败只影响对话面板
+
+- **GIVEN** 操作者已选择一个项目
+- **WHEN** 对话式生成脚本失败
+- **THEN** 页面 SHALL 在脚本 Agent 对话面板内展示错误
+- **AND** 页面 SHALL 保留脚本列表和已打开脚本详情的浏览能力
 

@@ -8,14 +8,13 @@ import {
   Project,
   ScriptDetail,
   ScriptStatus,
-  ScriptStyle,
   ScriptSummary,
   WorkspaceMenuNode,
   checkHealth,
   createAgentConversation,
   createApiClient,
-  generateScript,
   getScript,
+  getScriptAgentTurnMetadata,
   listProjects,
   listScripts,
   listWorkspaceMenus,
@@ -30,14 +29,6 @@ const statusOptions: Array<{ value: "all" | ScriptStatus; label: string }> = [
   { value: "archived", label: "已归档" },
 ];
 
-const styleOptions: Array<{ value: ScriptStyle; label: string }> = [
-  { value: "knowledge", label: "知识科普" },
-  { value: "story", label: "故事叙述" },
-  { value: "tutorial", label: "教程讲解" },
-];
-
-const sceneCountOptions = Array.from({ length: 10 }, (_, index) => index + 3);
-
 const statusLabels: Record<ScriptStatus, string> = {
   draft: "草稿",
   approved: "已通过",
@@ -48,18 +39,6 @@ const statusClassNames: Record<ScriptStatus, string> = {
   draft: "statusDraft",
   approved: "statusApproved",
   archived: "statusArchived",
-};
-
-type GenerateForm = {
-  topic: string;
-  style: ScriptStyle;
-  sceneCount: number;
-};
-
-const defaultGenerateForm: GenerateForm = {
-  topic: "",
-  style: "knowledge",
-  sceneCount: 6,
 };
 
 const defaultMenuKey = "script-creation";
@@ -75,17 +54,14 @@ export default function Home() {
   const [workspaceMenus, setWorkspaceMenus] = useState<WorkspaceMenuNode[]>([]);
   const [selectedMenuKey, setSelectedMenuKey] = useState(defaultMenuKey);
   const [statusFilter, setStatusFilter] = useState<"all" | ScriptStatus>("all");
-  const [generateForm, setGenerateForm] = useState<GenerateForm>(defaultGenerateForm);
   const [loadingMenus, setLoadingMenus] = useState(true);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingScripts, setLoadingScripts] = useState(false);
   const [loadingScriptDetail, setLoadingScriptDetail] = useState(false);
-  const [generatingScript, setGeneratingScript] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [projectError, setProjectError] = useState("");
   const [menuError, setMenuError] = useState("");
   const [scriptError, setScriptError] = useState("");
-  const [generateError, setGenerateError] = useState("");
   const [statusError, setStatusError] = useState("");
   const [agentConversationId, setAgentConversationId] = useState<string | null>(null);
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
@@ -93,6 +69,8 @@ export default function Home() {
   const [agentError, setAgentError] = useState("");
   const [sendingAgentMessage, setSendingAgentMessage] = useState(false);
   const selectedScriptIdRef = useRef<string | null>(null);
+  const selectedProjectIdRef = useRef("");
+  const preserveAgentConversationRef = useRef<string | null>(null);
 
   const selectedProject = projects.find((project) => project.project_id === selectedProjectId);
   const writesDisabled = apiAvailable === false;
@@ -231,47 +209,27 @@ export default function Home() {
   }, [client, selectedProjectId, statusFilter]);
 
   useEffect(() => {
+    selectedProjectIdRef.current = selectedProjectId;
+    setAgentConversationId(null);
+    setAgentMessages([]);
+    setAgentDraft("");
+    setAgentError("");
+    setSendingAgentMessage(false);
+  }, [selectedProjectId]);
+
+  useEffect(() => {
     selectedScriptIdRef.current = selectedScriptId;
+    if (preserveAgentConversationRef.current) {
+      setAgentConversationId(preserveAgentConversationRef.current);
+      preserveAgentConversationRef.current = null;
+      return;
+    }
     setAgentConversationId(null);
     setAgentMessages([]);
     setAgentDraft("");
     setAgentError("");
     setSendingAgentMessage(false);
   }, [selectedScriptId]);
-
-  async function handleGenerateScript(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setGenerateError("");
-
-    if (!selectedProjectId) {
-      setGenerateError("请先选择项目");
-      return;
-    }
-
-    if (generateForm.topic.trim().length < 10) {
-      setGenerateError("选题至少需要 10 个字符");
-      return;
-    }
-
-    setGeneratingScript(true);
-    try {
-      const script = await generateScript(client, {
-        project_id: selectedProjectId,
-        topic: generateForm.topic.trim(),
-        style: generateForm.style,
-        scene_count: generateForm.sceneCount,
-      });
-      selectedScriptIdRef.current = script.script_id;
-      setSelectedScriptId(script.script_id);
-      setSelectedScript(script);
-      setScripts((currentScripts) => upsertSummary(currentScripts, script));
-      setStatusFilter("all");
-    } catch (error) {
-      setGenerateError(errorToMessage(error));
-    } finally {
-      setGeneratingScript(false);
-    }
-  }
 
   async function handleOpenScript(scriptId: string) {
     selectedScriptIdRef.current = scriptId;
@@ -286,6 +244,20 @@ export default function Home() {
       setScriptError,
       () => selectedScriptIdRef.current === scriptId,
     );
+  }
+
+  function handleNewScript() {
+    selectedScriptIdRef.current = null;
+    preserveAgentConversationRef.current = null;
+    setSelectedScriptId(null);
+    setSelectedScript(null);
+    setLoadingScriptDetail(false);
+    setStatusError("");
+    setAgentConversationId(null);
+    setAgentMessages([]);
+    setAgentDraft("");
+    setAgentError("");
+    setSendingAgentMessage(false);
   }
 
   async function handleUpdateStatus(status: ScriptStatus) {
@@ -319,31 +291,43 @@ export default function Home() {
     event.preventDefault();
     const content = agentDraft.trim();
 
-    if (!selectedProjectId || !selectedScript) {
-      setAgentError("请先选择脚本");
+    if (!selectedProjectId) {
+      setAgentError("请先选择项目");
       return;
     }
 
     if (!content) {
-      setAgentError("请输入要修改的分镜方向");
+      setAgentError("请输入脚本需求或修改方向");
       return;
     }
 
     setAgentError("");
     setSendingAgentMessage(true);
-    const scriptIdAtSend = selectedScript.script_id;
+    const projectIdAtSend = selectedProjectId;
+    const scriptIdAtSend = selectedScript?.script_id ?? null;
+    const stillCurrentContext = () =>
+      selectedProjectIdRef.current === projectIdAtSend && selectedScriptIdRef.current === scriptIdAtSend;
 
     try {
       let conversationId = agentConversationId;
       if (!conversationId) {
+        const payload = selectedScript
+          ? {
+              project_id: selectedProjectId,
+              agent_type: "script" as const,
+              subject_type: "script",
+              subject_id: selectedScript.script_id,
+              title: "脚本 Agent 对话",
+            }
+          : {
+              project_id: selectedProjectId,
+              agent_type: "script" as const,
+              title: "脚本 Agent 对话",
+            };
         const conversation = await createAgentConversation(client, {
-          project_id: selectedProjectId,
-          agent_type: "script",
-          subject_type: "script",
-          subject_id: selectedScript.script_id,
-          title: "脚本 Agent 对话",
+          ...payload,
         });
-        if (selectedScriptIdRef.current !== scriptIdAtSend) {
+        if (!stillCurrentContext()) {
           return;
         }
         conversationId = conversation.conversation_id;
@@ -351,7 +335,7 @@ export default function Home() {
       }
 
       const response = await sendAgentMessage(client, conversationId, { content });
-      if (selectedScriptIdRef.current !== scriptIdAtSend) {
+      if (!stillCurrentContext()) {
         return;
       }
       setAgentMessages((currentMessages) => [
@@ -361,18 +345,36 @@ export default function Home() {
       ]);
       setAgentDraft("");
 
-      const refreshedScript = await getScript(client, scriptIdAtSend);
-      if (selectedScriptIdRef.current !== scriptIdAtSend) {
+      if (selectedScript) {
+        const refreshedScript = await getScript(client, selectedScript.script_id);
+        if (!stillCurrentContext()) {
+          return;
+        }
+        setSelectedScript(refreshedScript);
+        setScripts((currentScripts) => upsertSummary(currentScripts, refreshedScript));
         return;
       }
-      setSelectedScript(refreshedScript);
-      setScripts((currentScripts) => upsertSummary(currentScripts, refreshedScript));
+
+      const metadata = getScriptAgentTurnMetadata(response.assistant_message);
+      if (!metadata.script_created || !metadata.script_id) {
+        return;
+      }
+      const createdScript = await getScript(client, metadata.script_id);
+      if (!stillCurrentContext()) {
+        return;
+      }
+      preserveAgentConversationRef.current = conversationId;
+      selectedScriptIdRef.current = createdScript.script_id;
+      setSelectedScriptId(createdScript.script_id);
+      setSelectedScript(createdScript);
+      setScripts((currentScripts) => upsertSummary(currentScripts, createdScript));
+      setStatusFilter("all");
     } catch (error) {
-      if (selectedScriptIdRef.current === scriptIdAtSend) {
+      if (stillCurrentContext()) {
         setAgentError(errorToMessage(error));
       }
     } finally {
-      if (selectedScriptIdRef.current === scriptIdAtSend) {
+      if (stillCurrentContext()) {
         setSendingAgentMessage(false);
       }
     }
@@ -441,7 +443,17 @@ export default function Home() {
                 <p className="sectionKicker">脚本创作</p>
                 <h2>脚本列表</h2>
               </div>
-              <span>{scripts.length} 条</span>
+              <div className="scriptHeaderActions">
+                <button
+                  className="secondaryButton"
+                  disabled={!selectedProjectId || writesDisabled}
+                  onClick={handleNewScript}
+                  type="button"
+                >
+                  新建脚本
+                </button>
+                <span>{scripts.length} 条</span>
+              </div>
             </div>
 
             <div className="statusFilter" aria-label="脚本状态筛选">
@@ -462,7 +474,7 @@ export default function Home() {
             {!loadingProjects && selectedProjectId && !scripts.length ? (
               <div className="emptyState">
                 <strong>还没有脚本</strong>
-                <span>在右侧输入选题后生成第一版结构化脚本。</span>
+                <span>在右侧脚本 Agent 对话中描述需求后生成第一版结构化脚本。</span>
               </div>
             ) : null}
             {!selectedProjectId && !loadingProjects ? (
@@ -501,17 +513,8 @@ export default function Home() {
             />
           </section>
 
-          <aside className="actionColumn" aria-label="生成操作">
+          <aside className="actionColumn" aria-label="脚本 Agent 操作">
             {projectError ? <p className="errorText" role="alert">{projectError}</p> : null}
-            <GeneratePanel
-              disabled={writesDisabled || !selectedProjectId}
-              error={generateError}
-              form={generateForm}
-              generating={generatingScript}
-              selectedProject={selectedProject}
-              setForm={setGenerateForm}
-              onSubmit={handleGenerateScript}
-            />
             <ScriptAgentConversationPanel
               apiUnavailable={writesDisabled}
               draft={agentDraft}
@@ -551,14 +554,23 @@ function ScriptAgentConversationPanel({
   setDraft: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  const inputDisabled = apiUnavailable || !selectedScript || sending;
-  const ready = Boolean(selectedScript) && !apiUnavailable;
-  const panelLabel = ready ? "脚本 Agent 对话" : "脚本 Agent 对话（未绑定）";
-  const stateLabel = apiUnavailable ? "不可用" : selectedScript ? "可对话" : "未选择";
-  const bindingText = selectedProject && selectedScript ? `绑定：${selectedProject.name} / 当前脚本` : "请选择脚本后对话";
+  const inputDisabled = apiUnavailable || !selectedProject || sending;
+  const ready = Boolean(selectedProject) && !apiUnavailable;
+  const stateLabel = apiUnavailable ? "不可用" : selectedScript ? "可对话" : selectedProject ? "可生成" : "未选择";
+  const bindingText = selectedProject
+    ? selectedScript
+      ? `当前项目：${selectedProject.name} / 脚本：${selectedScript.title}`
+      : `当前项目：${selectedProject.name} / 新脚本生成`
+    : "请选择项目后开始对话";
+  const placeholder = selectedScript ? "描述要修改的分镜方向..." : "描述你想生成的脚本...";
+  const label = selectedScript ? "修改方向" : "脚本需求";
+  const emptyTitle = selectedScript ? "可直接指定分镜修改方向" : "可直接描述新脚本需求";
+  const emptyHint = selectedScript
+    ? "例如：把第 2 镜改得更有冲突感，画面更具体。"
+    : "例如：生成一个关于 ChatGPT 工作流的 6 镜知识科普脚本。";
 
   return (
-    <section aria-label={panelLabel} className="sidePanel agentChatPanel">
+    <section aria-label="脚本 Agent 对话" className="sidePanel agentChatPanel">
       <div className="panelHeader">
         <div>
           <p className="sectionKicker">Agent</p>
@@ -580,19 +592,19 @@ function ScriptAgentConversationPanel({
           ))
         ) : (
           <div className="agentEmptyState">
-            <strong>可直接指定分镜修改方向</strong>
-            <span>例如：把第 2 镜改得更有冲突感，画面更具体。</span>
+            <strong>{emptyTitle}</strong>
+            <span>{emptyHint}</span>
           </div>
         )}
       </div>
 
       <form className="agentChatForm" onSubmit={onSubmit}>
         <label>
-          修改方向
+          {label}
           <textarea
             disabled={inputDisabled}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="输入要修改的分镜方向..."
+            placeholder={placeholder}
             rows={3}
             value={draft}
           />
@@ -640,84 +652,6 @@ function menuStatusLabel(menu: WorkspaceMenuNode) {
   return phase;
 }
 
-function GeneratePanel({
-  disabled,
-  error,
-  form,
-  generating,
-  selectedProject,
-  setForm,
-  onSubmit,
-}: {
-  disabled: boolean;
-  error: string;
-  form: GenerateForm;
-  generating: boolean;
-  selectedProject?: Project;
-  setForm: (form: GenerateForm) => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-}) {
-  return (
-    <section className="sidePanel">
-      <div className="panelHeader">
-        <div>
-          <p className="sectionKicker">生成</p>
-          <h2>生成脚本</h2>
-        </div>
-      </div>
-
-      <p className="helperText">
-        {selectedProject ? `当前绑定：${selectedProject.name}` : "请先从顶部选择项目后再生成脚本。"}
-      </p>
-      {error ? <p className="errorText" role="alert">{error}</p> : null}
-
-      <form className="stackForm" onSubmit={onSubmit}>
-        <label>
-          选题
-          <textarea
-            disabled={disabled || generating}
-            onChange={(event) => setForm({ ...form, topic: event.target.value })}
-            placeholder="例如：ChatGPT 如何改变程序员工作流"
-            rows={5}
-            value={form.topic}
-          />
-        </label>
-        <label>
-          脚本风格
-          <select
-            disabled={disabled || generating}
-            onChange={(event) => setForm({ ...form, style: event.target.value as ScriptStyle })}
-            value={form.style}
-          >
-            {styleOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          分镜数
-          <select
-            disabled={disabled || generating}
-            onChange={(event) => setForm({ ...form, sceneCount: Number(event.target.value) })}
-            value={form.sceneCount}
-          >
-            {sceneCountOptions.map((count) => (
-              <option key={count} value={count}>
-                {count} 镜
-              </option>
-            ))}
-          </select>
-        </label>
-        <button className="primaryButton" disabled={disabled || generating} type="submit">
-          {generating ? "生成中" : "生成脚本"}
-        </button>
-      </form>
-    </section>
-  );
-}
-
 function ScriptDetailView({
   loading,
   script,
@@ -742,7 +676,7 @@ function ScriptDetailView({
       <div className="detailEmpty">
         <p className="sectionKicker">时间轴对照视图</p>
         <h2>选择脚本后查看分镜</h2>
-        <span>生成脚本或从左侧列表选择脚本后，这里会展示旁白与画面指令。</span>
+        <span>通过脚本 Agent 生成脚本或从左侧列表选择脚本后，这里会展示旁白与画面指令。</span>
       </div>
     );
   }

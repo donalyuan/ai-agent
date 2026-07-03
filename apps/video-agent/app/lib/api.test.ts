@@ -5,6 +5,7 @@ import {
   generateScript,
   getApiBaseUrl,
   getScript,
+  getScriptAgentTurnMetadata,
   listAgentMessages,
   listProjects,
   listScripts,
@@ -78,6 +79,30 @@ const assistantMessage = {
   content: "已更新第 2 镜，时间轴已刷新。",
   metadata: { scene_sequence: 2 },
   created_at: "2026-07-02T00:07:05Z",
+};
+
+const generatedScriptAssistantMessage = {
+  ...assistantMessage,
+  content: "已创建 6 镜脚本，列表已刷新。",
+  metadata: {
+    intent: "generate_script",
+    script_id: scriptSummary.script_id,
+    script_created: true,
+    needs_input: false,
+    missing_fields: [],
+  },
+};
+
+const missingInputAssistantMessage = {
+  ...assistantMessage,
+  content: "请补充选题、风格和分镜数。",
+  metadata: {
+    intent: "generate_script",
+    script_id: null,
+    script_created: false,
+    needs_input: true,
+    missing_fields: ["topic", "style", "scene_count"],
+  },
 };
 
 const agentRun = {
@@ -360,6 +385,52 @@ describe("video-agent api client", () => {
     );
     expect(result.assistant_message.content).toContain("已更新第 2 镜");
     expect(result.run.status).toBe("completed");
+  });
+
+  it("读取对话生成脚本返回的稳定 metadata", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        user_message: userMessage,
+        assistant_message: generatedScriptAssistantMessage,
+        run: agentRun,
+      }),
+    );
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await sendAgentMessage(client, conversation.conversation_id, {
+      content: "生成一个关于 ChatGPT 工作流的 6 镜知识科普脚本",
+    });
+
+    expect(getScriptAgentTurnMetadata(result.assistant_message)).toEqual({
+      intent: "generate_script",
+      script_id: scriptSummary.script_id,
+      script_created: true,
+      needs_input: false,
+      missing_fields: [],
+    });
+  });
+
+  it("读取参数不足追问返回的稳定 metadata", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        user_message: userMessage,
+        assistant_message: missingInputAssistantMessage,
+        run: agentRun,
+      }),
+    );
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await sendAgentMessage(client, conversation.conversation_id, {
+      content: "帮我生成脚本",
+    });
+
+    expect(getScriptAgentTurnMetadata(result.assistant_message)).toEqual({
+      intent: "generate_script",
+      script_id: null,
+      script_created: false,
+      needs_input: true,
+      missing_fields: ["topic", "style", "scene_count"],
+    });
   });
 
   it("对话 API 失败时沿用 ApiError", async () => {

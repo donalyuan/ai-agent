@@ -154,6 +154,63 @@ const assistantMessage: AgentMessage = {
   created_at: "2026-07-02T00:07:05Z",
 };
 
+const generatedScriptSummary = {
+  script_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+  title: "ChatGPT 工作流新脚本",
+  status: "draft" as const,
+  scene_count: 3,
+  parent_id: null,
+  created_at: "2026-07-02T00:12:00Z",
+};
+
+const generatedScriptDetail: ScriptDetail = {
+  ...generatedScriptSummary,
+  project_id: project.project_id,
+  hook: "三个镜头看懂 AI 工作流。",
+  scenes: [
+    {
+      scene_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      sequence: 1,
+      narration: "AI 工作流从清晰描述任务开始。",
+      visual_description: "屏幕展示用户输入脚本需求。",
+      emotion: "清晰",
+      duration_sec: 8,
+    },
+  ],
+  updated_at: "2026-07-02T00:12:00Z",
+};
+
+const generatedAssistantMessage: AgentMessage = {
+  ...assistantMessage,
+  content: "已创建 3 镜脚本，时间轴已打开。",
+  metadata: {
+    intent: "generate_script",
+    script_id: generatedScriptSummary.script_id,
+    script_created: true,
+    needs_input: false,
+    missing_fields: [],
+  },
+};
+
+const missingInputAssistantMessage: AgentMessage = {
+  ...assistantMessage,
+  content: "请补充选题、风格和分镜数。",
+  metadata: {
+    intent: "generate_script",
+    script_id: null,
+    script_created: false,
+    needs_input: true,
+    missing_fields: ["topic", "style", "scene_count"],
+  },
+};
+
+const unboundConversation: AgentConversation = {
+  ...conversation,
+  subject_type: null,
+  subject_id: null,
+  title: "脚本 Agent 对话",
+};
+
 const agentRun: AgentRun = {
   run_id: "88888888-8888-4888-8888-888888888888",
   conversation_id: conversation.conversation_id,
@@ -270,7 +327,7 @@ describe("video-agent 视频工作台页面", () => {
   it("不在脚本生产工作台展示项目创建或项目管理入口", async () => {
     render(createElement(Home));
 
-    expect(await screen.findByRole("heading", { name: "生成脚本" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "脚本 Agent 对话" })).toBeInTheDocument();
     expect(screen.getByLabelText("当前项目")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "项目上下文" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "还没有项目" })).not.toBeInTheDocument();
@@ -279,14 +336,17 @@ describe("video-agent 视频工作台页面", () => {
     expect(screen.queryByText(/创建项目|项目管理/)).not.toBeInTheDocument();
   });
 
-  it("分镜数支持选择 3 到 12 镜", async () => {
+  it("右侧只展示单一脚本 Agent 对话入口", async () => {
     mockProjects({ projects: [project] });
     render(createElement(Home));
 
-    const sceneCountSelect = await screen.findByLabelText("分镜数");
-    const options = within(sceneCountSelect).getAllByRole("option").map((option) => option.textContent);
+    const actionColumn = await screen.findByLabelText("脚本 Agent 操作");
 
-    expect(options).toEqual(["3 镜", "4 镜", "5 镜", "6 镜", "7 镜", "8 镜", "9 镜", "10 镜", "11 镜", "12 镜"]);
+    expect(within(actionColumn).getByRole("heading", { name: "脚本 Agent 对话" })).toBeInTheDocument();
+    expect(within(actionColumn).queryByRole("heading", { name: "生成脚本" })).not.toBeInTheDocument();
+    expect(within(actionColumn).queryByLabelText("选题")).not.toBeInTheDocument();
+    expect(within(actionColumn).queryByLabelText("分镜数")).not.toBeInTheDocument();
+    expect(within(actionColumn).getAllByRole("textbox")).toHaveLength(1);
   });
 
   it("有脚本时展示时间轴对照视图", async () => {
@@ -310,9 +370,125 @@ describe("video-agent 视频工作台页面", () => {
 
     const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
 
-    expect(within(panel).getByText("绑定：科技博主 / 当前脚本")).toBeInTheDocument();
-    expect(within(panel).getByPlaceholderText("输入要修改的分镜方向...")).toBeEnabled();
+    expect(await within(panel).findByText("当前项目：科技博主 / 脚本：程序员必看：ChatGPT工作流")).toBeInTheDocument();
+    expect(within(panel).queryByText(/绑定：/)).not.toBeInTheDocument();
+    expect(within(panel).getByPlaceholderText("描述要修改的分镜方向...")).toBeEnabled();
     expect(within(panel).getByRole("button", { name: "发送" })).toBeEnabled();
+  });
+
+  it("有脚本时可新建脚本并切换到生成模式", async () => {
+    mockProjects({ projects: [project] });
+    mockScripts({ scripts: [scriptSummary], total: 1, limit: 20, offset: 0 });
+    vi.mocked(api.createAgentConversation).mockResolvedValue(unboundConversation);
+    vi.mocked(api.sendAgentMessage).mockResolvedValue({
+      user_message: { ...userMessage, content: "生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本" },
+      assistant_message: generatedAssistantMessage,
+      run: agentRun,
+    });
+    vi.mocked(api.getScript).mockResolvedValueOnce(scriptDetail).mockResolvedValue(generatedScriptDetail);
+    render(createElement(Home));
+
+    expect(await screen.findByRole("heading", { name: scriptSummary.title })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新建脚本" }));
+
+    const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
+    expect(within(panel).getByText("当前项目：科技博主 / 新脚本生成")).toBeInTheDocument();
+    expect(within(panel).getByPlaceholderText("描述你想生成的脚本...")).toBeEnabled();
+    expect(screen.getByRole("heading", { name: "选择脚本后查看分镜" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /程序员必看：ChatGPT工作流/ })).not.toHaveClass("selected");
+
+    fireEvent.change(within(panel).getByPlaceholderText("描述你想生成的脚本..."), {
+      target: { value: "生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(api.createAgentConversation).toHaveBeenCalledWith(expect.anything(), {
+        project_id: project.project_id,
+        agent_type: "script",
+        title: "脚本 Agent 对话",
+      });
+    });
+    expect(api.sendAgentMessage).toHaveBeenCalledWith(expect.anything(), unboundConversation.conversation_id, {
+      content: "生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本",
+    });
+  });
+
+  it("无脚本时脚本 Agent 对话可发送生成请求", async () => {
+    mockProjects({ projects: [project] });
+    mockScripts({ scripts: [], total: 0, limit: 20, offset: 0 });
+    vi.mocked(api.createAgentConversation).mockResolvedValue(unboundConversation);
+    vi.mocked(api.sendAgentMessage).mockResolvedValue({
+      user_message: { ...userMessage, content: "生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本" },
+      assistant_message: generatedAssistantMessage,
+      run: agentRun,
+    });
+    vi.mocked(api.getScript).mockResolvedValue(generatedScriptDetail);
+    render(createElement(Home));
+
+    const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
+    expect(within(panel).getByText("当前项目：科技博主 / 新脚本生成")).toBeInTheDocument();
+    expect(within(panel).queryByText(/绑定：/)).not.toBeInTheDocument();
+    fireEvent.change(within(panel).getByPlaceholderText("描述你想生成的脚本..."), {
+      target: { value: "生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(api.createAgentConversation).toHaveBeenCalledWith(expect.anything(), {
+        project_id: project.project_id,
+        agent_type: "script",
+        title: "脚本 Agent 对话",
+      });
+    });
+    expect(api.sendAgentMessage).toHaveBeenCalledWith(expect.anything(), unboundConversation.conversation_id, {
+      content: "生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本",
+    });
+  });
+
+  it("对话生成成功后刷新脚本列表并打开新脚本详情", async () => {
+    mockProjects({ projects: [project] });
+    mockScripts({ scripts: [], total: 0, limit: 20, offset: 0 });
+    vi.mocked(api.createAgentConversation).mockResolvedValue(unboundConversation);
+    vi.mocked(api.sendAgentMessage).mockResolvedValue({
+      user_message: { ...userMessage, content: "生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本" },
+      assistant_message: generatedAssistantMessage,
+      run: agentRun,
+    });
+    vi.mocked(api.getScript).mockResolvedValue(generatedScriptDetail);
+    render(createElement(Home));
+
+    const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
+    fireEvent.change(within(panel).getByPlaceholderText("描述你想生成的脚本..."), {
+      target: { value: "生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "发送" }));
+
+    expect(await screen.findByRole("heading", { name: generatedScriptSummary.title })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ChatGPT 工作流新脚本/ })).toBeInTheDocument();
+    expect(api.getScript).toHaveBeenCalledWith(expect.anything(), generatedScriptSummary.script_id);
+  });
+
+  it("生成参数不足时显示 Agent 追问且不新增脚本", async () => {
+    mockProjects({ projects: [project] });
+    mockScripts({ scripts: [], total: 0, limit: 20, offset: 0 });
+    vi.mocked(api.createAgentConversation).mockResolvedValue(unboundConversation);
+    vi.mocked(api.sendAgentMessage).mockResolvedValue({
+      user_message: { ...userMessage, content: "帮我生成脚本" },
+      assistant_message: missingInputAssistantMessage,
+      run: agentRun,
+    });
+    render(createElement(Home));
+
+    const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
+    fireEvent.change(within(panel).getByPlaceholderText("描述你想生成的脚本..."), {
+      target: { value: "帮我生成脚本" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "发送" }));
+
+    expect(await within(panel).findByText("请补充选题、风格和分镜数。")).toBeInTheDocument();
+    expect(api.getScript).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /ChatGPT 工作流新脚本/ })).not.toBeInTheDocument();
   });
 
   it("首次发送消息会创建脚本会话并调用发送接口", async () => {
@@ -321,7 +497,7 @@ describe("video-agent 视频工作台页面", () => {
     render(createElement(Home));
 
     const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
-    fireEvent.change(within(panel).getByPlaceholderText("输入要修改的分镜方向..."), {
+    fireEvent.change(within(panel).getByPlaceholderText("描述要修改的分镜方向..."), {
       target: { value: userMessage.content },
     });
     fireEvent.click(within(panel).getByRole("button", { name: "发送" }));
@@ -357,7 +533,7 @@ describe("video-agent 视频工作台页面", () => {
     render(createElement(Home));
 
     const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
-    fireEvent.change(within(panel).getByPlaceholderText("输入要修改的分镜方向..."), {
+    fireEvent.change(within(panel).getByPlaceholderText("描述要修改的分镜方向..."), {
       target: { value: userMessage.content },
     });
     fireEvent.click(within(panel).getByRole("button", { name: "发送" }));
@@ -373,7 +549,7 @@ describe("video-agent 视频工作台页面", () => {
     render(createElement(Home));
 
     const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
-    fireEvent.change(within(panel).getByPlaceholderText("输入要修改的分镜方向..."), {
+    fireEvent.change(within(panel).getByPlaceholderText("描述要修改的分镜方向..."), {
       target: { value: userMessage.content },
     });
     fireEvent.click(within(panel).getByRole("button", { name: "发送" }));
@@ -399,7 +575,7 @@ describe("video-agent 视频工作台页面", () => {
     render(createElement(Home));
 
     const panel = await screen.findByRole("region", { name: "脚本 Agent 对话" });
-    fireEvent.change(within(panel).getByPlaceholderText("输入要修改的分镜方向..."), {
+    fireEvent.change(within(panel).getByPlaceholderText("描述要修改的分镜方向..."), {
       target: { value: userMessage.content },
     });
     fireEvent.click(within(panel).getByRole("button", { name: "发送" }));

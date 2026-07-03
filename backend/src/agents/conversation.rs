@@ -151,6 +151,13 @@ pub struct FinishAgentRunInput {
     pub error_message: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct BindAgentConversationSubjectInput {
+    pub conversation_id: Uuid,
+    pub subject_type: String,
+    pub subject_id: Uuid,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentConversationParseError {
     field: &'static str,

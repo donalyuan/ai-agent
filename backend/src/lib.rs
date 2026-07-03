@@ -147,12 +147,14 @@ impl AppState {
             .clone()
             .ok_or_else(|| ScriptApiError::State("database pool is not configured".to_string()))?;
         let conversation_repository = Arc::new(PostgresConversationRepository::new(pool.clone()));
-        let script_repository = Arc::new(PostgresScriptRepository::new(pool));
+        let script_repository = Arc::new(PostgresScriptRepository::new(pool.clone()));
+        let project_repository = Arc::new(PostgresProjectRepository::new(pool));
         let llm_client = self.openai_client()?;
 
         Ok(AgentRuntime::new(
             conversation_repository,
             script_repository,
+            project_repository,
             llm_client,
         ))
     }
@@ -382,19 +384,23 @@ async fn create_agent_conversation(
         .map_err(ScriptApiError::ConversationValidation)?;
 
     if request.agent_type == "script" {
-        let script_id = request.subject_id.ok_or_else(|| {
-            ScriptApiError::ConversationValidation("脚本会话必须绑定 script subject".to_string())
+        let project_id = request.project_id.ok_or_else(|| {
+            ScriptApiError::ConversationValidation("脚本会话必须绑定项目".to_string())
         })?;
-        let script = state
-            .script_agent_service_without_llm()?
-            .get_script(script_id)
-            .await?;
-        if let Some(project_id) = request.project_id {
+        if let Some(script_id) = request.subject_id {
+            let script = state
+                .script_agent_service_without_llm()?
+                .get_script(script_id)
+                .await?;
             if script.project_id != project_id {
                 return Err(ScriptApiError::ConversationValidation(
                     "脚本不属于当前项目".to_string(),
                 ));
             }
+        } else if !state.project_repository()?.project_exists(project_id).await? {
+            return Err(ScriptApiError::Agent(ScriptAgentError::ProjectNotFound(
+                project_id,
+            )));
         }
     }
 
@@ -697,6 +703,7 @@ fn agent_runtime_error_response(error: AgentRuntimeError) -> (StatusCode, Json<s
                 Json(json!({ "error": "脚本存储失败", "details": message })),
             ),
         },
+        AgentRuntimeError::ScriptAgent(error) => script_agent_error_response(error),
         AgentRuntimeError::InvalidLlmOutput(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "Agent 输出无效", "details": message })),

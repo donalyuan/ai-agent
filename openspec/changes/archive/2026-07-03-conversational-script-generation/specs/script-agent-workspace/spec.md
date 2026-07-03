@@ -1,6 +1,6 @@
 # script-agent-workspace Specification Delta
 
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: 脚本工作台必须使用单一脚本 Agent 对话入口
 
@@ -50,9 +50,11 @@
 - **THEN** 页面 SHALL 在脚本 Agent 对话面板内展示错误
 - **AND** 页面 SHALL 保留脚本列表和已打开脚本详情的浏览能力
 
-### Requirement: 前端实现前必须更新 Pencil 原型确认单一对话入口
+## MODIFIED Requirements
 
-系统 SHALL 在修改 `apps/video-agent` 前先更新视频工作台 Pencil 原型，展示脚本生成和脚本修改共用单一脚本 Agent 对话入口。
+### Requirement: 前端实现前必须完成设计上下文与 Pencil 原型
+
+系统 SHALL 在实现或迁移脚本 Agent 工作台前完成设计上下文、真实设计系统参考和 `Pencil MCP` 原型确认，避免直接凭主观描述进入编码。正式视频生产工作台的实现边界 SHALL 为 `apps/video-agent/`，并且工作台一级导航 SHALL 使用视频生产业务流程菜单，而不是只按 Agent 预留入口组织。涉及脚本生成和脚本修改入口变更时，原型 SHALL 展示二者共用单一脚本 Agent 对话入口。
 
 #### Scenario: 原型覆盖对话式脚本生成
 
