@@ -5,7 +5,8 @@ use novex_api::agents::models::{
 };
 use novex_api::agents::{LLMClient, LLMError, ScriptAgentError, ScriptAgentService};
 use novex_api::repositories::{
-    ProjectRepository, ProjectRepositoryError, ScriptRepository, ScriptRepositoryError,
+    CreateProjectInput, Project, ProjectRepository, ProjectRepositoryError, ScriptRepository,
+    ScriptRepositoryError,
 };
 use novex_model::LLMPrompt;
 use serde_json::json;
@@ -21,6 +22,39 @@ struct MemoryProjectRepository {
 impl ProjectRepository for MemoryProjectRepository {
     async fn project_exists(&self, project_id: Uuid) -> Result<bool, ProjectRepositoryError> {
         Ok(self.project_ids.contains(&project_id))
+    }
+
+    async fn create_project(
+        &self,
+        input: CreateProjectInput,
+    ) -> Result<Project, ProjectRepositoryError> {
+        let now = Utc::now();
+        Ok(Project {
+            id: Uuid::new_v4(),
+            name: input.name,
+            positioning: input.positioning,
+            description: input.description,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    async fn list_projects(&self) -> Result<Vec<Project>, ProjectRepositoryError> {
+        let now = Utc::now();
+        Ok(self
+            .project_ids
+            .iter()
+            .map(|project_id| Project {
+                id: *project_id,
+                name: "测试项目".to_string(),
+                positioning: "测试定位".to_string(),
+                description: "脚本服务测试项目".to_string(),
+                status: "active".to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+            .collect())
     }
 }
 

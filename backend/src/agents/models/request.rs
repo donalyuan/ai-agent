@@ -1,8 +1,62 @@
 use super::{Scene, Script, ScriptStatus, ScriptSummary};
+use crate::repositories::Project;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use validator::Validate;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Validate)]
+pub struct CreateProjectRequest {
+    #[validate(length(min = 1, max = 120))]
+    pub name: String,
+    #[serde(default)]
+    #[validate(length(max = 500))]
+    pub positioning: String,
+    #[serde(default)]
+    #[validate(length(max = 2000))]
+    pub description: String,
+}
+
+impl CreateProjectRequest {
+    pub fn validate_for_api(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("项目名称不能为空".to_string());
+        }
+
+        self.validate()
+            .map_err(|error| format!("项目参数无效: {error}"))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProjectResponse {
+    pub project_id: Uuid,
+    pub name: String,
+    pub positioning: String,
+    pub description: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<Project> for ProjectResponse {
+    fn from(project: Project) -> Self {
+        Self {
+            project_id: project.id,
+            name: project.name,
+            positioning: project.positioning,
+            description: project.description,
+            status: project.status,
+            created_at: project.created_at,
+            updated_at: project.updated_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProjectListResponse {
+    pub projects: Vec<ProjectResponse>,
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,7 +98,7 @@ pub struct GenerateScriptRequest {
     #[serde(default)]
     pub style: Option<ScriptStyle>,
     #[serde(default)]
-    #[validate(range(min = 5, max = 8))]
+    #[validate(range(min = 3, max = 12))]
     pub scene_count: Option<u8>,
     #[serde(default)]
     pub parent_id: Option<Uuid>,

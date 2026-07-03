@@ -5,7 +5,10 @@
 /backend/target/
 /target/
 /admin/.next/
+/admin/.next-dev/
 /admin/node_modules/
+/admin/playwright-report/
+/admin/test-results/
 /admin/*.tsbuildinfo
 /services/video-worker/.pytest_cache/
 /services/video-worker/**/__pycache__/

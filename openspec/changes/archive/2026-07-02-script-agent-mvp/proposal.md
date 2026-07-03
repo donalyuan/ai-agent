@@ -7,7 +7,7 @@ video-agent项目需要实现六大Agent中的第二个核心Agent：**脚本Age
 根据 [`video-agent-mvp`](../../../docs/requirements/video-agent-mvp.md)，脚本Agent是P0优先级（Month 1-2），必须支持：
 - 输入选题 → 输出结构化脚本
 - 支持A/B版本生成（同一选题生成多版本）
-- 生成5-8个分镜的短视频脚本
+- 生成3-12个分镜的短视频脚本
 
 ## 目标
 
@@ -34,7 +34,7 @@ video-agent项目需要实现六大Agent中的第二个核心Agent：**脚本Age
 ## 成功指标
 
 ### 功能验收
-- [ ] 输入"ChatGPT如何改变程序员工作流" → 生成包含5-8个分镜的完整脚本
+- [ ] 输入"ChatGPT如何改变程序员工作流" → 生成包含3-12个分镜的完整脚本
 - [ ] 每个分镜包含：旁白、视觉描述、情绪标签、时长
 - [ ] 脚本包含：标题、hook（前3秒吸引点）
 - [ ] 同一选题可生成3个不同版本
@@ -60,7 +60,7 @@ video-agent项目需要实现六大Agent中的第二个核心Agent：**脚本Age
 - `Scene`（分镜）- 值对象
   - `id`: UUID
   - `script_id`: 所属脚本
-  - `sequence`: 顺序（1-8）
+  - `sequence`: 顺序（1-12）
   - `narration`: 旁白文本
   - `visual_description`: 视觉描述
   - `emotion`: 情绪标签
@@ -73,7 +73,7 @@ video-agent项目需要实现六大Agent中的第二个核心Agent：**脚本Age
 
 **规则**：
 - 一个脚本必须属于一个项目
-- 一个脚本包含5-8个分镜
+- 一个脚本包含3-12个分镜
 - 分镜sequence必须连续且唯一
 - 旁白字数建议50-150字/镜
 
@@ -132,7 +132,7 @@ Content-Type: application/json
   "project_id": "uuid",
   "topic": "ChatGPT如何改变程序员工作流",
   "style": "knowledge",  // knowledge | story | tutorial
-  "scene_count": 6,      // 5-8
+  "scene_count": 6,      // 3-12
   "parent_id": null      // 可选，用于A/B测试
 }
 
@@ -232,7 +232,7 @@ CREATE INDEX idx_scenes_script ON scenes(script_id, sequence);
 
 任务：
 1. 根据用户提供的选题，生成结构化视频脚本
-2. 脚本必须包含：标题、hook（前3秒吸引点）、5-8个分镜
+2. 脚本必须包含：标题、hook（前3秒吸引点）、3-12个分镜
 3. 每个分镜包含：旁白（50-150字）、视觉描述、情绪标签、时长（秒）
 
 要求：

@@ -34,7 +34,7 @@ Content-Type: application/json
 | `project_id` | UUID | 是 | 所属项目ID |
 | `topic` | String | 是 | 视频选题文本，10-200字 |
 | `style` | String | 否 | 风格类型，默认"knowledge" |
-| `scene_count` | Integer | 否 | 分镜数量，默认6，范围5-8 |
+| `scene_count` | Integer | 否 | 分镜数量，默认6，范围3-12 |
 | `parent_id` | UUID | 否 | 父脚本ID，用于A/B测试 |
 
 **style枚举值**：
@@ -105,7 +105,7 @@ Content-Type: application/json
 
 // 400 Bad Request - 参数验证失败
 {
-  "error": "scene_count必须在5-8之间"
+  "error": "scene_count必须在3-12之间"
 }
 
 // 404 Not Found - 项目不存在
@@ -310,7 +310,7 @@ DELETE /api/scripts/:script_id
 
 - 所有UUID参数必须验证格式
 - topic字段限制长度10-200字符，防止滥用
-- scene_count限制5-8，防止资源浪费
+- scene_count限制3-12，防止资源浪费
 - LLM调用必须有超时机制（30秒）
 - 生成失败最多重试3次
 

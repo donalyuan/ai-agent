@@ -1,8 +1,9 @@
 use chrono::Utc;
 use novex_api::agents::models::{
-    GenerateScriptRequest, Scene, Script, ScriptListFilter, ScriptResponse, ScriptStatus,
-    ScriptStyle,
+    CreateProjectRequest, GenerateScriptRequest, ProjectResponse, Scene, Script, ScriptListFilter,
+    ScriptResponse, ScriptStatus, ScriptStyle,
 };
+use novex_api::repositories::Project;
 use serde_json::{json, Value};
 use uuid::Uuid;
 use validator::Validate;
@@ -27,11 +28,68 @@ fn generate_script_request_deserializes_and_validates() {
 }
 
 #[test]
+fn generate_script_request_accepts_scene_count_from_three_to_twelve() {
+    for scene_count in [3, 12] {
+        let request: GenerateScriptRequest = serde_json::from_value(json!({
+            "project_id": Uuid::new_v4(),
+            "topic": "ChatGPT如何改变程序员工作流",
+            "scene_count": scene_count
+        }))
+        .unwrap();
+
+        request.validate().unwrap();
+        assert_eq!(request.scene_count_or_default(), scene_count);
+    }
+}
+
+#[test]
+fn create_project_request_validates_required_name_and_optional_context() {
+    let request: CreateProjectRequest = serde_json::from_value(json!({
+        "name": "科技博主",
+        "positioning": "科技知识账号",
+        "description": "面向程序员的知识短视频"
+    }))
+    .unwrap();
+
+    request.validate_for_api().unwrap();
+
+    let invalid: CreateProjectRequest = serde_json::from_value(json!({
+        "name": "",
+        "positioning": "科技知识账号",
+        "description": "面向程序员的知识短视频"
+    }))
+    .unwrap();
+
+    assert_eq!(invalid.validate_for_api().unwrap_err(), "项目名称不能为空");
+}
+
+#[test]
+fn project_response_maps_repository_project_to_api_shape() {
+    let now = Utc::now();
+    let project_id = Uuid::new_v4();
+    let response = ProjectResponse::from(Project {
+        id: project_id,
+        name: "科技博主".to_string(),
+        positioning: "科技知识账号".to_string(),
+        description: "面向程序员的知识短视频".to_string(),
+        status: "active".to_string(),
+        created_at: now,
+        updated_at: now,
+    });
+    let json_value: Value = serde_json::to_value(response).unwrap();
+
+    assert_eq!(json_value["project_id"], project_id.to_string());
+    assert_eq!(json_value["name"], "科技博主");
+    assert_eq!(json_value["positioning"], "科技知识账号");
+    assert_eq!(json_value["status"], "active");
+}
+
+#[test]
 fn generate_script_request_rejects_invalid_topic_and_scene_count() {
     let payload = json!({
         "project_id": Uuid::new_v4(),
         "topic": "太短",
-        "scene_count": 9
+        "scene_count": 13
     });
 
     let request: GenerateScriptRequest = serde_json::from_value(payload).unwrap();
@@ -39,6 +97,22 @@ fn generate_script_request_rejects_invalid_topic_and_scene_count() {
 
     assert!(errors.field_errors().contains_key("topic"));
     assert!(errors.field_errors().contains_key("scene_count"));
+}
+
+#[test]
+fn generate_script_request_rejects_scene_count_outside_three_to_twelve() {
+    for scene_count in [2, 13] {
+        let request: GenerateScriptRequest = serde_json::from_value(json!({
+            "project_id": Uuid::new_v4(),
+            "topic": "ChatGPT如何改变程序员工作流",
+            "scene_count": scene_count
+        }))
+        .unwrap();
+
+        let errors = request.validate().unwrap_err();
+
+        assert!(errors.field_errors().contains_key("scene_count"));
+    }
 }
 
 #[test]

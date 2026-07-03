@@ -27,8 +27,12 @@
 - 当前仓库定位已从根级 video-agent MVP 调整为 **Novex AI Agent Foundation monorepo**
 - `video-agent` 保留为 `apps/video-agent` 下的首个业务应用
 - OpenSpec change `align-novex-foundation-architecture` 已于 2026-07-01 归档
-- `script-agent-mvp` 可在 Novex 基座结构下恢复开发，继续从 T2.3 开始
-- 已完成的 `script-agent-mvp` 数据库、模型和 Repository 初始能力保留并迁移，不丢弃
+- `script-agent-mvp` 已在 Novex 基座结构下完成并归档，脚本生成、读取、列表、状态更新 API 已实现
+- 当前优先级是建设脚本 Agent 前端工作台，打通“生成脚本 -> 查看分镜 -> 更新状态”的可用闭环；素材匹配和视频生成编排作为后续 OpenSpec change 推进
+- 前端工作台的对外可见产品品牌名为 `AI-AGENT`，展示名为“智能体工作台”；原型、UI 和当前工作台设计文档不得使用 `Novex Admin` 作为展示品牌
+- 智能体工作台不是单一脚本 Agent 页面，桌面端壳层必须预留六个智能体菜单入口：选题智能体、脚本智能体、素材智能体、视频智能体、发布智能体、优化智能体；当前 `script-agent-workspace` 只实现脚本智能体模块闭环
+- 脚本智能体详情展示已选定“时间轴对照视图”：左侧表达分镜顺序和节奏节点，右侧并排展示旁白与画面指令；后续实现不要回退成纯卡片流或纯表格
+- 脚本 Agent 前端工作台当前仅覆盖桌面端运营后台，不涉及移动端原型、移动端适配或移动端验收；后续如需要移动端，应单独提出 OpenSpec change
 
 ### 架构原则
 1. `backend/` 承担控制面 API 和业务编排入口

@@ -419,7 +419,7 @@ info!("script saved successfully: script_id={}, duration_ms={}", script_id, elap
 
 ### 输入限制
 - `topic`长度限制10-200字符
-- `scene_count`限制5-8
+- `scene_count`限制3-12
 - `style`必须在枚举中
 
 ### 成本控制

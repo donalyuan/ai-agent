@@ -1,22 +1,27 @@
 use agents::{LLMClient, ScriptAgentError, ScriptAgentService};
 use axum::{
     extract::{rejection::JsonRejection, FromRequest, Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderValue, Method, StatusCode},
     response::IntoResponse,
     routing::{get, post, put},
     Json, Router,
 };
 use novex_model::{LLMError, LLMPrompt, OpenAIClient, OpenAIConfig};
-use repositories::{PostgresProjectRepository, PostgresScriptRepository};
+use repositories::{
+    CreateProjectInput, PostgresProjectRepository, PostgresScriptRepository, ProjectRepository,
+    ProjectRepositoryError,
+};
 use serde::Serialize;
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::Arc;
+use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 use crate::agents::models::{
-    GenerateScriptRequest, ScriptListFilter, ScriptListResponse, ScriptResponse,
-    UpdateScriptStatusRequest, UpdateScriptStatusResponse,
+    CreateProjectRequest, GenerateScriptRequest, ProjectListResponse, ProjectResponse,
+    ScriptListFilter, ScriptListResponse, ScriptResponse, UpdateScriptStatusRequest,
+    UpdateScriptStatusResponse,
 };
 
 pub mod agents;
@@ -113,6 +118,15 @@ impl AppState {
         ))
     }
 
+    fn project_repository(&self) -> Result<PostgresProjectRepository, ScriptApiError> {
+        let pool = self
+            .pg_pool
+            .clone()
+            .ok_or_else(|| ScriptApiError::State("database pool is not configured".to_string()))?;
+
+        Ok(PostgresProjectRepository::new(pool))
+    }
+
     fn script_agent_service_without_llm(&self) -> Result<ScriptAgentService, ScriptApiError> {
         let pool = self
             .pg_pool
@@ -185,13 +199,20 @@ pub fn build_app() -> Router {
 }
 
 pub fn build_app_with_state(state: AppState) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin("*".parse::<HeaderValue>().unwrap())
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
+        .allow_headers([header::ACCEPT, header::CONTENT_TYPE]);
+
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
+        .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/scripts/generate", post(generate_script))
         .route("/api/scripts/:script_id", get(get_script))
         .route("/api/projects/:project_id/scripts", get(list_scripts))
         .route("/api/scripts/:script_id/status", put(update_script_status))
+        .layer(cors)
         .with_state(state)
 }
 
@@ -252,6 +273,36 @@ async fn ready(State(state): State<AppState>) -> impl IntoResponse {
     };
 
     (status_code, Json(body))
+}
+
+async fn create_project(
+    State(state): State<AppState>,
+    ValidJson(request): ValidJson<CreateProjectRequest>,
+) -> Result<(StatusCode, Json<ProjectResponse>), ScriptApiError> {
+    request
+        .validate_for_api()
+        .map_err(ScriptApiError::ProjectValidation)?;
+    let repository = state.project_repository()?;
+    let project = repository
+        .create_project(CreateProjectInput {
+            name: request.name.trim().to_string(),
+            positioning: request.positioning.trim().to_string(),
+            description: request.description.trim().to_string(),
+        })
+        .await?;
+
+    Ok((StatusCode::CREATED, Json(ProjectResponse::from(project))))
+}
+
+async fn list_projects(
+    State(state): State<AppState>,
+) -> Result<Json<ProjectListResponse>, ScriptApiError> {
+    let repository = state.project_repository()?;
+    let projects = repository.list_projects().await?;
+
+    Ok(Json(ProjectListResponse {
+        projects: projects.into_iter().map(ProjectResponse::from).collect(),
+    }))
 }
 
 async fn generate_script(
@@ -328,12 +379,20 @@ where
 enum ScriptApiError {
     State(String),
     Agent(ScriptAgentError),
+    ProjectRepository(ProjectRepositoryError),
+    ProjectValidation(String),
     JsonRejection(JsonRejection),
 }
 
 impl From<ScriptAgentError> for ScriptApiError {
     fn from(error: ScriptAgentError) -> Self {
         Self::Agent(error)
+    }
+}
+
+impl From<ProjectRepositoryError> for ScriptApiError {
+    fn from(error: ProjectRepositoryError) -> Self {
+        Self::ProjectRepository(error)
     }
 }
 
@@ -345,6 +404,14 @@ impl IntoResponse for ScriptApiError {
                 Json(json!({ "error": message })),
             )
                 .into_response(),
+            Self::ProjectRepository(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "项目存储失败", "details": error.to_string() })),
+            )
+                .into_response(),
+            Self::ProjectValidation(message) => {
+                (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+            }
             Self::JsonRejection(error) => invalid_json_response(error).into_response(),
             Self::Agent(error) => script_agent_error_response(error).into_response(),
         }
