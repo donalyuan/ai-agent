@@ -158,11 +158,13 @@ impl ScriptRepository for MemoryScriptRepository {
 
 struct ScriptedLLMClient {
     responses: Mutex<VecDeque<Result<String, LLMError>>>,
+    prompts: Mutex<Vec<LLMPrompt>>,
 }
 
 #[async_trait]
 impl LLMClient for ScriptedLLMClient {
-    async fn generate_script(&self, _prompt: LLMPrompt) -> Result<String, LLMError> {
+    async fn generate_script(&self, prompt: LLMPrompt) -> Result<String, LLMError> {
+        self.prompts.lock().unwrap().push(prompt);
         self.responses
             .lock()
             .unwrap()
@@ -182,6 +184,7 @@ fn service(
     let script_repository = Arc::new(MemoryScriptRepository::default());
     let llm_client = Arc::new(ScriptedLLMClient {
         responses: Mutex::new(VecDeque::from(responses)),
+        prompts: Mutex::new(Vec::new()),
     });
     let service = ScriptAgentService::new(
         llm_client.clone(),
@@ -190,6 +193,31 @@ fn service(
     );
 
     (service, script_repository, llm_client)
+}
+
+fn valid_metadata_json() -> String {
+    json!({
+        "title": "AI时代，人类如何不被替代",
+        "hook": "未来淘汰你的不是AI，而是不会用AI的人。"
+    })
+    .to_string()
+}
+
+fn valid_scene_json(sequence: i32) -> String {
+    json!({
+        "scene": {
+            "sequence": sequence,
+            "narration": format!(
+                "AI 正在改变人类处理问题的方式，第{sequence}个分镜强调人要学会提问、验证结果，并把 AI 当成提升判断力和创造力的工具。"
+            ),
+            "visual_description": format!(
+                "第{sequence}个分镜展示人与 AI 在屏幕前协作，画面包含分析结果、人工确认标记和清晰字幕。"
+            ),
+            "emotion": "理性",
+            "duration_sec": 9
+        }
+    })
+    .to_string()
 }
 
 fn valid_llm_json() -> String {
@@ -261,6 +289,46 @@ async fn generate_script_retries_invalid_llm_json_then_persists_script() {
     assert_eq!(script.scenes.len(), 5);
     assert_eq!(script.content["metadata"]["retry_count"], 1);
     assert_eq!(repository.count_scripts(project_id, None).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn generate_script_stepwise_requests_metadata_then_single_scenes() {
+    let project_id = Uuid::new_v4();
+    let (service, repository, llm) = service(
+        HashSet::from([project_id]),
+        vec![
+            Ok(valid_metadata_json()),
+            Ok(valid_scene_json(1)),
+            Ok(valid_scene_json(2)),
+            Ok(valid_scene_json(3)),
+        ],
+    );
+    let request = GenerateScriptRequest {
+        project_id,
+        topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
+        style: Some(ScriptStyle::Knowledge),
+        scene_count: Some(3),
+        parent_id: None,
+    };
+
+    let script = service.generate_script_stepwise(request).await.unwrap();
+
+    assert_eq!(script.title, "AI时代，人类如何不被替代");
+    assert_eq!(script.scenes.len(), 3);
+    assert_eq!(script.scenes[0].sequence, 1);
+    assert_eq!(script.scenes[2].sequence, 3);
+    assert_eq!(
+        script.content["metadata"]["generation_mode"],
+        "stepwise_single_scene"
+    );
+    assert_eq!(repository.count_scripts(project_id, None).await.unwrap(), 1);
+
+    let prompts = llm.prompts.lock().unwrap();
+    assert_eq!(prompts.len(), 4);
+    assert!(prompts[0].user.contains("只输出 title 和 hook"));
+    assert!(prompts[1].user.contains("当前分镜序号：1"));
+    assert!(prompts[2].user.contains("当前分镜序号：2"));
+    assert!(prompts[3].user.contains("当前分镜序号：3"));
 }
 
 #[tokio::test]

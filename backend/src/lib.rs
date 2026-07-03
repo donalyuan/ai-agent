@@ -1,4 +1,4 @@
-use agents::{LLMClient, ScriptAgentError, ScriptAgentService};
+use agents::{LLMClient, ScriptAgentError, ScriptAgentService, ScriptGenerationMode};
 use axum::{
     extract::{rejection::JsonRejection, FromRequest, Path, Query, State},
     http::{header, HeaderValue, Method, StatusCode},
@@ -8,8 +8,9 @@ use axum::{
 };
 use novex_model::{LLMError, LLMPrompt, OpenAIClient, OpenAIConfig};
 use repositories::{
-    CreateProjectInput, PostgresProjectRepository, PostgresScriptRepository, ProjectRepository,
-    ProjectRepositoryError, PostgresWorkspaceMenuRepository, WorkspaceMenuRepositoryError,
+    CreateProjectInput, PostgresProjectRepository, PostgresScriptRepository,
+    PostgresWorkspaceMenuRepository, ProjectRepository, ProjectRepositoryError,
+    WorkspaceMenuRepositoryError,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -111,11 +112,10 @@ impl AppState {
         let script_repository = Arc::new(PostgresScriptRepository::new(pool.clone()));
         let project_repository = Arc::new(PostgresProjectRepository::new(pool));
 
-        Ok(ScriptAgentService::new(
-            llm_client,
-            script_repository,
-            project_repository,
-        ))
+        let service = ScriptAgentService::new(llm_client, script_repository, project_repository)
+            .with_generation_mode(self.script_generation_mode());
+
+        Ok(service)
     }
 
     fn project_repository(&self) -> Result<PostgresProjectRepository, ScriptApiError> {
@@ -162,6 +162,15 @@ impl AppState {
                 responses_max_output_tokens: self.config.openai_max_output_tokens,
             },
         }))
+    }
+
+    fn script_generation_mode(&self) -> ScriptGenerationMode {
+        match self.config.openai_reasoning_effort.as_deref() {
+            Some(effort) if effort.eq_ignore_ascii_case("xhigh") => {
+                ScriptGenerationMode::StepwiseSingleScene
+            }
+            _ => ScriptGenerationMode::Complete,
+        }
     }
 }
 

@@ -8,6 +8,7 @@ use std::time::Duration;
 pub struct LLMPrompt {
     pub system: String,
     pub user: String,
+    pub max_output_tokens: Option<u32>,
 }
 
 const OPENAI_COMPATIBLE_USER_AGENT: &str = "codex-cli/0.142.5";
@@ -190,7 +191,9 @@ impl OpenAIClient {
         let payload = OpenAIResponsesRequest {
             model: self.config.model.clone(),
             temperature: 0.8,
-            max_output_tokens: self.config.responses_max_output_tokens,
+            max_output_tokens: prompt
+                .max_output_tokens
+                .unwrap_or(self.config.responses_max_output_tokens),
             stream: true,
             input: vec![
                 OpenAIResponsesMessage {

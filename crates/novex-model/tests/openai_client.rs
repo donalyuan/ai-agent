@@ -63,6 +63,7 @@ async fn openai_client_sends_chat_completion_request_and_reads_content() {
         .generate_script(LLMPrompt {
             system: "system prompt".to_string(),
             user: "user prompt".to_string(),
+            max_output_tokens: None,
         })
         .await
         .unwrap();
@@ -118,6 +119,7 @@ async fn openai_client_sends_responses_request_and_reads_output_text() {
         .generate_script(LLMPrompt {
             system: "system prompt".to_string(),
             user: "user prompt".to_string(),
+            max_output_tokens: None,
         })
         .await
         .unwrap();
@@ -156,11 +158,49 @@ async fn openai_client_uses_configured_responses_reasoning_and_token_limit() {
         .generate_script(LLMPrompt {
             system: "system prompt".to_string(),
             user: "user prompt".to_string(),
+            max_output_tokens: None,
         })
         .await
         .unwrap();
 
     assert!(response.contains("配置测试标题"));
+}
+
+#[tokio::test]
+async fn openai_client_uses_prompt_output_token_limit_when_present() {
+    async fn handler(Json(payload): Json<Value>) -> impl IntoResponse {
+        assert_eq!(payload["max_output_tokens"], 900);
+
+        responses_stream("{\"title\":\"单次预算测试\",\"hook\":\"测试hook\",\"scenes\":[]}")
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route("/responses", post(handler));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = OpenAIClient::new(OpenAIConfig {
+        api_key: "test-key".to_string(),
+        base_url: format!("http://{address}/responses"),
+        model: "test-model".to_string(),
+        timeout_seconds: 5,
+        responses_reasoning_effort: Some("xhigh".to_string()),
+        responses_max_output_tokens: 3000,
+    })
+    .unwrap();
+
+    let response = client
+        .generate_script(LLMPrompt {
+            system: "system prompt".to_string(),
+            user: "user prompt".to_string(),
+            max_output_tokens: Some(900),
+        })
+        .await
+        .unwrap();
+
+    assert!(response.contains("单次预算测试"));
 }
 
 #[tokio::test]
@@ -194,6 +234,7 @@ async fn openai_client_omits_responses_reasoning_when_disabled() {
         .generate_script(LLMPrompt {
             system: "system prompt".to_string(),
             user: "user prompt".to_string(),
+            max_output_tokens: None,
         })
         .await
         .unwrap();
@@ -228,6 +269,7 @@ async fn openai_client_formats_provider_errors_with_status_and_body() {
         .generate_script(LLMPrompt {
             system: "system prompt".to_string(),
             user: "user prompt".to_string(),
+            max_output_tokens: None,
         })
         .await
         .unwrap_err();

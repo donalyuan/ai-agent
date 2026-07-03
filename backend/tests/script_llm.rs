@@ -1,4 +1,4 @@
-use novex_api::agents::llm::{ScriptLLMOutput, ScriptPromptBuilder};
+use novex_api::agents::llm::{ScriptLLMOutput, ScriptPromptBuilder, ScriptSceneLLMOutput};
 use novex_api::agents::models::{GenerateScriptRequest, ScriptStyle};
 use serde_json::json;
 use uuid::Uuid;
@@ -36,6 +36,28 @@ fn script_prompt_builder_marks_parent_requests_as_variants() {
 
     assert!(prompt.user.contains("差异化版本"));
     assert!(prompt.user.contains("避免复用相同表达"));
+}
+
+#[test]
+fn script_prompt_builder_can_create_small_metadata_and_scene_prompts() {
+    let request = GenerateScriptRequest {
+        project_id: Uuid::new_v4(),
+        topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
+        style: Some(ScriptStyle::Knowledge),
+        scene_count: Some(6),
+        parent_id: None,
+    };
+
+    let metadata_prompt = ScriptPromptBuilder::build_metadata(&request);
+    assert!(metadata_prompt.user.contains("只输出 title 和 hook"));
+    assert!(!metadata_prompt.user.contains("\"scenes\": ["));
+    assert_eq!(metadata_prompt.max_output_tokens, Some(400));
+
+    let scene_prompt = ScriptPromptBuilder::build_single_scene(&request, 4);
+    assert!(scene_prompt.user.contains("当前分镜序号：4"));
+    assert!(scene_prompt.user.contains("scene.sequence 必须等于 4"));
+    assert!(scene_prompt.user.contains("只输出单个 scene 对象"));
+    assert_eq!(scene_prompt.max_output_tokens, Some(1_200));
 }
 
 #[test]
@@ -141,4 +163,41 @@ fn script_llm_output_rejects_text_outside_business_limits() {
     let error = ScriptLLMOutput::parse_and_validate(&raw, 1).unwrap_err();
 
     assert!(error.to_string().contains("narration"));
+}
+
+#[test]
+fn script_scene_llm_output_parses_and_validates_expected_sequence() {
+    let raw = json!({
+        "scene": {
+            "sequence": 3,
+            "narration": "AI 正在把重复劳动交给机器，把判断、创意和同理心留给人类。接受 AI 的关键，是学会提问、验证结果，并把它当成放大能力的工具。",
+            "visual_description": "人类和 AI 在同一张工作台前协作，屏幕显示分析结果和人工确认标记。",
+            "emotion": "理性",
+            "duration_sec": 9
+        }
+    })
+    .to_string();
+
+    let output = ScriptSceneLLMOutput::parse_and_validate(&raw, 3).unwrap();
+
+    assert_eq!(output.scene.sequence, 3);
+    assert!(output.scene.narration.contains("接受 AI"));
+}
+
+#[test]
+fn script_scene_llm_output_rejects_wrong_sequence() {
+    let raw = json!({
+        "scene": {
+            "sequence": 2,
+            "narration": "AI 正在把重复劳动交给机器，把判断、创意和同理心留给人类。接受 AI 的关键，是学会提问、验证结果，并把它当成放大能力的工具。",
+            "visual_description": "人类和 AI 在同一张工作台前协作，屏幕显示分析结果和人工确认标记。",
+            "emotion": "理性",
+            "duration_sec": 9
+        }
+    })
+    .to_string();
+
+    let error = ScriptSceneLLMOutput::parse_and_validate(&raw, 3).unwrap_err();
+
+    assert!(error.to_string().contains("expected sequence 3"));
 }

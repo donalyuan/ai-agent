@@ -4,6 +4,8 @@ use axum::{routing::post, Json, Router};
 use novex_api::{build_app_with_state, AppConfig, AppState};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tower::ServiceExt;
@@ -184,6 +186,51 @@ async fn local_openai_base_url() -> String {
     format!("http://{address}/v1")
 }
 
+fn chat_response(content: Value) -> Json<Value> {
+    Json(json!({
+        "choices": [
+            {
+                "message": {
+                    "content": content.to_string()
+                }
+            }
+        ]
+    }))
+}
+
+async fn local_scripted_openai_base_url(
+    responses: Vec<Value>,
+    requests: Arc<Mutex<Vec<Value>>>,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post({
+            let responses = responses.clone();
+            let requests = requests.clone();
+            move |Json(payload): Json<Value>| {
+                let responses = responses.clone();
+                let requests = requests.clone();
+                async move {
+                    requests.lock().unwrap().push(payload);
+                    let content = responses
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .expect("scripted OpenAI response should exist");
+                    chat_response(content)
+                }
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{address}/v1")
+}
+
 async fn response_json(response: axum::response::Response) -> Value {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -282,6 +329,111 @@ async fn script_routes_generate_read_list_and_update_status() {
     assert_eq!(update_response.status(), StatusCode::OK);
     let updated = response_json(update_response).await;
     assert_eq!(updated["status"], "approved");
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn generate_route_uses_stepwise_single_scene_mode_for_xhigh() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let openai_base_url = local_scripted_openai_base_url(
+        vec![
+            json!({
+                "title": "AI时代人类新能力",
+                "hook": "未来淘汰你的不是AI，而是不会用AI的人。"
+            }),
+            json!({
+                "scene": {
+                    "sequence": 1,
+                    "narration": "AI 正在把重复劳动交给机器，把判断、创意和同理心留给人类。接受 AI 的关键，是学会提问、验证结果，并把它当成放大能力的工具。",
+                    "visual_description": "人类和 AI 在同一张工作台前协作，屏幕显示分析结果和人工确认标记。",
+                    "emotion": "理性",
+                    "duration_sec": 9
+                }
+            }),
+            json!({
+                "scene": {
+                    "sequence": 2,
+                    "narration": "真正接受 AI 不是盲目依赖，而是把它放进清晰流程里。人负责目标、边界和责任，AI 负责加速搜索、整理和生成初稿。",
+                    "visual_description": "画面展示目标清单、AI 输出草稿和人工检查标记依次出现。",
+                    "emotion": "平静",
+                    "duration_sec": 9
+                }
+            }),
+            json!({
+                "scene": {
+                    "sequence": 3,
+                    "narration": "当每个人都能调用 AI，稀缺的不再是答案，而是提出好问题、判断真假、整合资源，并持续做出负责决策的能力。",
+                    "visual_description": "多人面对同一份 AI 答案，主角标出风险点并给出最终方案。",
+                    "emotion": "鼓舞",
+                    "duration_sec": 9
+                }
+            }),
+        ],
+        requests.clone(),
+    )
+    .await;
+    let app = build_app_with_state(
+        AppState::new(
+            AppConfig {
+                environment: "test".to_string(),
+                database_url: test_url,
+                redis_url: "redis://127.0.0.1:6379/15".to_string(),
+                openai_api_key: "test-key".to_string(),
+                openai_base_url,
+                openai_model: "test-model".to_string(),
+                openai_timeout_seconds: 5,
+                openai_reasoning_effort: Some("xhigh".to_string()),
+                openai_max_output_tokens: 3000,
+            },
+            test_pool.clone(),
+            None,
+        )
+        .unwrap(),
+    );
+
+    let generate_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/scripts/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "project_id": project_id,
+                        "topic": "AI 如何改变人类，人类该如何接受 AI",
+                        "style": "knowledge",
+                        "scene_count": 3
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(generate_response.status(), StatusCode::OK);
+    let generated = response_json(generate_response).await;
+    assert_eq!(generated["scenes"].as_array().unwrap().len(), 3);
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[0]["messages"][1]["content"]
+        .as_str()
+        .unwrap()
+        .contains("只输出 title 和 hook"));
+    assert!(requests[1]["messages"][1]["content"]
+        .as_str()
+        .unwrap()
+        .contains("当前分镜序号：1"));
+    assert!(requests[3]["messages"][1]["content"]
+        .as_str()
+        .unwrap()
+        .contains("当前分镜序号：3"));
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

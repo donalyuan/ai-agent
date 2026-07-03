@@ -1,4 +1,7 @@
-use crate::agents::llm::{LLMOutputError, ScriptLLMOutput, ScriptPromptBuilder};
+use crate::agents::llm::{
+    LLMOutputError, ScriptLLMOutput, ScriptLLMScene, ScriptMetadataLLMOutput, ScriptPromptBuilder,
+    ScriptSceneLLMOutput,
+};
 use crate::agents::models::{
     GenerateScriptRequest, Scene, Script, ScriptListFilter, ScriptStatus, ScriptSummary,
 };
@@ -20,6 +23,13 @@ pub struct ScriptAgentService {
     llm_client: Arc<dyn LLMClient>,
     script_repository: Arc<dyn ScriptRepository>,
     project_repository: Arc<dyn ProjectRepository>,
+    generation_mode: ScriptGenerationMode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScriptGenerationMode {
+    Complete,
+    StepwiseSingleScene,
 }
 
 impl ScriptAgentService {
@@ -32,21 +42,24 @@ impl ScriptAgentService {
             llm_client,
             script_repository,
             project_repository,
+            generation_mode: ScriptGenerationMode::Complete,
         }
+    }
+
+    pub fn with_generation_mode(mut self, generation_mode: ScriptGenerationMode) -> Self {
+        self.generation_mode = generation_mode;
+        self
     }
 
     pub async fn generate_script(
         &self,
         request: GenerateScriptRequest,
     ) -> Result<Script, ScriptAgentError> {
-        request.validate().map_err(|error| {
-            ScriptAgentError::Validation(format!("invalid generate script request: {error}"))
-        })?;
-        self.ensure_project_exists(request.project_id).await?;
-        if let Some(parent_id) = request.parent_id {
-            self.ensure_parent_script_matches_project(parent_id, request.project_id)
-                .await?;
+        if self.generation_mode == ScriptGenerationMode::StepwiseSingleScene {
+            return self.generate_script_stepwise(request).await;
         }
+
+        self.prepare_generate_request(&request).await?;
 
         let prompt = ScriptPromptBuilder::build(&request);
         let scene_count = request.scene_count_or_default();
@@ -62,7 +75,7 @@ impl ScriptAgentService {
             match ScriptLLMOutput::parse_and_validate(&raw, scene_count) {
                 Ok(output) => {
                     let retry_count = attempt_index;
-                    let script = self.build_script(request, output, retry_count);
+                    let script = self.build_script(request, output, retry_count, "complete");
                     return self
                         .script_repository
                         .save_script(script)
@@ -80,6 +93,36 @@ impl ScriptAgentService {
                 .map(|error| error.to_string())
                 .unwrap_or_else(|| "LLM output parse failed".to_string()),
         ))
+    }
+
+    pub async fn generate_script_stepwise(
+        &self,
+        request: GenerateScriptRequest,
+    ) -> Result<Script, ScriptAgentError> {
+        self.prepare_generate_request(&request).await?;
+
+        let (metadata, metadata_retries) = self.generate_metadata(&request).await?;
+        let scene_count = request.scene_count_or_default();
+        let mut scenes = Vec::with_capacity(usize::from(scene_count));
+        let mut retry_count = metadata_retries;
+
+        for sequence in 1..=scene_count {
+            let (scene, scene_retries) = self.generate_single_scene(&request, sequence).await?;
+            retry_count += scene_retries;
+            scenes.push(scene);
+        }
+
+        let output = ScriptLLMOutput {
+            title: metadata.title,
+            hook: metadata.hook,
+            scenes,
+        };
+        let script = self.build_script(request, output, retry_count, "stepwise_single_scene");
+
+        self.script_repository
+            .save_script(script)
+            .await
+            .map_err(ScriptAgentError::from)
     }
 
     pub async fn get_script(&self, script_id: Uuid) -> Result<Script, ScriptAgentError> {
@@ -137,6 +180,76 @@ impl ScriptAgentService {
         }
     }
 
+    async fn prepare_generate_request(
+        &self,
+        request: &GenerateScriptRequest,
+    ) -> Result<(), ScriptAgentError> {
+        request.validate().map_err(|error| {
+            ScriptAgentError::Validation(format!("invalid generate script request: {error}"))
+        })?;
+        self.ensure_project_exists(request.project_id).await?;
+        if let Some(parent_id) = request.parent_id {
+            self.ensure_parent_script_matches_project(parent_id, request.project_id)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn generate_metadata(
+        &self,
+        request: &GenerateScriptRequest,
+    ) -> Result<(ScriptMetadataLLMOutput, usize), ScriptAgentError> {
+        let prompt = ScriptPromptBuilder::build_metadata(request);
+        let mut last_parse_error: Option<LLMOutputError> = None;
+
+        for attempt_index in 0..MAX_LLM_PARSE_ATTEMPTS {
+            let raw = self
+                .llm_client
+                .generate_script(prompt.clone().into())
+                .await
+                .map_err(ScriptAgentError::from)?;
+
+            match ScriptMetadataLLMOutput::parse_and_validate(&raw) {
+                Ok(output) => return Ok((output, attempt_index)),
+                Err(error) => last_parse_error = Some(error),
+            }
+        }
+
+        Err(ScriptAgentError::ParseError(
+            last_parse_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "LLM metadata parse failed".to_string()),
+        ))
+    }
+
+    async fn generate_single_scene(
+        &self,
+        request: &GenerateScriptRequest,
+        sequence: u8,
+    ) -> Result<(ScriptLLMScene, usize), ScriptAgentError> {
+        let prompt = ScriptPromptBuilder::build_single_scene(request, sequence);
+        let mut last_parse_error: Option<LLMOutputError> = None;
+
+        for attempt_index in 0..MAX_LLM_PARSE_ATTEMPTS {
+            let raw = self
+                .llm_client
+                .generate_script(prompt.clone().into())
+                .await
+                .map_err(ScriptAgentError::from)?;
+
+            match ScriptSceneLLMOutput::parse_and_validate(&raw, sequence) {
+                Ok(output) => return Ok((output.scene, attempt_index)),
+                Err(error) => last_parse_error = Some(error),
+            }
+        }
+
+        Err(ScriptAgentError::ParseError(
+            last_parse_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| format!("LLM scene {sequence} parse failed")),
+        ))
+    }
+
     async fn ensure_parent_script_matches_project(
         &self,
         parent_id: Uuid,
@@ -157,6 +270,7 @@ impl ScriptAgentService {
         request: GenerateScriptRequest,
         output: ScriptLLMOutput,
         retry_count: usize,
+        generation_mode: &str,
     ) -> Script {
         let now = Utc::now();
         let scenes: Vec<Scene> = output
@@ -178,7 +292,8 @@ impl ScriptAgentService {
             "style": style.as_str(),
             "total_duration_sec": total_duration_sec,
             "metadata": {
-                "retry_count": retry_count
+                "retry_count": retry_count,
+                "generation_mode": generation_mode
             }
         });
 
