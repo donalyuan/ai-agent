@@ -14,6 +14,8 @@ video-agent 仓库已引入两个前端设计参考 skill：
 
 前端页面新增或修改时，必须先使用这两个 skill 补齐设计上下文，再进入 `Pencil MCP` 原型阶段。
 
+视频工作台原型源文件固定为 `docs/prototypes/video-agent/video-agent.pen`。涉及视频工作台的原型修改必须更新该文件，不再使用 `docs/prototypes/script-agent-workspace/` 截图目录。
+
 - `awesome-design-md` 用于补齐 `DESIGN.md` 风格上下文。
 - `awesome-design-systems` 用于引用真实设计系统案例，避免主观臆造。
 

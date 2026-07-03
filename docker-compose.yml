@@ -85,3 +85,21 @@ services:
     depends_on:
       ai-agent-api:
         condition: service_healthy
+
+  ai-agent-video-agent:
+    build:
+      context: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/apps/video-agent
+      dockerfile: Dockerfile
+    container_name: ai-agent-video-agent
+    working_dir: /app
+    command: sh -lc "npm install && npm run dev"
+    ports:
+      - "18183:3000"
+    volumes:
+      - ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/apps/video-agent:/app
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:18180
+      NEXT_PUBLIC_WORKER_BASE_URL: http://localhost:18181
+    depends_on:
+      ai-agent-api:
+        condition: service_healthy

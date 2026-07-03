@@ -33,7 +33,7 @@ docs/                    架构、需求、项目记忆、实施计划和交付�
 本项目开发环境必须从顶层 Compose 入口启动，并复用 `/server/docker-compose.yml` 中已经运行的 `biga-postgres` 与 `bs-redis`。
 
 ```bash
-docker compose -f /server/docker-compose.yml up -d --build ai-agent-api ai-agent-video-worker ai-agent-admin
+docker compose -f /server/docker-compose.yml up -d --build ai-agent-api ai-agent-video-worker ai-agent-admin ai-agent-video-agent
 ```
 
 ### 访问地址
@@ -41,9 +41,10 @@ docker compose -f /server/docker-compose.yml up -d --build ai-agent-api ai-agent
 - API health: `http://127.0.0.1:18180/health`
 - API ready: `http://127.0.0.1:18180/ready`
 - Video worker health: `http://127.0.0.1:18181/health`
-- 智能体工作台: `http://127.0.0.1:18182`
+- 管理后台: `http://127.0.0.1:18182`
+- 视频生产工作台: `http://127.0.0.1:18183`
 
-`admin/` 当前首屏为 `AI-AGENT / 智能体工作台`，左侧预留六个智能体入口，当前实现脚本智能体的项目、脚本生成、时间轴对照详情和状态更新闭环。
+`admin/` 当前首屏为 Novex 平台管理后台入口，承载用户、权限、模型、工具、任务、日志、成本、限额和环境健康等控制面能力。`apps/video-agent/` 承载 `VEDIO-AGENT / 视频工作台`，左侧预留六个智能体入口，当前实现脚本智能体的项目选择、脚本生成、时间轴对照详情和状态更新闭环。
 
 ### 常用验证
 
@@ -53,7 +54,10 @@ docker exec ai-agent-api cargo test -p novex-api
 docker exec ai-agent-admin npm run test
 docker exec ai-agent-admin npm run lint
 docker exec ai-agent-admin npm run build
-openspec validate script-agent-workspace --json
+docker exec ai-agent-video-agent npm run test
+docker exec ai-agent-video-agent npm run lint
+docker exec ai-agent-video-agent npm run build
+openspec validate realign-video-agent-workspace-boundary --json
 ```
 
 ## 架构原则

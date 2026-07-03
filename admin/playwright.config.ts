@@ -20,7 +20,7 @@ export default defineConfig({
     launchOptions: chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : undefined,
   },
   webServer: {
-    command: "npm run dev",
+    command: `PORT=${port} npm run dev`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

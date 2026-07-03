@@ -8,9 +8,9 @@
 
 ## What Changes
 
-1. 明确 `apps/video-agent/` 是 `AI-AGENT / 智能体工作台` 的正式承载边界，负责视频生产流程。
+1. 明确 `apps/video-agent/` 是 `VEDIO-AGENT / 视频工作台` 的正式承载边界，负责视频生产流程。
 2. 明确 `admin/` 收敛为平台管理后台，不承载日常视频内容生产页面。
-3. 要求后续实现将当前 `admin/` 中的智能体工作台迁移或重建到 `apps/video-agent/`，而不是废弃已有页面。
+3. 要求后续实现将当前 `admin/` 中的视频工作台迁移或重建到 `apps/video-agent/`，而不是废弃已有页面。
 4. 要求更新 Compose、README、记忆文件、OpenSpec、测试和 Playwright 验证入口，使 `apps/video-agent` 有独立可运行前端服务。
 5. 保持桌面端约束：本 change 不引入移动端原型、移动端适配或移动端验收。
 

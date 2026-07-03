@@ -1,6 +1,6 @@
 ## Overview
 
-本 change 修正前端代码归属：`AI-AGENT / 智能体工作台` 是视频内容生产业务工作台，正式承载位置应为 `apps/video-agent/`。`admin/` 保留为平台控制面管理后台，不继续承载脚本生产、素材生产、视频生成、发布排期等日常生产流程。
+本 change 修正前端代码归属：`VEDIO-AGENT / 视频工作台` 是视频内容生产业务工作台，正式承载位置应为 `apps/video-agent/`。`admin/` 保留为平台控制面管理后台，不继续承载脚本生产、素材生产、视频生成、发布排期等日常生产流程。
 
 这不是废弃当前页面，而是把当前 `admin/` 中已确认的桌面工作台、蓝色视觉风格、六个智能体菜单、脚本生成表单、分镜时间轴对照视图和 Playwright 验证，迁移到正确的业务应用边界。
 
@@ -37,10 +37,11 @@
 
 1. 在 `apps/video-agent/` 下建立 Next.js + TypeScript 前端应用，复用当前 `admin/` 的页面组件、API client、样式、Vitest 单测和 Playwright E2E。
 2. 为新应用增加 Compose 服务，例如 `ai-agent-video-agent`，分配独立宿主机端口。
-3. 将 `AI-AGENT / 智能体工作台` 首屏迁入 `apps/video-agent`，并保持桌面端原型确认的视觉和交互。
-4. 修改测试，使正式 E2E 针对 `apps/video-agent` 运行，并继续覆盖六个智能体菜单、分镜数 3-12、无项目管理入口、时间轴对照视图。
-5. 将 `admin/` 回退或改造成平台管理入口，不再展示脚本生产页面。
-6. 更新 README、`MEMORY.md`、`docs/memory/project-tech-stack.md` 和 OpenSpec 主规格。
+3. 将 `VEDIO-AGENT / 视频工作台` 首屏迁入 `apps/video-agent`，并保持桌面端原型确认的视觉和交互。
+4. 将视频工作台 Pencil 原型源文件固定为 `docs/prototypes/video-agent/video-agent.pen`，后续原型修改都更新该文件，不再使用 `docs/prototypes/script-agent-workspace/` 截图目录。
+5. 修改测试，使正式 E2E 针对 `apps/video-agent` 运行，并继续覆盖六个智能体菜单、分镜数 3-12、无项目管理入口、时间轴对照视图。
+6. 将 `admin/` 回退或改造成平台管理入口，不再展示脚本生产页面。
+7. 更新 README、`MEMORY.md`、`docs/memory/project-tech-stack.md` 和 OpenSpec 主规格。
 
 ## Risks
 

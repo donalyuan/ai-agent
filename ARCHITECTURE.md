@@ -518,12 +518,13 @@ admin/app/(main)/system/identity/
 
 ```text
 apps/
+  video-agent/     视频内容生产业务工作台，承载 VEDIO-AGENT / 视频工作台
   training-web/    员工培训前台
   chat-web/        知识库问答前台
   agent-workspace/ Agent 工作台
 ```
 
-POC 阶段可以先在 `admin` 内实现一个轻量体验页，验证链路后再拆独立前台。
+通用 AI 管理、模型、工具、MCP、任务、日志、成本、限额和健康检查能力归属 `admin`。视频内容生产业务工作台归属 `apps/video-agent`；不得再把脚本生产、素材匹配、视频生成、发布排期或优化建议等日常生产流程作为 `admin` 的正式页面扩展。
 
 ### 6.1 默认应用模板
 

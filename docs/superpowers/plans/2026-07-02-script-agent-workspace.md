@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the confirmed desktop `AI-AGENT / 智能体工作台` with six-agent navigation, project selection/creation, script generation/list/detail/status workflows, and a timeline comparison detail view.
+**Goal:** Build the confirmed desktop `VEDIO-AGENT / 视频工作台` with six-agent navigation, project selection/creation, script generation/list/detail/status workflows, and a timeline comparison detail view.
 
 **Architecture:** Add minimal project list/create support to the existing Rust API, then replace the `admin/` landing check page with a client-side Next.js workbench. The UI will use a typed fetch client and keep state local to the page; only the script agent module is implemented while the other five agent entries remain reserved navigation items.
 

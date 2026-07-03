@@ -1,34 +1,40 @@
 # script-agent-workspace Specification
 
 ## Purpose
-TBD - created by archiving change script-agent-workspace. Update Purpose after archive.
+定义 `apps/video-agent/` 中 `VEDIO-AGENT / 视频工作台` 的桌面端脚本智能体前端闭环，包括项目选择、脚本生成、脚本列表、时间轴对照详情、状态流转、异步状态反馈和设计确认约束。
 ## Requirements
 ### Requirement: 前端实现前必须完成设计上下文与 Pencil 原型
 
-系统 SHALL 在实现脚本 Agent 工作台前完成设计上下文、真实设计系统参考和 `Pencil MCP` 原型确认，避免直接凭主观描述进入编码。
+系统 SHALL 在实现或迁移脚本 Agent 工作台前完成设计上下文、真实设计系统参考和 `Pencil MCP` 原型确认，避免直接凭主观描述进入编码。正式视频生产工作台的实现边界 SHALL 为 `apps/video-agent/`，并且工作台一级导航 SHALL 使用视频生产业务流程菜单，而不是只按 Agent 预留入口组织。
 
 #### Scenario: 生成工作台实现计划前完成设计上下文
 
-- **GIVEN** 仓库尚无项目根 `DESIGN.md`
-- **WHEN** 开发者准备实现脚本 Agent 工作台
-- **THEN** 系统 SHALL 先创建项目根 `DESIGN.md`
-- **AND** `DESIGN.md` SHALL 定义 `AI-AGENT` 工作台的颜色、字体、间距、按钮、表单、列表、状态标签和响应式规则
-- **AND** `DESIGN.md` SHALL 明确工作台展示名为“智能体工作台”，并预留选题、脚本、素材、视频、发布、优化六个智能体菜单入口
+- **GIVEN** 仓库尚无项目根 `DESIGN.md`，或视频工作台导航结构发生变化
+- **WHEN** 开发者准备实现或迁移脚本 Agent 工作台
+- **THEN** 系统 SHALL 先创建或更新项目根 `DESIGN.md`
+- **AND** `DESIGN.md` SHALL 定义 `VEDIO-AGENT` 工作台的颜色、字体、间距、按钮、表单、列表、状态标签和响应式规则
+- **AND** `DESIGN.md` SHALL 明确工作台展示名为“视频工作台”
+- **AND** `DESIGN.md` SHALL 明确一级导航为内容策略、脚本创作、素材管理、作品生产、发布运营、数据分析、工作流任务
+- **AND** `DESIGN.md` SHALL 明确底层 Agent 状态只能作为二级菜单、模块状态或执行状态展示，不得替代一级业务菜单
+- **AND** `DESIGN.md` SHALL 明确正式实现归属 `apps/video-agent/`
 - **AND** 设计记录 SHALL 明确参考 `Ant Design`、`IBM Carbon` 和 `GitHub Primer` 的哪些模式
 
 #### Scenario: Pencil 原型确认后才能编码
 
-- **GIVEN** 脚本 Agent 工作台涉及新增或修改前端页面
-- **WHEN** 开发者准备修改 `admin/` 代码
-- **THEN** 系统 SHALL 先通过 `Pencil MCP` 输出桌面工作台原型
-- **AND** 原型 SHALL 展示 `AI-AGENT` / “智能体工作台”标题和六个智能体菜单入口
+- **GIVEN** 脚本 Agent 工作台涉及新增、迁移或修改前端页面
+- **WHEN** 开发者准备修改 `apps/video-agent/` 中的工作台代码
+- **THEN** 系统 SHALL 先通过 `Pencil MCP` 输出桌面工作台原型，或复用已由用户确认且未改变交互范围的桌面原型
+- **AND** 视频工作台 Pencil 原型源文件 SHALL 保存为 `docs/prototypes/video-agent/video-agent.pen`
+- **AND** 后续视频工作台原型修改 SHALL 更新 `docs/prototypes/video-agent/video-agent.pen`，而不是使用 `docs/prototypes/script-agent-workspace/` 截图目录
+- **AND** 原型 SHALL 展示 `VEDIO-AGENT` / “视频工作台”标题
+- **AND** 原型 SHALL 展示内容策略、脚本创作、素材管理、作品生产、发布运营、数据分析、工作流任务七个一级业务菜单
 - **AND** 原型 SHALL 覆盖无项目、无脚本、生成中、生成失败和状态更新失败状态
 - **AND** 用户确认原型后 SHALL 进入编码
 - **AND** 若当前环境没有 `Pencil MCP`，系统 SHALL 暂停实现并等待用户明确批准替代方案
 
 ### Requirement: 工作台必须支持项目选择
 
-系统 SHALL 提供项目 API 和前端项目选择能力，使脚本生成始终绑定真实存在的内容项目，而不得硬编码 `project_id`。脚本工作台 SHALL NOT 提供项目创建或项目管理入口。
+系统 SHALL 在 `apps/video-agent/` 中提供项目 API 和前端项目选择能力，使脚本生成始终绑定真实存在的内容项目，而不得硬编码 `project_id`。脚本工作台 SHALL NOT 提供项目创建或项目管理入口。
 
 #### Scenario: 操作者选择已有项目
 
@@ -40,11 +46,11 @@ TBD - created by archiving change script-agent-workspace. Update Purpose after a
 
 ### Requirement: 工作台必须生成并展示结构化脚本
 
-系统 SHALL 在 `admin/` 中提供脚本生成表单和脚本详情视图，打通“生成脚本 -> 查看分镜”的浏览器闭环。
+系统 SHALL 在 `apps/video-agent/` 中提供脚本生成表单和脚本详情视图，打通“生成脚本 -> 查看分镜”的浏览器闭环。当前 `admin/` 中已实现的工作台 SHALL 作为迁移资产复用，而不得因为目录边界修正被废弃。
 
 #### Scenario: 从选题生成脚本并打开详情
 
-- **GIVEN** 操作者已经选中一个项目
+- **GIVEN** 操作者已经在 `apps/video-agent` 工作台选中一个项目
 - **WHEN** 操作者提交 `topic`、`style` 和 `scene_count`
 - **THEN** 页面 SHALL 调用 `POST /api/scripts/generate`
 - **AND** `scene_count` SHALL 支持 3 到 12 的整数
@@ -64,7 +70,7 @@ TBD - created by archiving change script-agent-workspace. Update Purpose after a
 
 ### Requirement: 工作台必须支持脚本列表筛选与状态更新
 
-系统 SHALL 支持按状态筛选脚本列表，并允许操作者更新当前脚本状态。
+系统 SHALL 在 `apps/video-agent/` 中支持按状态筛选脚本列表，并允许操作者更新当前脚本状态。
 
 #### Scenario: 按状态筛选脚本
 
@@ -84,12 +90,12 @@ TBD - created by archiving change script-agent-workspace. Update Purpose after a
 
 ### Requirement: 工作台必须提供完整的加载、空和错误状态
 
-系统 SHALL 对脚本 Agent 工作台的关键异步流程提供明确状态反馈，避免用户误判操作是否生效。
+系统 SHALL 对 `apps/video-agent/` 中脚本 Agent 工作台的关键异步流程提供明确状态反馈，避免用户误判操作是否生效。工作台 SHALL 只覆盖桌面端运营生产场景，不包含移动端原型、移动端适配或移动端验收。
 
 #### Scenario: API 不可用
 
 - **GIVEN** `novex-api` 不可用或 `/health` 返回失败
-- **WHEN** 操作者打开工作台
+- **WHEN** 操作者打开 `apps/video-agent` 工作台
 - **THEN** 页面 SHALL 显示服务不可用状态
 - **AND** 页面 SHALL 禁用生成脚本和状态更新等写操作
 - **AND** 页面 SHALL 保留基础布局，不显示崩溃堆栈

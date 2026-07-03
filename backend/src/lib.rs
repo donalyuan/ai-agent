@@ -9,7 +9,7 @@ use axum::{
 use novex_model::{LLMError, LLMPrompt, OpenAIClient, OpenAIConfig};
 use repositories::{
     CreateProjectInput, PostgresProjectRepository, PostgresScriptRepository, ProjectRepository,
-    ProjectRepositoryError,
+    ProjectRepositoryError, PostgresWorkspaceMenuRepository, WorkspaceMenuRepositoryError,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::agents::models::{
     CreateProjectRequest, GenerateScriptRequest, ProjectListResponse, ProjectResponse,
     ScriptListFilter, ScriptListResponse, ScriptResponse, UpdateScriptStatusRequest,
-    UpdateScriptStatusResponse,
+    UpdateScriptStatusResponse, WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
 };
 
 pub mod agents;
@@ -127,6 +127,15 @@ impl AppState {
         Ok(PostgresProjectRepository::new(pool))
     }
 
+    fn workspace_menu_repository(&self) -> Result<PostgresWorkspaceMenuRepository, ScriptApiError> {
+        let pool = self
+            .pg_pool
+            .clone()
+            .ok_or_else(|| ScriptApiError::State("database pool is not configured".to_string()))?;
+
+        Ok(PostgresWorkspaceMenuRepository::new(pool))
+    }
+
     fn script_agent_service_without_llm(&self) -> Result<ScriptAgentService, ScriptApiError> {
         let pool = self
             .pg_pool
@@ -207,6 +216,7 @@ pub fn build_app_with_state(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
+        .route("/api/video-workspace/menus", get(list_workspace_menus))
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/scripts/generate", post(generate_script))
         .route("/api/scripts/:script_id", get(get_script))
@@ -305,6 +315,20 @@ async fn list_projects(
     }))
 }
 
+async fn list_workspace_menus(
+    State(state): State<AppState>,
+) -> Result<Json<WorkspaceMenuListResponse>, ScriptApiError> {
+    let repository = state.workspace_menu_repository()?;
+    let menus = repository.list_visible_menu_tree().await?;
+
+    Ok(Json(WorkspaceMenuListResponse {
+        menus: menus
+            .into_iter()
+            .map(WorkspaceMenuNodeResponse::from)
+            .collect(),
+    }))
+}
+
 async fn generate_script(
     State(state): State<AppState>,
     ValidJson(request): ValidJson<GenerateScriptRequest>,
@@ -380,6 +404,7 @@ enum ScriptApiError {
     State(String),
     Agent(ScriptAgentError),
     ProjectRepository(ProjectRepositoryError),
+    WorkspaceMenuRepository(WorkspaceMenuRepositoryError),
     ProjectValidation(String),
     JsonRejection(JsonRejection),
 }
@@ -396,6 +421,12 @@ impl From<ProjectRepositoryError> for ScriptApiError {
     }
 }
 
+impl From<WorkspaceMenuRepositoryError> for ScriptApiError {
+    fn from(error: WorkspaceMenuRepositoryError) -> Self {
+        Self::WorkspaceMenuRepository(error)
+    }
+}
+
 impl IntoResponse for ScriptApiError {
     fn into_response(self) -> axum::response::Response {
         match self {
@@ -407,6 +438,11 @@ impl IntoResponse for ScriptApiError {
             Self::ProjectRepository(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "项目存储失败", "details": error.to_string() })),
+            )
+                .into_response(),
+            Self::WorkspaceMenuRepository(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "视频工作台菜单读取失败", "details": error.to_string() })),
             )
                 .into_response(),
             Self::ProjectValidation(message) => {

@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./styles.css";
 
 export const metadata: Metadata = {
-  title: "AI-AGENT 智能体工作台",
-  description: "AI-AGENT 智能体工作台",
+  title: "Novex 平台管理后台",
+  description: "Novex 平台管理后台",
 };
 
 export default function RootLayout({

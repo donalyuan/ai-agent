@@ -5,5 +5,6 @@ pub use request::{
     CreateProjectRequest, GenerateScriptRequest, ProjectListResponse, ProjectResponse,
     SceneResponse, ScriptListFilter, ScriptListResponse, ScriptResponse, ScriptStyle,
     ScriptSummaryResponse, UpdateScriptStatusRequest, UpdateScriptStatusResponse,
+    WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
 };
 pub use script::{Scene, Script, ScriptStatus, ScriptStatusParseError, ScriptSummary};

@@ -144,6 +144,7 @@ async fn migrations_create_video_agent_core_schema() {
         "agent_steps",
         "viral_videos",
         "content_strategies",
+        "video_workspace_menus",
     ] {
         assert!(
             table_exists(&test_pool, table).await,
@@ -158,6 +159,7 @@ async fn migrations_create_video_agent_core_schema() {
         "idx_generation_tasks_status",
         "idx_publish_tasks_status",
         "idx_agent_runs_type",
+        "idx_video_workspace_menus_parent_sort",
     ] {
         assert!(
             index_exists(&test_pool, index).await,
@@ -173,6 +175,91 @@ async fn migrations_create_video_agent_core_schema() {
         constraint_exists(&test_pool, "scenes", "scenes_script_sequence_unique").await,
         "scene sequence should be unique per script"
     );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "video_workspace_menus",
+            "video_workspace_menus_menu_key_unique"
+        )
+        .await,
+        "video workspace menu keys should be unique"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "video_workspace_menus",
+            "video_workspace_menus_status_check"
+        )
+        .await,
+        "video workspace menu status should be constrained"
+    );
+
+    let top_level_menu_labels = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT label
+        FROM video_workspace_menus
+        WHERE parent_id IS NULL
+        ORDER BY sort_order ASC
+        "#,
+    )
+    .fetch_all(&test_pool)
+    .await
+    .expect("top-level menu seed query should run");
+    assert_eq!(
+        top_level_menu_labels,
+        vec![
+            "内容策略",
+            "脚本创作",
+            "素材管理",
+            "作品生产",
+            "发布运营",
+            "数据分析",
+            "工作流任务",
+        ]
+    );
+
+    let script_creation = sqlx::query_as::<_, (bool, String)>(
+        r#"
+        SELECT is_enabled, status
+        FROM video_workspace_menus
+        WHERE menu_key = 'script-creation'
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .expect("script creation seed query should run");
+    assert_eq!(script_creation, (true, "active".to_string()));
+
+    let planned_top_level_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM video_workspace_menus
+        WHERE parent_id IS NULL
+          AND menu_key <> 'script-creation'
+          AND is_visible = true
+          AND is_enabled = false
+          AND status = 'planned'
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .expect("planned menu seed query should run");
+    assert_eq!(planned_top_level_count, 6);
+
+    let script_child_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM video_workspace_menus child
+        JOIN video_workspace_menus parent ON parent.id = child.parent_id
+        WHERE parent.menu_key = 'script-creation'
+          AND child.menu_key = 'script-generator'
+          AND child.agent_key = 'script-generation-agent'
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .expect("script child menu seed query should run");
+    assert_eq!(script_child_count, 1);
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

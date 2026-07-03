@@ -11,7 +11,7 @@
 - **WHEN** 开发者查看 `apps/`
 - **THEN** 系统 SHALL 包含 `apps/video-agent`
 - **AND** `apps/video-agent` SHALL 说明它是 Novex 的视频内容生产应用
-- **AND** `apps/video-agent` SHALL 承载 `AI-AGENT` / “智能体工作台”的正式前端入口
+- **AND** `apps/video-agent` SHALL 承载 `VEDIO-AGENT` / “视频工作台”的正式前端入口
 - **AND** 当前 `script-agent-mvp` 已完成的业务能力 SHALL 有迁移后的继续开发入口
 
 #### Scenario: 业务开发不得继续绑定旧根级结构或 admin 边界
