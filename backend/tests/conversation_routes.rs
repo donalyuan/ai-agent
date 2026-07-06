@@ -244,8 +244,48 @@ async fn conversation_routes_create_unbound_script_generation_conversation() {
         .unwrap();
     assert_eq!(missing_project_response.status(), StatusCode::BAD_REQUEST);
     let missing_project_body = response_json(missing_project_response).await;
-    assert_eq!(missing_project_body["error"], "脚本会话必须绑定项目");
+    assert_eq!(missing_project_body["error"], "Agent 会话必须绑定项目");
 
+    assert!(openai_requests.lock().unwrap().is_empty());
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn conversation_routes_create_topic_generation_conversation() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let openai_requests = Arc::new(Mutex::new(Vec::new()));
+    let openai_base_url = local_scripted_openai_base_url(openai_requests.clone()).await;
+    let app = build_app_with_state(app_state(test_url, test_pool.clone(), openai_base_url));
+
+    let create_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agent/conversations")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "agent_type": "topic",
+                        "project_id": project_id,
+                        "title": "选题生成"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+    let conversation = response_json(create_response).await;
+    assert_eq!(conversation["agent_type"], "topic");
+    assert_eq!(conversation["project_id"], project_id.to_string());
+    assert!(conversation["subject_type"].is_null());
+    assert!(conversation["subject_id"].is_null());
+    assert_eq!(conversation["status"], "active");
     assert!(openai_requests.lock().unwrap().is_empty());
 
     test_pool.close().await;

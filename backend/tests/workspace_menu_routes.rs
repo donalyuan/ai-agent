@@ -164,8 +164,19 @@ async fn workspace_menu_route_returns_visible_sorted_tree() {
         .iter()
         .find(|menu| menu["menu_key"] == "content-strategy")
         .expect("content strategy menu should exist");
-    assert_eq!(content_strategy["is_enabled"], false);
-    assert_eq!(content_strategy["status"], "planned");
+    assert_eq!(content_strategy["is_enabled"], true);
+    assert_eq!(content_strategy["status"], "active");
+    assert_eq!(content_strategy["metadata"], json!({ "phase": 2 }));
+    assert_eq!(
+        content_strategy["children"][0]["menu_key"],
+        "topic-generator"
+    );
+    assert_eq!(content_strategy["children"][0]["is_enabled"], true);
+    assert_eq!(content_strategy["children"][0]["status"], "active");
+    assert_eq!(
+        content_strategy["children"][0]["agent_key"],
+        "topic-generation-agent"
+    );
 
     let material_menu = menus
         .iter()

@@ -1,47 +1,61 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { WorkspaceShell } from "./components/workspace/WorkspaceShell";
 import {
   AgentMessage,
   ApiClient,
   ApiError,
+  ContentTopic,
+  ContentTopicSource,
+  ContentTopicStats,
+  ContentTopicStatus,
+  PrepareScriptFromTopicResponse,
   Project,
   ScriptDetail,
   ScriptStatus,
   ScriptSummary,
+  ScriptStyle,
+  TopicGenerationBatchSummary,
   WorkspaceMenuNode,
   checkHealth,
   createAgentConversation,
   createApiClient,
+  createContentTopic,
+  generateScript,
   getScript,
   getScriptAgentTurnMetadata,
   listProjects,
   listScripts,
+  listContentTopics,
+  listTopicGenerationBatches,
   listWorkspaceMenus,
+  prepareScriptFromTopic,
   sendAgentMessage,
+  updateContentTopic,
+  updateContentTopicStatus,
   updateScriptStatus,
 } from "./lib/api";
+import { ContentStrategyPage, ScriptPreparationDialog } from "./pages/content-strategy/ContentStrategyPage";
+import {
+  adjustTopicStats,
+  defaultTopicForm,
+  emptyTopicStats,
+  sortContentTopicsByScore,
+  topicPayloadFromForm,
+  topicToForm,
+  type TopicFormState,
+} from "./pages/content-strategy/topicModel";
+import { ScriptCreationPage } from "./pages/script-creation/ScriptCreationPage";
+import { upsertSummary } from "./pages/script-creation/scriptModel";
 
-const statusOptions: Array<{ value: "all" | ScriptStatus; label: string }> = [
-  { value: "all", label: "全部" },
-  { value: "draft", label: "草稿" },
-  { value: "approved", label: "已通过" },
-  { value: "archived", label: "已归档" },
-];
+const contentStrategyMenuKey = "content-strategy";
+const scriptCreationMenuKey = "script-creation";
+const defaultMenuKey = contentStrategyMenuKey;
 
-const statusLabels: Record<ScriptStatus, string> = {
-  draft: "草稿",
-  approved: "已通过",
-  archived: "已归档",
-};
-
-const statusClassNames: Record<ScriptStatus, string> = {
-  draft: "statusDraft",
-  approved: "statusApproved",
-  archived: "statusArchived",
-};
-
-const defaultMenuKey = "script-creation";
+function visibleTopicGenerationBatches(batches: TopicGenerationBatchSummary[]) {
+  return batches.filter((batch) => batch.status === "succeeded" && batch.topic_count > 0);
+}
 
 export default function Home() {
   const client = useMemo(() => createApiClient(), []);
@@ -51,6 +65,15 @@ export default function Home() {
   const [scripts, setScripts] = useState<ScriptSummary[]>([]);
   const [selectedScript, setSelectedScript] = useState<ScriptDetail | null>(null);
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(null);
+  const [topics, setTopics] = useState<ContentTopic[]>([]);
+  const [topicStats, setTopicStats] = useState<ContentTopicStats>(emptyTopicStats);
+  const [topicBatches, setTopicBatches] = useState<TopicGenerationBatchSummary[]>([]);
+  const [topicBatchesLoaded, setTopicBatchesLoaded] = useState(false);
+  const [topicBatchViewMode, setTopicBatchViewMode] = useState<"latest" | "batch" | "all">("latest");
+  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
+  const [topicStatusFilter, setTopicStatusFilter] = useState<"all" | ContentTopicStatus>("all");
+  const [topicSourceFilter] = useState<"all" | ContentTopicSource>("all");
+  const [topicBatchFilter, setTopicBatchFilter] = useState<string | null>(null);
   const [workspaceMenus, setWorkspaceMenus] = useState<WorkspaceMenuNode[]>([]);
   const [selectedMenuKey, setSelectedMenuKey] = useState(defaultMenuKey);
   const [statusFilter, setStatusFilter] = useState<"all" | ScriptStatus>("all");
@@ -58,11 +81,33 @@ export default function Home() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingScripts, setLoadingScripts] = useState(false);
   const [loadingScriptDetail, setLoadingScriptDetail] = useState(false);
+  const [loadingTopics, setLoadingTopics] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [projectError, setProjectError] = useState("");
   const [menuError, setMenuError] = useState("");
   const [scriptError, setScriptError] = useState("");
   const [statusError, setStatusError] = useState("");
+  const [topicError, setTopicError] = useState("");
+  const [topicBatchError, setTopicBatchError] = useState("");
+  const [topicActionError, setTopicActionError] = useState("");
+  const [showTopicForm, setShowTopicForm] = useState(false);
+  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
+  const [topicForm, setTopicForm] = useState<TopicFormState>(defaultTopicForm);
+  const [savingTopic, setSavingTopic] = useState(false);
+  const [topicAgentConversationId, setTopicAgentConversationId] = useState<string | null>(null);
+  const [topicAgentMessages, setTopicAgentMessages] = useState<AgentMessage[]>([]);
+  const [topicAgentDraft, setTopicAgentDraft] = useState("");
+  const [topicAgentError, setTopicAgentError] = useState("");
+  const [sendingTopicAgentMessage, setSendingTopicAgentMessage] = useState(false);
+  const [scriptPreparation, setScriptPreparation] =
+    useState<PrepareScriptFromTopicResponse | null>(null);
+  const [scriptPrepareOptions, setScriptPrepareOptions] = useState<{
+    style: ScriptStyle;
+    scene_count: number;
+  }>({ style: "knowledge", scene_count: 6 });
+  const [preparingScript, setPreparingScript] = useState(false);
+  const [generatingTopicScript, setGeneratingTopicScript] = useState(false);
+  const [topicScriptError, setTopicScriptError] = useState("");
   const [agentConversationId, setAgentConversationId] = useState<string | null>(null);
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
   const [agentDraft, setAgentDraft] = useState("");
@@ -73,6 +118,13 @@ export default function Home() {
   const preserveAgentConversationRef = useRef<string | null>(null);
 
   const selectedProject = projects.find((project) => project.project_id === selectedProjectId);
+  const activeTopicBatchId =
+    topicBatchViewMode === "all"
+      ? null
+      : topicBatchViewMode === "batch"
+        ? topicBatchFilter
+        : topicBatches[0]?.batch_id || null;
+  const selectedTopic = topics.find((topic) => topic.topic_id === selectedTopicId) || null;
   const writesDisabled = apiAvailable === false;
 
   useEffect(() => {
@@ -209,12 +261,129 @@ export default function Home() {
   }, [client, selectedProjectId, statusFilter]);
 
   useEffect(() => {
+    if (!selectedProjectId || selectedMenuKey !== contentStrategyMenuKey) {
+      if (!selectedProjectId) {
+        setTopicBatches([]);
+        setTopicBatchesLoaded(false);
+      }
+      return;
+    }
+
+    let active = true;
+
+    async function loadTopicBatches() {
+      setTopicBatchesLoaded(false);
+      setTopicBatchError("");
+
+      try {
+        const response = await listTopicGenerationBatches(client, selectedProjectId);
+        if (!active) {
+          return;
+        }
+        setTopicBatches(visibleTopicGenerationBatches(response.batches));
+      } catch (error) {
+        if (active) {
+          setTopicBatches([]);
+          setTopicBatchError(errorToMessage(error));
+        }
+      } finally {
+        if (active) {
+          setTopicBatchesLoaded(true);
+        }
+      }
+    }
+
+    loadTopicBatches();
+
+    return () => {
+      active = false;
+    };
+  }, [client, selectedProjectId, selectedMenuKey]);
+
+  useEffect(() => {
+    if (!selectedProjectId || selectedMenuKey !== "content-strategy") {
+      if (!selectedProjectId) {
+        setTopics([]);
+        setTopicStats(emptyTopicStats);
+        setSelectedTopicId(null);
+      }
+      return;
+    }
+    if (!topicBatchesLoaded) {
+      return;
+    }
+
+    let active = true;
+
+    async function loadProjectTopics() {
+      setLoadingTopics(true);
+      setTopicError("");
+
+      try {
+        const response = await listContentTopics(
+          client,
+          selectedProjectId,
+          topicListFilters(topicStatusFilter, topicSourceFilter, activeTopicBatchId),
+        );
+        if (!active) {
+          return;
+        }
+        const sortedTopics = sortContentTopicsByScore(response.topics);
+        setTopics(sortedTopics);
+        setTopicStats(response.stats);
+        setSelectedTopicId((currentTopicId) => {
+          if (sortedTopics.some((topic) => topic.topic_id === currentTopicId)) {
+            return currentTopicId;
+          }
+          return sortedTopics[0]?.topic_id || null;
+        });
+      } catch (error) {
+        if (active) {
+          setTopicError(errorToMessage(error));
+        }
+      } finally {
+        if (active) {
+          setLoadingTopics(false);
+        }
+      }
+    }
+
+    loadProjectTopics();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    activeTopicBatchId,
+    client,
+    selectedProjectId,
+    selectedMenuKey,
+    topicBatchesLoaded,
+    topicSourceFilter,
+    topicStatusFilter,
+  ]);
+
+  useEffect(() => {
     selectedProjectIdRef.current = selectedProjectId;
     setAgentConversationId(null);
     setAgentMessages([]);
     setAgentDraft("");
     setAgentError("");
     setSendingAgentMessage(false);
+    setTopicAgentConversationId(null);
+    setTopicAgentMessages([]);
+    setTopicAgentDraft("");
+    setTopicAgentError("");
+    setSendingTopicAgentMessage(false);
+    setShowTopicForm(false);
+    setEditingTopicId(null);
+    setScriptPreparation(null);
+    setTopicScriptError("");
+    setTopicBatchFilter(null);
+    setTopicBatchViewMode("latest");
+    setTopicBatches([]);
+    setTopicBatchesLoaded(false);
+    setTopicBatchError("");
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -284,6 +453,238 @@ export default function Home() {
       setStatusError(errorToMessage(error));
     } finally {
       setUpdatingStatus(false);
+    }
+  }
+
+  async function refreshContentTopics(batchId: string | null = activeTopicBatchId) {
+    if (!selectedProjectId) {
+      return;
+    }
+    const response = await listContentTopics(
+      client,
+      selectedProjectId,
+      topicListFilters(topicStatusFilter, topicSourceFilter, batchId),
+    );
+    const sortedTopics = sortContentTopicsByScore(response.topics);
+    setTopics(sortedTopics);
+    setTopicStats(response.stats);
+    setSelectedTopicId((currentTopicId) => {
+      if (sortedTopics.some((topic) => topic.topic_id === currentTopicId)) {
+        return currentTopicId;
+      }
+      return sortedTopics[0]?.topic_id || null;
+    });
+  }
+
+  async function refreshTopicBatches() {
+    if (!selectedProjectId) {
+      return;
+    }
+    const response = await listTopicGenerationBatches(client, selectedProjectId);
+    setTopicBatches(visibleTopicGenerationBatches(response.batches));
+    setTopicBatchesLoaded(true);
+    setTopicBatchError("");
+  }
+
+  async function refreshProjectScripts() {
+    if (!selectedProjectId) {
+      return;
+    }
+    const response = await listScripts(client, selectedProjectId, { status: "all" });
+    setScripts(response.scripts);
+  }
+
+  function handleNewTopic() {
+    setTopicActionError("");
+    setShowTopicForm(true);
+    setEditingTopicId(null);
+    setTopicForm(defaultTopicForm);
+  }
+
+  function handleEditTopic(topic: ContentTopic) {
+    setTopicActionError("");
+    setShowTopicForm(true);
+    setEditingTopicId(topic.topic_id);
+    setTopicForm(topicToForm(topic));
+  }
+
+  function handleCancelTopicForm() {
+    setShowTopicForm(false);
+    setEditingTopicId(null);
+    setTopicForm(defaultTopicForm);
+  }
+
+  async function handleSubmitTopic(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedProjectId) {
+      setTopicActionError("请先选择项目");
+      return;
+    }
+
+    const payload = topicPayloadFromForm(topicForm);
+    if (!payload.title.trim()) {
+      setTopicActionError("选题标题不能为空");
+      return;
+    }
+
+    setSavingTopic(true);
+    setTopicActionError("");
+
+    try {
+      const savedTopic = editingTopicId
+        ? await updateContentTopic(client, editingTopicId, payload)
+        : await createContentTopic(client, selectedProjectId, payload);
+      setTopics((currentTopics) => {
+        const withoutSaved = currentTopics.filter((topic) => topic.topic_id !== savedTopic.topic_id);
+        return sortContentTopicsByScore([savedTopic, ...withoutSaved]);
+      });
+      setSelectedTopicId(savedTopic.topic_id);
+      setShowTopicForm(false);
+      setEditingTopicId(null);
+      setTopicForm(defaultTopicForm);
+      if (!editingTopicId) {
+        setTopicStats((currentStats) => ({
+          ...currentStats,
+          total: currentStats.total + 1,
+          idea: currentStats.idea + (savedTopic.status === "idea" ? 1 : 0),
+        }));
+      }
+    } catch (error) {
+      setTopicActionError(errorToMessage(error));
+    } finally {
+      setSavingTopic(false);
+    }
+  }
+
+  async function handleUpdateTopicStatus(topic: ContentTopic, status: ContentTopicStatus) {
+    if (topic.status === status || status === "scripted") {
+      return;
+    }
+    setTopicActionError("");
+
+    try {
+      const updatedTopic = await updateContentTopicStatus(client, topic.topic_id, status);
+      setTopics((currentTopics) =>
+        currentTopics.map((currentTopic) =>
+          currentTopic.topic_id === updatedTopic.topic_id ? updatedTopic : currentTopic,
+        ),
+      );
+      setSelectedTopicId(updatedTopic.topic_id);
+      setTopicStats((currentStats) => adjustTopicStats(currentStats, topic.status, updatedTopic.status));
+    } catch (error) {
+      setTopicActionError(errorToMessage(error));
+    }
+  }
+
+  async function handleSendTopicAgentMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const content = topicAgentDraft.trim();
+
+    if (!selectedProjectId) {
+      setTopicAgentError("请先选择项目");
+      return;
+    }
+
+    if (!content) {
+      setTopicAgentError("请输入选题生成要求");
+      return;
+    }
+
+    setTopicAgentError("");
+    setSendingTopicAgentMessage(true);
+    const projectIdAtSend = selectedProjectId;
+
+    try {
+      let conversationId = topicAgentConversationId;
+      if (!conversationId) {
+        const conversation = await createAgentConversation(client, {
+          project_id: selectedProjectId,
+          agent_type: "topic",
+          title: "选题 Agent 对话",
+        });
+        if (selectedProjectIdRef.current !== projectIdAtSend) {
+          return;
+        }
+        conversationId = conversation.conversation_id;
+        setTopicAgentConversationId(conversationId);
+      }
+
+      const response = await sendAgentMessage(client, conversationId, { content });
+      if (selectedProjectIdRef.current !== projectIdAtSend) {
+        return;
+      }
+      setTopicAgentMessages((currentMessages) => [
+        ...currentMessages,
+        response.user_message,
+        response.assistant_message,
+      ]);
+      setTopicAgentDraft("");
+      const batchId = getTopicAgentBatchId(response.assistant_message);
+      if (batchId) {
+        setTopicBatchViewMode("batch");
+        setTopicBatchFilter(batchId);
+      }
+      try {
+        await refreshTopicBatches();
+      } catch (error) {
+        setTopicBatchError(errorToMessage(error));
+      }
+      await refreshContentTopics(batchId);
+    } catch (error) {
+      if (selectedProjectIdRef.current === projectIdAtSend) {
+        setTopicAgentError(errorToMessage(error));
+      }
+    } finally {
+      if (selectedProjectIdRef.current === projectIdAtSend) {
+        setSendingTopicAgentMessage(false);
+      }
+    }
+  }
+
+  async function handlePrepareScriptFromTopic(topic: ContentTopic) {
+    setTopicScriptError("");
+    setPreparingScript(true);
+    const options = { style: "knowledge" as ScriptStyle, scene_count: 6 };
+    setScriptPrepareOptions(options);
+
+    try {
+      const response = await prepareScriptFromTopic(client, topic.topic_id, options);
+      setScriptPreparation(response);
+    } catch (error) {
+      setTopicScriptError(errorToMessage(error));
+    } finally {
+      setPreparingScript(false);
+    }
+  }
+
+  async function handleConfirmTopicScriptGeneration() {
+    if (!scriptPreparation || !selectedProjectId) {
+      return;
+    }
+
+    setGeneratingTopicScript(true);
+    setTopicScriptError("");
+
+    try {
+      const script = await generateScript(client, {
+        project_id: selectedProjectId,
+        topic_id: scriptPreparation.script_request.topic_id,
+        style: scriptPrepareOptions.style,
+        scene_count: scriptPrepareOptions.scene_count,
+      });
+      await refreshContentTopics();
+      await refreshProjectScripts();
+      setScripts((currentScripts) => upsertSummary(currentScripts, script));
+      selectedScriptIdRef.current = script.script_id;
+      setSelectedScriptId(script.script_id);
+      setSelectedScript(script);
+      setStatusFilter("all");
+      setSelectedMenuKey(scriptCreationMenuKey);
+      setScriptPreparation(null);
+    } catch (error) {
+      setTopicScriptError(errorToMessage(error));
+    } finally {
+      setGeneratingTopicScript(false);
     }
   }
 
@@ -381,367 +782,107 @@ export default function Home() {
   }
 
   return (
-    <main className="workspaceShell">
-      <aside className="agentRail">
-        <div className="brandBlock">
-          <div className="brandMark">VD</div>
-          <div>
-            <p>VEDIO-AGENT</p>
-            <span>视频工作台</span>
-          </div>
-        </div>
-
-        <nav aria-label="视频工作台菜单" className="agentMenu">
-          {loadingMenus ? <p className="railStateText">正在加载菜单</p> : null}
-          {menuError ? <p className="railErrorText">{menuError}</p> : null}
-          {!loadingMenus && !menuError
-            ? workspaceMenus.map((menu) => (
-                <MenuButton
-                  key={menu.menu_id}
-                  menu={menu}
-                  selectedMenuKey={selectedMenuKey}
-                  onSelect={setSelectedMenuKey}
-                />
-              ))
-            : null}
-        </nav>
-      </aside>
-
-      <section className="workbench">
-        <header className="topbar">
-          <div>
-            <p className="sectionKicker">VEDIO-AGENT</p>
-            <h1>视频工作台</h1>
-          </div>
-          <div className="topbarActions">
-            <span className={apiAvailable === false ? "healthBadge down" : "healthBadge"}>
-              {apiAvailable === null ? "服务检测中" : apiAvailable ? "API 正常" : "API 不可用"}
-            </span>
-            <label className="projectSelectLabel">
-              当前项目
-              <select
-                aria-label="当前项目"
-                disabled={!projects.length}
-                onChange={(event) => setSelectedProjectId(event.target.value)}
-                value={selectedProjectId}
-              >
-                {projects.length ? null : <option value="">暂无项目</option>}
-                {projects.map((project) => (
-                  <option key={project.project_id} value={project.project_id}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </header>
-
-        <div className="workspaceGrid">
-          <section className="scriptColumn" aria-label="脚本列表">
-            <div className="panelHeader compactHeader">
-              <div>
-                <p className="sectionKicker">脚本创作</p>
-                <h2>脚本列表</h2>
-              </div>
-              <div className="scriptHeaderActions">
-                <button
-                  className="secondaryButton"
-                  disabled={!selectedProjectId || writesDisabled}
-                  onClick={handleNewScript}
-                  type="button"
-                >
-                  新建脚本
-                </button>
-                <span>{scripts.length} 条</span>
-              </div>
-            </div>
-
-            <div className="statusFilter" aria-label="脚本状态筛选">
-              {statusOptions.map((option) => (
-                <button
-                  className={statusFilter === option.value ? "filterButton selected" : "filterButton"}
-                  key={option.value}
-                  onClick={() => setStatusFilter(option.value)}
-                  type="button"
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-
-            {loadingProjects || loadingScripts ? <p className="stateText">正在加载脚本</p> : null}
-            {scriptError ? <p className="errorText">{scriptError}</p> : null}
-            {!loadingProjects && selectedProjectId && !scripts.length ? (
-              <div className="emptyState">
-                <strong>还没有脚本</strong>
-                <span>在右侧脚本 Agent 对话中描述需求后生成第一版结构化脚本。</span>
-              </div>
-            ) : null}
-            {!selectedProjectId && !loadingProjects ? (
-              <div className="emptyState">
-                <strong>等待项目</strong>
-                <span>从顶部选择项目后会在这里显示脚本记录。</span>
-              </div>
-            ) : null}
-
-            <div className="scriptList">
-              {scripts.map((script) => (
-                <button
-                  className={selectedScriptId === script.script_id ? "scriptItem selected" : "scriptItem"}
-                  key={script.script_id}
-                  onClick={() => handleOpenScript(script.script_id)}
-                  type="button"
-                >
-                  <span className="scriptTitle">{script.title}</span>
-                  <span className="scriptMeta">
-                    {script.scene_count} 镜 · {formatDate(script.created_at)}
-                  </span>
-                  <StatusBadge status={script.status} />
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="detailColumn" aria-label="脚本详情">
-            <ScriptDetailView
-              loading={loadingScriptDetail}
-              script={selectedScript}
-              statusError={statusError}
-              updatingStatus={updatingStatus}
-              writesDisabled={writesDisabled}
-              onUpdateStatus={handleUpdateStatus}
-            />
-          </section>
-
-          <aside className="actionColumn" aria-label="脚本 Agent 操作">
-            {projectError ? <p className="errorText" role="alert">{projectError}</p> : null}
-            <ScriptAgentConversationPanel
-              apiUnavailable={writesDisabled}
-              draft={agentDraft}
-              error={agentError}
-              messages={agentMessages}
-              selectedProject={selectedProject}
-              selectedScript={selectedScript}
-              sending={sendingAgentMessage}
-              setDraft={setAgentDraft}
-              onSubmit={handleSendAgentMessage}
-            />
-          </aside>
-        </div>
-      </section>
-    </main>
-  );
-}
-
-function ScriptAgentConversationPanel({
-  apiUnavailable,
-  draft,
-  error,
-  messages,
-  selectedProject,
-  selectedScript,
-  sending,
-  setDraft,
-  onSubmit,
-}: {
-  apiUnavailable: boolean;
-  draft: string;
-  error: string;
-  messages: AgentMessage[];
-  selectedProject?: Project;
-  selectedScript: ScriptDetail | null;
-  sending: boolean;
-  setDraft: (value: string) => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-}) {
-  const inputDisabled = apiUnavailable || !selectedProject || sending;
-  const ready = Boolean(selectedProject) && !apiUnavailable;
-  const stateLabel = apiUnavailable ? "不可用" : selectedScript ? "可对话" : selectedProject ? "可生成" : "未选择";
-  const bindingText = selectedProject
-    ? selectedScript
-      ? `当前项目：${selectedProject.name} / 脚本：${selectedScript.title}`
-      : `当前项目：${selectedProject.name} / 新脚本生成`
-    : "请选择项目后开始对话";
-  const placeholder = selectedScript ? "描述要修改的分镜方向..." : "描述你想生成的脚本...";
-  const label = selectedScript ? "修改方向" : "脚本需求";
-  const emptyTitle = selectedScript ? "可直接指定分镜修改方向" : "可直接描述新脚本需求";
-  const emptyHint = selectedScript
-    ? "例如：把第 2 镜改得更有冲突感，画面更具体。"
-    : "例如：生成一个关于 ChatGPT 工作流的 6 镜知识科普脚本。";
-
-  return (
-    <section aria-label="脚本 Agent 对话" className="sidePanel agentChatPanel">
-      <div className="panelHeader">
-        <div>
-          <p className="sectionKicker">Agent</p>
-          <h2>脚本 Agent 对话</h2>
-        </div>
-        <span className={ready ? "agentChatState ready" : "agentChatState"}>{stateLabel}</span>
-      </div>
-
-      <p className="helperText">{bindingText}</p>
-      {error ? <p className="errorText" role="alert">{error}</p> : null}
-
-      <div className="agentMessages" aria-label="脚本 Agent 消息">
-        {messages.length ? (
-          messages.map((message) => (
-            <article className={`agentMessage ${message.role}`} key={message.message_id}>
-              <span>{message.role === "user" ? "你" : "Agent"}</span>
-              <p>{message.content}</p>
-            </article>
-          ))
-        ) : (
-          <div className="agentEmptyState">
-            <strong>{emptyTitle}</strong>
-            <span>{emptyHint}</span>
-          </div>
-        )}
-      </div>
-
-      <form className="agentChatForm" onSubmit={onSubmit}>
-        <label>
-          {label}
-          <textarea
-            disabled={inputDisabled}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder={placeholder}
-            rows={3}
-            value={draft}
+    <WorkspaceShell
+      apiAvailable={apiAvailable}
+      loadingMenus={loadingMenus}
+      menuError={menuError}
+      projects={projects}
+      selectedMenuKey={selectedMenuKey}
+      selectedProjectId={selectedProjectId}
+      workspaceMenus={workspaceMenus}
+      onSelectMenu={setSelectedMenuKey}
+      onSelectProject={setSelectedProjectId}
+      overlay={
+        scriptPreparation ? (
+          <ScriptPreparationDialog
+            error={topicScriptError}
+            generating={generatingTopicScript}
+            options={scriptPrepareOptions}
+            preparation={scriptPreparation}
+            onClose={() => setScriptPreparation(null)}
+            onConfirm={handleConfirmTopicScriptGeneration}
+            onOptionsChange={setScriptPrepareOptions}
           />
-        </label>
-        <button className="primaryButton" disabled={inputDisabled} type="submit">
-          {sending ? "发送中" : "发送"}
-        </button>
-      </form>
-    </section>
-  );
-}
-
-function MenuButton({
-  menu,
-  selectedMenuKey,
-  onSelect,
-}: {
-  menu: WorkspaceMenuNode;
-  selectedMenuKey: string;
-  onSelect: (menuKey: string) => void;
-}) {
-  const active = menu.menu_key === selectedMenuKey;
-  return (
-    <button
-      className={active ? "agentItem active" : "agentItem"}
-      disabled={!menu.is_enabled}
-      onClick={() => onSelect(menu.menu_key)}
-      title={menu.description}
-      type="button"
+        ) : null
+      }
     >
-      <span>{menu.label}</span>
-      <small>{menuStatusLabel(menu)}</small>
-    </button>
+      {selectedMenuKey === contentStrategyMenuKey ? (
+        <ContentStrategyPage
+          project={selectedProject}
+          topics={topics}
+          stats={topicStats}
+          selectedTopic={selectedTopic}
+          statusFilter={topicStatusFilter}
+          activeTopicBatchId={activeTopicBatchId}
+          showingAllTopicBatches={topicBatchViewMode === "all"}
+          topicBatches={topicBatches}
+          loadingTopicBatches={!topicBatchesLoaded}
+          topicBatchError={topicBatchError}
+          loading={loadingTopics}
+          error={topicError}
+          actionError={topicActionError}
+          writesDisabled={writesDisabled}
+          showTopicForm={showTopicForm}
+          editingTopicId={editingTopicId}
+          topicForm={topicForm}
+          savingTopic={savingTopic}
+          agentDraft={topicAgentDraft}
+          agentError={topicAgentError}
+          agentMessages={topicAgentMessages}
+          sendingAgentMessage={sendingTopicAgentMessage}
+          preparingScript={preparingScript}
+          onSelectTopic={setSelectedTopicId}
+          onClearTopicBatchFilter={() => {
+            setTopicBatchViewMode("all");
+            setTopicBatchFilter(null);
+          }}
+          onSelectTopicBatch={(batchId) => {
+            setTopicBatchViewMode("batch");
+            setTopicBatchFilter(batchId);
+          }}
+          onStatusFilterChange={setTopicStatusFilter}
+          onNewTopic={handleNewTopic}
+          onEditTopic={handleEditTopic}
+          onCancelTopicForm={handleCancelTopicForm}
+          onTopicFormChange={(field, value) =>
+            setTopicForm((currentForm) => ({ ...currentForm, [field]: value }))
+          }
+          onSubmitTopic={handleSubmitTopic}
+          onUpdateTopicStatus={handleUpdateTopicStatus}
+          onPrepareScript={handlePrepareScriptFromTopic}
+          setAgentDraft={setTopicAgentDraft}
+          onSubmitAgentMessage={handleSendTopicAgentMessage}
+        />
+      ) : (
+        <ScriptCreationPage
+          agentDraft={agentDraft}
+          agentError={agentError}
+          agentMessages={agentMessages}
+          loadingProjects={loadingProjects}
+          loadingScriptDetail={loadingScriptDetail}
+          loadingScripts={loadingScripts}
+          projectError={projectError}
+          scriptError={scriptError}
+          scripts={scripts}
+          selectedProject={selectedProject}
+          selectedProjectId={selectedProjectId}
+          selectedScript={selectedScript}
+          selectedScriptId={selectedScriptId}
+          sendingAgentMessage={sendingAgentMessage}
+          statusError={statusError}
+          statusFilter={statusFilter}
+          updatingStatus={updatingStatus}
+          writesDisabled={writesDisabled}
+          onNewScript={handleNewScript}
+          onOpenScript={handleOpenScript}
+          onStatusFilterChange={setStatusFilter}
+          onSubmitAgentMessage={handleSendAgentMessage}
+          onUpdateStatus={handleUpdateStatus}
+          setAgentDraft={setAgentDraft}
+        />
+      )}
+    </WorkspaceShell>
   );
-}
-
-function menuStatusLabel(menu: WorkspaceMenuNode) {
-  if (menu.status === "active") {
-    return "当前";
-  }
-  if (menu.status === "disabled") {
-    return "禁用";
-  }
-  const phase = typeof menu.metadata.phase === "number" ? `P${menu.metadata.phase}` : "计划";
-  return phase;
-}
-
-function ScriptDetailView({
-  loading,
-  script,
-  statusError,
-  updatingStatus,
-  writesDisabled,
-  onUpdateStatus,
-}: {
-  loading: boolean;
-  script: ScriptDetail | null;
-  statusError: string;
-  updatingStatus: boolean;
-  writesDisabled: boolean;
-  onUpdateStatus: (status: ScriptStatus) => void;
-}) {
-  if (loading) {
-    return <p className="stateText">正在读取脚本详情</p>;
-  }
-
-  if (!script) {
-    return (
-      <div className="detailEmpty">
-        <p className="sectionKicker">时间轴对照视图</p>
-        <h2>选择脚本后查看分镜</h2>
-        <span>通过脚本 Agent 生成脚本或从左侧列表选择脚本后，这里会展示旁白与画面指令。</span>
-      </div>
-    );
-  }
-
-  const totalDuration = script.scenes.reduce((sum, scene) => sum + scene.duration_sec, 0);
-
-  return (
-    <article className="detailPanel">
-      <div className="detailHeader">
-        <div>
-          <p className="sectionKicker">时间轴对照视图</p>
-          <h2>{script.title}</h2>
-          <p>{script.hook}</p>
-        </div>
-        <div className="detailStats">
-          <StatusBadge status={script.status} />
-          <span>{script.scenes.length} 镜</span>
-          <span>{totalDuration} 秒</span>
-        </div>
-      </div>
-
-      <div className="statusActions" aria-label="脚本状态更新">
-        {(["draft", "approved", "archived"] as ScriptStatus[]).map((status) => (
-          <button
-            className={script.status === status ? "filterButton selected" : "filterButton"}
-            disabled={writesDisabled || updatingStatus || script.status === status}
-            key={status}
-            onClick={() => onUpdateStatus(status)}
-            type="button"
-          >
-            {statusLabels[status]}
-          </button>
-        ))}
-      </div>
-      {statusError ? <p className="errorText" role="alert">{statusError}</p> : null}
-
-      <div className="timelineList">
-        {[...script.scenes]
-          .sort((left, right) => left.sequence - right.sequence)
-          .map((scene) => (
-            <section className="timelineRow" key={scene.scene_id}>
-              <div className="timelineMarker">
-                <span>第 {scene.sequence} 镜</span>
-                <strong>{scene.duration_sec} 秒</strong>
-              </div>
-              <div className="sceneCompare">
-                <div>
-                  <h3>旁白</h3>
-                  <p>{scene.narration}</p>
-                </div>
-                <div>
-                  <h3>画面指令</h3>
-                  <p>{scene.visual_description}</p>
-                  <span>{scene.emotion}</span>
-                </div>
-              </div>
-            </section>
-          ))}
-      </div>
-    </article>
-  );
-}
-
-function StatusBadge({ status }: { status: ScriptStatus }) {
-  return <span className={`statusBadge ${statusClassNames[status]}`}>{statusLabels[status]}</span>;
 }
 
 async function openScript(
@@ -771,19 +912,6 @@ async function openScript(
   }
 }
 
-function upsertSummary(scripts: ScriptSummary[], script: ScriptDetail): ScriptSummary[] {
-  const summary: ScriptSummary = {
-    script_id: script.script_id,
-    title: script.title,
-    status: script.status,
-    scene_count: script.scenes.length,
-    parent_id: script.parent_id,
-    created_at: script.created_at,
-  };
-  const nextScripts = scripts.filter((item) => item.script_id !== script.script_id);
-  return [summary, ...nextScripts];
-}
-
 function errorToMessage(error: unknown) {
   if (error instanceof ApiError) {
     return error.message;
@@ -794,15 +922,19 @@ function errorToMessage(error: unknown) {
   return "请求失败";
 }
 
-function formatDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "未知时间";
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+function getTopicAgentBatchId(message: AgentMessage) {
+  const batchId = message.metadata.batch_id;
+  return typeof batchId === "string" && batchId.trim() ? batchId : null;
+}
+
+function topicListFilters(
+  status: "all" | ContentTopicStatus,
+  source: "all" | ContentTopicSource,
+  batchId: string | null,
+) {
+  return {
+    status,
+    source,
+    ...(batchId ? { batch_id: batchId } : {}),
+  };
 }

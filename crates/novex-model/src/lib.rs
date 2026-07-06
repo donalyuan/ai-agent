@@ -2,6 +2,6 @@
 
 pub mod llm;
 
-pub use llm::{LLMClient, LLMError, LLMPrompt, OpenAIClient, OpenAIConfig};
+pub use llm::{LLMClient, LLMError, LLMJsonSchema, LLMPrompt, OpenAIClient, OpenAIConfig};
 
 pub const CRATE_PURPOSE: &str = "novex-model";

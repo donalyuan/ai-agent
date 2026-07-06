@@ -124,6 +124,36 @@ async fn insert_script_with_scene(pool: &PgPool, project_id: Uuid) -> Uuid {
     script_id
 }
 
+async fn insert_content_topic(pool: &PgPool, project_id: Uuid, status: &str) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO content_topics (
+            project_id, title, angle, target_audience, hook_points, content_type,
+            score, score_reason, tags, source, status
+        )
+        VALUES (
+            $1,
+            'AI 工具如何重塑内容团队',
+            '强调协作流程',
+            '内容负责人',
+            ARRAY['流程重构']::TEXT[],
+            'knowledge',
+            91,
+            '标题更具体',
+            ARRAY['AI工具']::TEXT[],
+            'manual',
+            $2
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .bind(status)
+    .fetch_one(pool)
+    .await
+    .expect("content topic fixture should be inserted")
+}
+
 async fn openai_handler(Json(_payload): Json<Value>) -> Json<Value> {
     Json(json!({
         "choices": [
@@ -397,6 +427,7 @@ async fn generate_route_uses_stepwise_single_scene_mode_for_xhigh() {
     );
 
     let generate_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -420,20 +451,249 @@ async fn generate_route_uses_stepwise_single_scene_mode_for_xhigh() {
     let generated = response_json(generate_response).await;
     assert_eq!(generated["scenes"].as_array().unwrap().len(), 3);
 
-    let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 4);
-    assert!(requests[0]["messages"][1]["content"]
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 4);
+        assert!(requests[0]["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("只输出 title 和 hook"));
+        assert!(requests[1]["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("当前分镜序号：1"));
+        assert!(requests[3]["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("当前分镜序号：3"));
+    }
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn generate_route_persists_topic_link_snapshot_and_marks_topic_scripted() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let topic_id = insert_content_topic(&test_pool, project_id, "approved").await;
+    let app = build_app_with_state(
+        AppState::new(
+            AppConfig {
+                environment: "test".to_string(),
+                database_url: test_url,
+                redis_url: "redis://127.0.0.1:6379/15".to_string(),
+                openai_api_key: "test-key".to_string(),
+                openai_base_url: local_openai_base_url().await,
+                openai_model: "test-model".to_string(),
+                openai_timeout_seconds: 5,
+                openai_reasoning_effort: Some("low".to_string()),
+                openai_max_output_tokens: 3000,
+            },
+            test_pool.clone(),
+            None,
+        )
+        .unwrap(),
+    );
+
+    let generate_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/scripts/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "project_id": project_id,
+                        "topic_id": topic_id,
+                        "style": "knowledge",
+                        "scene_count": 5
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(generate_response.status(), StatusCode::OK);
+    let generated = response_json(generate_response).await;
+    let script_id = Uuid::parse_str(generated["script_id"].as_str().unwrap()).unwrap();
+    assert_eq!(generated["topic_id"], topic_id.to_string());
+
+    let saved = sqlx::query_as::<_, (Option<Uuid>, Value, String)>(
+        r#"
+        SELECT s.topic_id, s.content, t.status
+        FROM scripts s
+        JOIN content_topics t ON t.id = $2
+        WHERE s.id = $1
+        "#,
+    )
+    .bind(script_id)
+    .bind(topic_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(saved.0, Some(topic_id));
+    assert_eq!(saved.1["topic_snapshot"]["topic_id"], topic_id.to_string());
+    assert_eq!(
+        saved.1["topic_snapshot"]["title"],
+        "AI 工具如何重塑内容团队"
+    );
+    assert_eq!(saved.2, "scripted");
+
+    let list_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_id}/scripts"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let listed = response_json(list_response).await;
+    assert_eq!(listed["scripts"][0]["topic_id"], topic_id.to_string());
+    assert_eq!(
+        listed["scripts"][0]["source_topic_title"],
+        "AI 工具如何重塑内容团队"
+    );
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn generate_route_rejects_non_approved_or_cross_project_topics_without_creating_script() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let other_project_id = insert_project(&test_pool).await;
+    let idea_topic_id = insert_content_topic(&test_pool, project_id, "idea").await;
+    let other_project_topic_id =
+        insert_content_topic(&test_pool, other_project_id, "approved").await;
+    let app = build_app_with_state(
+        AppState::new(
+            AppConfig {
+                environment: "test".to_string(),
+                database_url: test_url,
+                redis_url: "redis://127.0.0.1:6379/15".to_string(),
+                openai_api_key: "test-key".to_string(),
+                openai_base_url: local_openai_base_url().await,
+                openai_model: "test-model".to_string(),
+                openai_timeout_seconds: 5,
+                openai_reasoning_effort: Some("low".to_string()),
+                openai_max_output_tokens: 3000,
+            },
+            test_pool.clone(),
+            None,
+        )
+        .unwrap(),
+    );
+
+    for topic_id in [idea_topic_id, other_project_topic_id] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/scripts/generate")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "project_id": project_id,
+                            "topic_id": topic_id,
+                            "style": "knowledge",
+                            "scene_count": 5
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    let script_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM scripts")
+        .fetch_one(&test_pool)
+        .await
+        .unwrap();
+    assert_eq!(script_count, 0);
+    let idea_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM content_topics WHERE id = $1")
+            .bind(idea_topic_id)
+            .fetch_one(&test_pool)
+            .await
+            .unwrap();
+    assert_eq!(idea_status, "idea");
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn generate_route_returns_script_generation_error_when_llm_output_is_invalid() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let app = build_app_with_state(
+        AppState::new(
+            AppConfig {
+                environment: "test".to_string(),
+                database_url: test_url,
+                redis_url: "redis://127.0.0.1:6379/15".to_string(),
+                openai_api_key: "test-key".to_string(),
+                openai_base_url: local_scripted_openai_base_url(
+                    vec![
+                        json!("不是 JSON"),
+                        json!("仍然不是 JSON"),
+                        json!("还是不是 JSON"),
+                    ],
+                    requests,
+                )
+                .await,
+                openai_model: "test-model".to_string(),
+                openai_timeout_seconds: 5,
+                openai_reasoning_effort: Some("low".to_string()),
+                openai_max_output_tokens: 3000,
+            },
+            test_pool.clone(),
+            None,
+        )
+        .unwrap(),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/scripts/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "project_id": project_id,
+                        "topic": "ChatGPT如何改变程序员工作流",
+                        "style": "knowledge",
+                        "scene_count": 5
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response_json(response).await;
+    assert_eq!(body["error"], "脚本生成失败");
+    assert!(body["details"]
         .as_str()
         .unwrap()
-        .contains("只输出 title 和 hook"));
-    assert!(requests[1]["messages"][1]["content"]
-        .as_str()
-        .unwrap()
-        .contains("当前分镜序号：1"));
-    assert!(requests[3]["messages"][1]["content"]
-        .as_str()
-        .unwrap()
-        .contains("当前分镜序号：3"));
+        .contains("script parse error"));
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

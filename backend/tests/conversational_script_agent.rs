@@ -273,10 +273,12 @@ async fn script_agent_dialogue_updates_target_scene_and_records_messages() {
     assert_eq!(messages[0].role, AgentMessageRole::User);
     assert_eq!(messages[1].role, AgentMessageRole::Assistant);
 
-    let prompts = llm_client.prompts.lock().unwrap();
-    assert_eq!(prompts.len(), 1);
-    assert!(prompts[0].user.contains("第 3 镜"));
-    assert!(prompts[0].user.contains("当前脚本"));
+    {
+        let prompts = llm_client.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].user.contains("第 3 镜"));
+        assert!(prompts[0].user.contains("当前脚本"));
+    }
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
@@ -327,7 +329,7 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
                     "duration_sec": 10
                 }
             ]
-        })
+        }),
     ]));
     let runtime = AgentRuntime::new(
         conversation_repository.clone(),
@@ -370,7 +372,10 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
         .await
         .unwrap();
     assert_eq!(updated_conversation.subject_type.as_deref(), Some("script"));
-    assert_eq!(updated_conversation.subject_id.unwrap().to_string(), script_id);
+    assert_eq!(
+        updated_conversation.subject_id.unwrap().to_string(),
+        script_id
+    );
 
     let script = script_repository
         .get_script(Uuid::parse_str(script_id).unwrap())
@@ -378,7 +383,10 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
         .unwrap();
     assert_eq!(script.project_id, project_id);
     assert_eq!(script.scenes.len(), 3);
-    assert!(script.content["topic"].as_str().unwrap().contains("ChatGPT"));
+    assert!(script.content["topic"]
+        .as_str()
+        .unwrap()
+        .contains("ChatGPT"));
 
     let messages = conversation_repository
         .list_messages(conversation.id)
@@ -388,10 +396,12 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
     assert_eq!(messages[0].role, AgentMessageRole::User);
     assert_eq!(messages[1].role, AgentMessageRole::Assistant);
 
-    let prompts = llm_client.prompts.lock().unwrap();
-    assert_eq!(prompts.len(), 2);
-    assert!(prompts[0].user.contains("生成脚本参数"));
-    assert!(prompts[1].user.contains("请根据以下选题生成3个分镜"));
+    {
+        let prompts = llm_client.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[0].user.contains("生成脚本参数"));
+        assert!(prompts[1].user.contains("请根据以下选题生成3个分镜"));
+    }
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

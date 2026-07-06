@@ -61,6 +61,7 @@ const generatedScriptSummary = {
 const generatedScriptDetail = {
   ...generatedScriptSummary,
   project_id: projectId,
+  topic_id: null,
   hook: "三个镜头看懂 AI 工作流。",
   scenes: [
     {
@@ -203,7 +204,17 @@ const generatedAgentRun = {
 };
 
 const workspaceMenus = [
-  menuNode("content-strategy", "内容策略", false, "planned", 10),
+  {
+    ...menuNode("content-strategy", "内容策略", true, "active", 10),
+    children: [
+      {
+        ...menuNode("topic-generator", "选题生成", true, "active", 10),
+        agent_key: "topic-generation-agent",
+        menu_type: "page",
+        module_key: "strategy.topics",
+      },
+    ],
+  },
   {
     ...menuNode("script-creation", "脚本创作", true, "active", 20),
     children: [
@@ -221,6 +232,126 @@ const workspaceMenus = [
   menuNode("analytics", "数据分析", false, "planned", 60),
   menuNode("workflow-tasks", "工作流任务", false, "planned", 70),
 ];
+
+const contentStrategyWorkspaceMenus = [
+  menuNode("content-strategy", "内容策略", true, "active", 10),
+  {
+    ...menuNode("script-creation", "脚本创作", true, "active", 20),
+    children: [
+      {
+        ...menuNode("script-generator", "脚本生成", true, "active", 10),
+        agent_key: "script-generation-agent",
+        menu_type: "page",
+        module_key: "script.generator",
+      },
+    ],
+  },
+  menuNode("material-management", "素材管理", false, "planned", 30),
+  menuNode("production", "作品生产", false, "planned", 40),
+  menuNode("publishing", "发布运营", false, "planned", 50),
+  menuNode("analytics", "数据分析", false, "planned", 60),
+  menuNode("workflow-tasks", "工作流任务", false, "planned", 70),
+];
+
+const ideaTopic = {
+  topic_id: "44444444-4444-4444-8444-444444444444",
+  project_id: projectId,
+  batch_id: null,
+  title: "AI 工具如何重塑内容团队",
+  angle: "从选题、脚本到分发拆解团队协作变化",
+  target_audience: "内容团队负责人",
+  hook_points: ["三步判断团队是否需要 AI 工作流", "从单点提效走向流程提效"],
+  content_type: "knowledge",
+  score: 86,
+  score_reason: "和账号定位强相关，能自然转入案例。",
+  tags: ["AI", "内容团队"],
+  source: "manual",
+  status: "idea",
+  metadata: {},
+  created_at: "2026-07-02T00:20:00Z",
+  updated_at: "2026-07-02T00:20:00Z",
+};
+
+const approvedTopic = {
+  ...ideaTopic,
+  topic_id: "55555555-5555-4555-8555-555555555555",
+  title: "普通人如何搭建 AI 内容流水线",
+  source: "agent",
+  status: "approved",
+  score: 82,
+};
+
+const archivedTopic = {
+  ...ideaTopic,
+  topic_id: "66666666-6666-4666-8666-666666666666",
+  title: "已经过时的工具清单",
+  status: "archived",
+  score: 40,
+};
+
+const overflowTopics = Array.from({ length: 12 }, (_, index) => ({
+  ...ideaTopic,
+  topic_id: `77777777-7777-4777-8777-${String(index + 1).padStart(12, "0")}`,
+  title: `AI 内容流水线扩展选题 ${index + 1}`,
+  score: 70 - index,
+  created_at: `2026-07-02T00:${String(10 + index).padStart(2, "0")}:00Z`,
+  updated_at: `2026-07-02T00:${String(10 + index).padStart(2, "0")}:00Z`,
+}));
+
+const preparedTopic = {
+  topic: approvedTopic,
+  topic_snapshot: {
+    topic_id: approvedTopic.topic_id,
+    title: approvedTopic.title,
+    angle: approvedTopic.angle,
+    target_audience: approvedTopic.target_audience,
+    hook_points: approvedTopic.hook_points,
+    content_type: approvedTopic.content_type,
+    score: approvedTopic.score,
+    score_reason: approvedTopic.score_reason,
+    tags: approvedTopic.tags,
+    source: approvedTopic.source,
+    status: approvedTopic.status,
+    created_at: approvedTopic.created_at,
+  },
+  script_request: {
+    project_id: projectId,
+    topic_id: approvedTopic.topic_id,
+    topic: approvedTopic.title,
+    style: "knowledge",
+    scene_count: 6,
+  },
+};
+
+const topicScriptId = "abababab-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+const topicScriptSummary = {
+  script_id: topicScriptId,
+  title: "AI 内容流水线脚本",
+  status: "draft",
+  scene_count: 1,
+  parent_id: null,
+  created_at: "2026-07-02T00:30:00Z",
+};
+
+const topicScriptDetail = {
+  ...topicScriptSummary,
+  project_id: projectId,
+  topic_id: approvedTopic.topic_id,
+  topic_snapshot: preparedTopic.topic_snapshot,
+  hook: "为什么同样用 AI，有的人只是更忙？",
+  scenes: [
+    {
+      scene_id: "cdcdcdcd-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      sequence: 1,
+      narration: "先用一个真实团队的改造前后做对比。",
+      visual_description: "内容团队会议白板从混乱任务变成清晰流程。",
+      emotion: "清晰",
+      duration_sec: 8,
+    },
+  ],
+  updated_at: "2026-07-02T00:30:00Z",
+};
 
 function menuNode(menuKey: string, label: string, isEnabled: boolean, status: string, sortOrder: number) {
   return {
@@ -335,6 +466,83 @@ async function mockEmptyScriptGeneration(page: Page) {
   });
 }
 
+async function mockContentStrategyWorkflow(page: Page) {
+  let generatedFromTopic = false;
+
+  await page.unroute(/\/api\/video-workspace\/menus$/);
+  await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { menus: contentStrategyWorkspaceMenus } });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/topic-generation-batches$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { batches: [] } });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/topics(\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        topics: [
+          ideaTopic,
+          generatedFromTopic ? { ...approvedTopic, status: "scripted" } : approvedTopic,
+          archivedTopic,
+          ...overflowTopics,
+        ],
+        stats: generatedFromTopic
+          ? { total: 15, idea: 13, approved: 0, scripted: 1, archived: 1 }
+          : { total: 15, idea: 13, approved: 1, scripted: 0, archived: 1 },
+      },
+    });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/scripts(\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: generatedFromTopic
+        ? { scripts: [topicScriptSummary], total: 1, limit: 20, offset: 0 }
+        : { scripts: [], total: 0, limit: 20, offset: 0 },
+    });
+  });
+  await page.route(new RegExp(`/api/scripts/${topicScriptId}$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: topicScriptDetail });
+  });
+  await page.route(new RegExp(`/api/topics/${approvedTopic.topic_id}/prepare-script$`), async (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({ style: "knowledge", scene_count: 6 });
+    await route.fulfill({ contentType: "application/json", json: preparedTopic });
+  });
+  await page.route(/\/api\/scripts\/generate$/, async (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({
+      project_id: projectId,
+      topic_id: approvedTopic.topic_id,
+      style: "knowledge",
+      scene_count: 6,
+    });
+    generatedFromTopic = true;
+    await route.fulfill({ contentType: "application/json", json: topicScriptDetail });
+  });
+}
+
+async function mockEmptyContentStrategyWorkflow(page: Page) {
+  await page.unroute(/\/api\/video-workspace\/menus$/);
+  await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { menus: contentStrategyWorkspaceMenus } });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/topic-generation-batches$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { batches: [] } });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/topics(\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: { topics: [], stats: { total: 0, idea: 0, approved: 0, scripted: 0, archived: 0 } },
+    });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/scripts(\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: { scripts: [], total: 0, limit: 20, offset: 0 },
+    });
+  });
+}
+
 test("video-agent 桌面工作台使用业务菜单并保留脚本创作闭环", async ({ page }) => {
   await mockExistingScriptWorkflow(page);
   await page.goto("/");
@@ -349,8 +557,12 @@ test("video-agent 桌面工作台使用业务菜单并保留脚本创作闭环",
   for (const label of ["选题智能体", "脚本智能体", "素材智能体", "视频智能体", "发布智能体", "优化智能体"]) {
     await expect(workspaceMenu.getByText(label)).toHaveCount(0);
   }
+  await expect(workspaceMenu.getByRole("button", { name: /内容策略/ })).toHaveClass(/active/);
+  await expect(page.getByRole("heading", { name: "内容策略" })).toBeVisible();
+  await workspaceMenu.getByRole("button", { name: /脚本创作/ }).click();
   await expect(workspaceMenu.getByRole("button", { name: /脚本创作/ })).toHaveClass(/active/);
-  await expect(workspaceMenu.getByRole("button", { name: /内容策略/ })).toBeDisabled();
+  await expect(workspaceMenu.getByRole("button", { name: /内容策略/ })).toBeEnabled();
+  await expect(workspaceMenu.getByRole("button", { name: /素材管理/ })).toBeDisabled();
 
   await expect(page.getByRole("heading", { name: "项目上下文" })).toHaveCount(0);
   await expect(page.getByLabel("项目名称")).toHaveCount(0);
@@ -393,6 +605,7 @@ test("video-agent 桌面工作台使用业务菜单并保留脚本创作闭环",
 test("空脚本列表时通过脚本 Agent 对话生成脚本并打开时间轴详情", async ({ page }) => {
   await mockEmptyScriptGeneration(page);
   await page.goto("/");
+  await page.getByRole("navigation", { name: "视频工作台菜单" }).getByRole("button", { name: /脚本创作/ }).click();
 
   await expect(page.getByText("在右侧脚本 Agent 对话中描述需求后生成第一版结构化脚本。")).toBeVisible();
 
@@ -414,4 +627,116 @@ test("空脚本列表时通过脚本 Agent 对话生成脚本并打开时间轴�
   await expect(page.getByText("时间轴对照视图")).toBeVisible();
   await expect(page.getByText("AI 工作流从清晰描述任务开始。")).toBeVisible();
   await expect(page.getByText("屏幕展示用户输入脚本需求。")).toBeVisible();
+});
+
+test("内容策略页从已确认选题确认参数并生成脚本", async ({ page }) => {
+  await mockContentStrategyWorkflow(page);
+  await page.goto("/");
+
+  const workspaceMenu = page.getByRole("navigation", { name: "视频工作台菜单" });
+  await expect(workspaceMenu.getByRole("button", { name: /内容策略/ })).toHaveClass(/active/);
+
+  await expect(page.getByRole("heading", { name: "内容策略" })).toBeVisible();
+  await expect(page.getByText("全部选题")).toBeVisible();
+  const summaryLayout = await page.locator('[aria-label="选题统计"]').evaluate((stats) =>
+    Array.from(stats.children).map((card) => {
+      const rect = card.getBoundingClientRect();
+      return { text: card.textContent, width: Math.round(rect.width), height: Math.round(rect.height) };
+    }),
+  );
+  expect(summaryLayout).toHaveLength(3);
+  expect(summaryLayout.map((card) => card.text)).toEqual(["15全部选题", "1已确认", "0已成稿"]);
+  for (const card of summaryLayout) {
+    expect(card.width).toBeGreaterThanOrEqual(120);
+    expect(card.width).toBeLessThanOrEqual(150);
+    expect(card.height).toBeLessThanOrEqual(76);
+  }
+  const poolLayout = await page.locator('[aria-label="选题池"]').evaluate((pool) => {
+    const poolRect = pool.getBoundingClientRect();
+    const detail = document.querySelector(".topicDetailColumn")?.getBoundingClientRect();
+    const filters = pool.querySelector(".topicFilters")?.getBoundingClientRect();
+    return {
+      filtersTop: filters ? Math.round(filters.top - poolRect.top) : null,
+      poolWidth: Math.round(poolRect.width),
+      detailWidth: detail ? Math.round(detail.width) : null,
+    };
+  });
+  expect(poolLayout.filtersTop).not.toBeNull();
+  expect(poolLayout.filtersTop!).toBeLessThanOrEqual(96);
+  expect(poolLayout.detailWidth).not.toBeNull();
+  expect(poolLayout.detailWidth!).toBeGreaterThanOrEqual(340);
+  expect(poolLayout.poolWidth).toBeGreaterThanOrEqual(360);
+  const topicListScroll = await page.locator(".topicList").evaluate((list) => ({
+    clientHeight: Math.round(list.clientHeight),
+    scrollHeight: Math.round(list.scrollHeight),
+    overflowY: window.getComputedStyle(list).overflowY,
+    firstMeta: list.querySelector(".topicMeta")?.textContent,
+  }));
+  expect(topicListScroll.overflowY).toBe("auto");
+  expect(topicListScroll.scrollHeight).toBeGreaterThan(topicListScroll.clientHeight);
+  expect(topicListScroll.firstMeta).toBe("来源：人工 · 类型：知识科普");
+  await expect(page.getByRole("combobox", { name: "选题状态筛选" })).toHaveCount(0);
+  const statusFilters = page.locator('[aria-label="选题状态筛选"]');
+  await expect(statusFilters.getByRole("button")).toHaveCount(5);
+  await expect(statusFilters.getByRole("button", { name: "全部" })).toHaveClass(/selected/);
+  await expect(statusFilters.getByRole("button", { name: "待评估" })).toBeVisible();
+  await expect(statusFilters.getByRole("button", { name: "已确认" })).toBeVisible();
+  await expect(statusFilters.getByRole("button", { name: "已成稿" })).toBeVisible();
+  await expect(statusFilters.getByRole("button", { name: "已归档" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /普通人如何搭建 AI 内容流水线/ })).toBeVisible();
+  await page.getByRole("button", { name: /普通人如何搭建 AI 内容流水线/ }).click();
+  await expect(page.getByRole("region", { name: "选题详情" }).getByRole("button", { name: "生成脚本" })).toBeVisible();
+  await page.getByRole("region", { name: "选题详情" }).getByRole("button", { name: "生成脚本" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "脚本生成确认" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(approvedTopic.title)).toBeVisible();
+  await expect(dialog.getByLabel("分镜数")).toHaveValue("6");
+  await dialog.getByRole("button", { name: "确认生成" }).click();
+
+  await expect(page.getByRole("heading", { name: "AI 内容流水线脚本" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "来源选题" })).toBeVisible();
+  const sourceTopicPanel = page.locator(".sourceTopicPanel");
+  await expect(sourceTopicPanel.getByText(approvedTopic.title, { exact: true })).toBeVisible();
+  await expect(sourceTopicPanel.getByText(approvedTopic.angle)).toBeVisible();
+});
+
+test("内容策略空选题池布局贴近原型顶部", async ({ page }) => {
+  await mockEmptyContentStrategyWorkflow(page);
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "内容策略" })).toBeVisible();
+  await expect(page.getByText("还没有选题")).toBeVisible();
+  const topicAgent = page.getByRole("region", { name: "选题 Agent" });
+  const agentBox = await topicAgent.boundingBox();
+  const agentMessagesBox = await topicAgent.getByLabel("选题 Agent 消息").boundingBox();
+  const agentInputBox = await topicAgent.getByLabel("生成要求").boundingBox();
+  const agentButtonBox = await topicAgent.getByRole("button", { name: "生成选题" }).boundingBox();
+  expect(agentBox).not.toBeNull();
+  expect(agentMessagesBox).not.toBeNull();
+  expect(agentInputBox).not.toBeNull();
+  expect(agentButtonBox).not.toBeNull();
+  expect(Math.round(agentBox!.height)).toBeLessThanOrEqual(480);
+  expect(Math.round(agentInputBox!.y - agentBox!.y)).toBeLessThanOrEqual(128);
+  expect(Math.round(agentButtonBox!.width)).toBeLessThanOrEqual(160);
+  expect(Math.round(agentButtonBox!.y + agentButtonBox!.height - agentBox!.y)).toBeLessThanOrEqual(260);
+  expect(Math.round(agentMessagesBox!.y - agentBox!.y)).toBeLessThanOrEqual(310);
+
+  const topicPool = page.getByRole("region", { name: "选题池" });
+  const poolBox = await topicPool.boundingBox();
+  const filtersBox = await topicPool.getByLabel("选题状态筛选").boundingBox();
+  const emptyTitleBox = await topicPool.getByText("还没有选题").boundingBox();
+  const emptyHintBox = await topicPool
+    .getByText("可以手动新增，或用选题 Agent 生成候选后再确认。")
+    .boundingBox();
+  expect(poolBox).not.toBeNull();
+  expect(filtersBox).not.toBeNull();
+  expect(emptyTitleBox).not.toBeNull();
+  expect(emptyHintBox).not.toBeNull();
+  const filtersTop = Math.round(filtersBox!.y - poolBox!.y);
+  const emptyTop = Math.round(emptyTitleBox!.y - poolBox!.y);
+  const emptyHeight = Math.round(emptyHintBox!.y + emptyHintBox!.height - emptyTitleBox!.y);
+  expect(filtersTop).toBeLessThanOrEqual(96);
+  expect(emptyTop).toBeLessThanOrEqual(180);
+  expect(emptyHeight).toBeLessThanOrEqual(150);
 });

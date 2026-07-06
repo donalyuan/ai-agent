@@ -1,5 +1,7 @@
 export type ScriptStatus = "draft" | "approved" | "archived";
 export type ScriptStyle = "knowledge" | "story" | "tutorial";
+export type ContentTopicStatus = "idea" | "approved" | "scripted" | "archived";
+export type ContentTopicSource = "manual" | "agent";
 
 export type Project = {
   project_id: string;
@@ -47,6 +49,8 @@ export type CreateProjectPayload = {
 
 export type ScriptSummary = {
   script_id: string;
+  topic_id: string | null;
+  source_topic_title: string | null;
   title: string;
   status: ScriptStatus;
   scene_count: number;
@@ -66,6 +70,8 @@ export type Scene = {
 export type ScriptDetail = {
   script_id: string;
   project_id: string;
+  topic_id: string | null;
+  topic_snapshot?: ContentTopicSnapshot | null;
   title: string;
   hook: string;
   scenes: Scene[];
@@ -73,6 +79,107 @@ export type ScriptDetail = {
   parent_id: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ContentTopic = {
+  topic_id: string;
+  project_id: string;
+  batch_id: string | null;
+  title: string;
+  angle: string;
+  target_audience: string;
+  hook_points: string[];
+  content_type: string;
+  score: number | null;
+  score_reason: string;
+  tags: string[];
+  source: ContentTopicSource;
+  status: ContentTopicStatus;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContentTopicSnapshot = {
+  topic_id: string;
+  title: string;
+  angle: string;
+  target_audience: string;
+  hook_points: string[];
+  content_type: string;
+  score: number | null;
+  score_reason: string;
+  tags: string[];
+  source: ContentTopicSource;
+  status: ContentTopicStatus;
+  created_at: string;
+};
+
+export type ContentTopicStats = {
+  total: number;
+  idea: number;
+  approved: number;
+  scripted: number;
+  archived: number;
+};
+
+export type TopicGenerationBatchStatus = "running" | "succeeded" | "failed";
+
+export type TopicGenerationBatchSummary = {
+  batch_id: string;
+  project_id: string;
+  prompt: string;
+  requested_count: number;
+  topic_count: number;
+  status: TopicGenerationBatchStatus;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContentTopicListResponse = {
+  topics: ContentTopic[];
+  stats: ContentTopicStats;
+};
+
+export type TopicGenerationBatchListResponse = {
+  batches: TopicGenerationBatchSummary[];
+};
+
+export type ContentTopicFilters = {
+  status?: ContentTopicStatus | "all";
+  source?: ContentTopicSource | "all";
+  batch_id?: string | null;
+};
+
+export type ContentTopicPayload = {
+  title: string;
+  angle: string;
+  target_audience: string;
+  hook_points: string[];
+  content_type: string;
+  score?: number | null;
+  score_reason: string;
+  tags: string[];
+};
+
+export type PrepareScriptFromTopicPayload = {
+  style?: ScriptStyle;
+  scene_count?: number;
+};
+
+export type TopicScriptRequestPreview = {
+  project_id: string;
+  topic_id: string;
+  topic: string;
+  style: ScriptStyle;
+  scene_count: number;
+};
+
+export type PrepareScriptFromTopicResponse = {
+  topic: ContentTopic;
+  topic_snapshot: ContentTopicSnapshot;
+  script_request: TopicScriptRequestPreview;
 };
 
 export type ScriptListResponse = {
@@ -84,9 +191,10 @@ export type ScriptListResponse = {
 
 export type GenerateScriptPayload = {
   project_id: string;
-  topic: string;
-  style: ScriptStyle;
-  scene_count: number;
+  topic?: string;
+  topic_id?: string | null;
+  style?: ScriptStyle;
+  scene_count?: number;
   parent_id?: string | null;
 };
 
@@ -236,6 +344,79 @@ export function listScripts(
     client,
     `/api/projects/${projectId}/scripts${query ? `?${query}` : ""}`,
   );
+}
+
+export function listContentTopics(
+  client: ApiClient,
+  projectId: string,
+  filters: ContentTopicFilters = {},
+) {
+  const searchParams = new URLSearchParams();
+  if (filters.status && filters.status !== "all") {
+    searchParams.set("status", filters.status);
+  }
+  if (filters.source && filters.source !== "all") {
+    searchParams.set("source", filters.source);
+  }
+  if (filters.batch_id) {
+    searchParams.set("batch_id", filters.batch_id);
+  }
+  const query = searchParams.toString();
+  return request<ContentTopicListResponse>(
+    client,
+    `/api/projects/${projectId}/topics${query ? `?${query}` : ""}`,
+  );
+}
+
+export function listTopicGenerationBatches(client: ApiClient, projectId: string) {
+  return request<TopicGenerationBatchListResponse>(
+    client,
+    `/api/projects/${projectId}/topic-generation-batches`,
+  );
+}
+
+export function createContentTopic(
+  client: ApiClient,
+  projectId: string,
+  payload: ContentTopicPayload,
+) {
+  return request<ContentTopic>(client, `/api/projects/${projectId}/topics`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function updateContentTopic(
+  client: ApiClient,
+  topicId: string,
+  payload: ContentTopicPayload,
+) {
+  return request<ContentTopic>(client, `/api/topics/${topicId}`, {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function updateContentTopicStatus(
+  client: ApiClient,
+  topicId: string,
+  status: ContentTopicStatus,
+) {
+  return request<ContentTopic>(client, `/api/topics/${topicId}/status`, {
+    method: "PUT",
+    body: { status },
+  });
+}
+
+export function prepareScriptFromTopic(
+  client: ApiClient,
+  topicId: string,
+  payload: PrepareScriptFromTopicPayload = {},
+) {
+  return request<PrepareScriptFromTopicResponse>(client, `/api/topics/${topicId}/prepare-script`, {
+    method: "POST",
+    body: payload,
+  });
 }
 
 export function getScript(client: ApiClient, scriptId: string) {

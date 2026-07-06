@@ -96,6 +96,7 @@ fn sample_script(project_id: Uuid) -> Script {
     Script::new(
         Uuid::new_v4(),
         project_id,
+        None,
         "程序员必看：ChatGPT工作流".to_string(),
         "还在手写重复代码？".to_string(),
         json!({"topic": "ChatGPT如何改变程序员工作流"}),

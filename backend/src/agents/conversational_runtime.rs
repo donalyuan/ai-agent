@@ -3,13 +3,17 @@ use crate::agents::conversation::{
     BindAgentConversationSubjectInput, CreateAgentMessageInput, CreateAgentRunInput,
     CreateAgentStepInput, FinishAgentRunInput,
 };
-use crate::agents::models::{GenerateScriptRequest, Scene, Script, ScriptStyle};
+use crate::agents::models::{
+    ContentTopicSource, ContentTopicStatus, GenerateScriptRequest, Scene, Script, ScriptStyle,
+    TopicGenerationBatchStatus,
+};
 use crate::agents::{ScriptAgentError, ScriptAgentService};
 use crate::repositories::{
-    ConversationRepository, ConversationRepositoryError, ProjectRepository, ScriptRepository,
-    ScriptRepositoryError,
+    ConversationRepository, ConversationRepositoryError, CreateContentTopicInput,
+    CreateTopicGenerationBatchInput, ProjectRepository, ProjectRepositoryError, ScriptRepository,
+    ScriptRepositoryError, TopicRepository, TopicRepositoryError, UpdateTopicGenerationBatchInput,
 };
-use novex_model::{LLMClient, LLMError, LLMPrompt};
+use novex_model::{LLMClient, LLMError, LLMJsonSchema, LLMPrompt};
 use serde::Deserialize;
 use serde_json::json;
 use std::fmt;
@@ -21,6 +25,7 @@ pub struct AgentRuntime {
     conversation_repository: Arc<dyn ConversationRepository>,
     script_repository: Arc<dyn ScriptRepository>,
     project_repository: Arc<dyn ProjectRepository>,
+    topic_repository: Option<Arc<dyn TopicRepository>>,
     llm_client: Arc<dyn LLMClient>,
 }
 
@@ -35,8 +40,14 @@ impl AgentRuntime {
             conversation_repository,
             script_repository,
             project_repository,
+            topic_repository: None,
             llm_client,
         }
+    }
+
+    pub fn with_topic_repository(mut self, topic_repository: Arc<dyn TopicRepository>) -> Self {
+        self.topic_repository = Some(topic_repository);
+        self
     }
 
     pub async fn handle_turn(
@@ -73,6 +84,10 @@ impl AgentRuntime {
         let result = match conversation.agent_type.as_str() {
             "script" => {
                 self.handle_script_turn(&conversation, &user_message, &run)
+                    .await
+            }
+            "topic" => {
+                self.handle_topic_turn(&conversation, &user_message, &run)
                     .await
             }
             agent_type => Err(AgentRuntimeError::UnsupportedAgent(agent_type.to_string())),
@@ -322,6 +337,208 @@ impl AgentRuntime {
             .await
             .map_err(AgentRuntimeError::from)
     }
+
+    async fn handle_topic_turn(
+        &self,
+        conversation: &AgentConversation,
+        user_message: &AgentMessage,
+        run: &AgentRunRecord,
+    ) -> Result<AgentMessage, AgentRuntimeError> {
+        let project_id = conversation
+            .project_id
+            .ok_or_else(|| AgentRuntimeError::Validation("选题会话缺少 project_id".to_string()))?;
+        let topic_repository = self.topic_repository.as_ref().ok_or_else(|| {
+            AgentRuntimeError::Validation("选题 Agent 未配置 topic repository".to_string())
+        })?;
+        let project = self.project_repository.get_project(project_id).await?;
+
+        self.conversation_repository
+            .add_step(CreateAgentStepInput {
+                agent_run_id: run.id,
+                step_order: 1,
+                step_type: "read_project_context".to_string(),
+                status: "succeeded".to_string(),
+                input: json!({ "project_id": project_id }),
+                output: Some(json!({
+                    "name": project.name,
+                    "positioning": project.positioning,
+                    "description": project.description
+                })),
+                error_message: None,
+            })
+            .await?;
+
+        let requested_count = requested_topic_count(&user_message.content);
+        let batch = topic_repository
+            .create_generation_batch(CreateTopicGenerationBatchInput {
+                project_id,
+                source_run_id: Some(run.id),
+                prompt: user_message.content.clone(),
+                requested_count,
+                status: TopicGenerationBatchStatus::Running,
+                error_message: None,
+                metadata: json!({ "conversation_id": conversation.id }),
+            })
+            .await?;
+
+        let raw = self
+            .llm_client
+            .generate_script(build_topic_generation_prompt(
+                &project.positioning,
+                &project.description,
+                requested_count,
+                &user_message.content,
+            ))
+            .await;
+
+        let candidates = match raw {
+            Ok(raw) => match TopicLLMOutput::parse_and_validate(&raw) {
+                Ok(candidates) => candidates,
+                Err(error) => {
+                    self.mark_topic_batch_failed(
+                        topic_repository.as_ref(),
+                        batch.id,
+                        error.to_string(),
+                    )
+                    .await;
+                    self.add_failed_topic_step(run.id, 2, "generate_topics", error.to_string())
+                        .await;
+                    return Err(AgentRuntimeError::InvalidLlmOutput(error.to_string()));
+                }
+            },
+            Err(error) => {
+                self.mark_topic_batch_failed(
+                    topic_repository.as_ref(),
+                    batch.id,
+                    error.to_string(),
+                )
+                .await;
+                self.add_failed_topic_step(run.id, 2, "generate_topics", error.to_string())
+                    .await;
+                return Err(AgentRuntimeError::Llm(error));
+            }
+        };
+
+        self.conversation_repository
+            .add_step(CreateAgentStepInput {
+                agent_run_id: run.id,
+                step_order: 2,
+                step_type: "generate_topics".to_string(),
+                status: "succeeded".to_string(),
+                input: json!({ "message_id": user_message.id, "requested_count": requested_count }),
+                output: Some(json!({ "topic_count": candidates.len() })),
+                error_message: None,
+            })
+            .await?;
+
+        let mut created_topic_ids = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            let topic = topic_repository
+                .create_topic(CreateContentTopicInput {
+                    project_id,
+                    batch_id: Some(batch.id),
+                    title: candidate.title,
+                    angle: candidate.angle,
+                    target_audience: candidate.target_audience,
+                    hook_points: candidate.hook_points,
+                    content_type: candidate.content_type,
+                    score: Some(candidate.score.unwrap_or(0.0)),
+                    score_reason: candidate.score_reason,
+                    tags: candidate.tags,
+                    source: ContentTopicSource::Agent,
+                    metadata: json!({ "source_run_id": run.id }),
+                })
+                .await?;
+            created_topic_ids.push(topic.id);
+        }
+
+        topic_repository
+            .update_generation_batch(
+                batch.id,
+                UpdateTopicGenerationBatchInput {
+                    status: TopicGenerationBatchStatus::Succeeded,
+                    error_message: None,
+                    metadata: json!({
+                        "conversation_id": conversation.id,
+                        "created_topic_ids": created_topic_ids,
+                        "topic_count": created_topic_ids.len()
+                    }),
+                },
+            )
+            .await?;
+
+        self.conversation_repository
+            .add_step(CreateAgentStepInput {
+                agent_run_id: run.id,
+                step_order: 3,
+                step_type: "persist_topics".to_string(),
+                status: "succeeded".to_string(),
+                input: json!({ "batch_id": batch.id }),
+                output: Some(json!({
+                    "batch_id": batch.id,
+                    "created_topic_ids": created_topic_ids,
+                    "topic_count": created_topic_ids.len()
+                })),
+                error_message: None,
+            })
+            .await?;
+
+        let topic_count = created_topic_ids.len();
+        self.conversation_repository
+            .save_message(CreateAgentMessageInput {
+                conversation_id: conversation.id,
+                role: AgentMessageRole::Assistant,
+                content: format!("已生成 {topic_count} 个候选选题。"),
+                metadata: json!({
+                    "intent": "generate_topics",
+                    "batch_id": batch.id,
+                    "created_topic_ids": created_topic_ids,
+                    "topic_count": topic_count,
+                    "status": ContentTopicStatus::Idea
+                }),
+            })
+            .await
+            .map_err(AgentRuntimeError::from)
+    }
+
+    async fn mark_topic_batch_failed(
+        &self,
+        topic_repository: &dyn TopicRepository,
+        batch_id: Uuid,
+        error_message: String,
+    ) {
+        let _ = topic_repository
+            .update_generation_batch(
+                batch_id,
+                UpdateTopicGenerationBatchInput {
+                    status: TopicGenerationBatchStatus::Failed,
+                    error_message: Some(error_message),
+                    metadata: json!({}),
+                },
+            )
+            .await;
+    }
+
+    async fn add_failed_topic_step(
+        &self,
+        run_id: Uuid,
+        step_order: i32,
+        step_type: &str,
+        error_message: String,
+    ) {
+        let _ = self
+            .conversation_repository
+            .add_step(CreateAgentStepInput {
+                agent_run_id: run_id,
+                step_order,
+                step_type: step_type.to_string(),
+                status: "failed".to_string(),
+                input: json!({}),
+                output: None,
+                error_message: Some(error_message),
+            })
+            .await;
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -454,9 +671,9 @@ impl ScriptGenerationIntent {
         self,
         project_id: Uuid,
     ) -> Result<GenerateScriptRequest, AgentRuntimeError> {
-        let topic = self.topic.ok_or_else(|| {
-            AgentRuntimeError::InvalidLlmOutput("topic is required".to_string())
-        })?;
+        let topic = self
+            .topic
+            .ok_or_else(|| AgentRuntimeError::InvalidLlmOutput("topic is required".to_string()))?;
         let style = self
             .style
             .as_deref()
@@ -470,6 +687,7 @@ impl ScriptGenerationIntent {
         Ok(GenerateScriptRequest {
             project_id,
             topic,
+            topic_id: None,
             style: Some(style),
             scene_count: Some(scene_count),
             parent_id: None,
@@ -516,6 +734,7 @@ JSON Schema：
             user_message = user_message
         ),
         max_output_tokens: Some(800),
+        output_schema: None,
     }
 }
 
@@ -565,7 +784,237 @@ hook：{hook}
             user_message = user_message
         ),
         max_output_tokens: Some(1_200),
+        output_schema: None,
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct TopicLLMOutputEnvelope {
+    topics: Vec<TopicLLMOutput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TopicLLMOutput {
+    title: String,
+    angle: String,
+    target_audience: String,
+    hook_points: Vec<String>,
+    content_type: String,
+    score: Option<f64>,
+    score_reason: String,
+    tags: Vec<String>,
+}
+
+impl TopicLLMOutput {
+    fn parse_and_validate(raw: &str) -> Result<Vec<Self>, TopicOutputError> {
+        let json_text = extract_topic_json_object(raw)?;
+        let mut envelope: TopicLLMOutputEnvelope =
+            serde_json::from_str(json_text).map_err(|error| TopicOutputError::InvalidJson {
+                message: error.to_string(),
+            })?;
+        let topics = &mut envelope.topics;
+        if topics.is_empty() {
+            return Err(TopicOutputError::Validation(
+                "topic output must not be empty".to_string(),
+            ));
+        }
+        for topic in topics {
+            topic.normalize();
+            topic.validate()?;
+        }
+        Ok(envelope.topics)
+    }
+
+    fn normalize(&mut self) {
+        self.title = self.title.trim().to_string();
+        self.angle = self.angle.trim().to_string();
+        self.target_audience = self.target_audience.trim().to_string();
+        self.content_type = self.content_type.trim().to_string();
+        self.score_reason = self.score_reason.trim().to_string();
+        self.hook_points = self
+            .hook_points
+            .drain(..)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        self.tags = self
+            .tags
+            .drain(..)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+    }
+
+    fn validate(&self) -> Result<(), TopicOutputError> {
+        if self.title.is_empty() {
+            return Err(TopicOutputError::Validation(
+                "title is required".to_string(),
+            ));
+        }
+        if self.angle.is_empty() {
+            return Err(TopicOutputError::Validation(
+                "angle is required".to_string(),
+            ));
+        }
+        if self.target_audience.is_empty() {
+            return Err(TopicOutputError::Validation(
+                "target_audience is required".to_string(),
+            ));
+        }
+        if self.hook_points.is_empty() {
+            return Err(TopicOutputError::Validation(
+                "hook_points is required".to_string(),
+            ));
+        }
+        if self.content_type.is_empty() {
+            return Err(TopicOutputError::Validation(
+                "content_type is required".to_string(),
+            ));
+        }
+        let Some(score) = self.score else {
+            return Err(TopicOutputError::Validation(
+                "score is required".to_string(),
+            ));
+        };
+        if !(0.0..=100.0).contains(&score) {
+            return Err(TopicOutputError::Validation(
+                "score must be between 0 and 100".to_string(),
+            ));
+        }
+        if self.score_reason.is_empty() {
+            return Err(TopicOutputError::Validation(
+                "score_reason is required".to_string(),
+            ));
+        }
+        if self.tags.is_empty() {
+            return Err(TopicOutputError::Validation("tags is required".to_string()));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+enum TopicOutputError {
+    InvalidJson { message: String },
+    Validation(String),
+}
+
+impl fmt::Display for TopicOutputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidJson { message } => write!(formatter, "invalid topic JSON: {message}"),
+            Self::Validation(message) => write!(formatter, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for TopicOutputError {}
+
+fn build_topic_generation_prompt(
+    project_positioning: &str,
+    project_description: &str,
+    requested_count: i32,
+    user_message: &str,
+) -> LLMPrompt {
+    LLMPrompt {
+        system: "你是短视频内容策略选题 Agent。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。"
+            .to_string(),
+        user: format!(
+            r#"请基于项目定位和用户补充要求生成 {requested_count} 个候选选题。
+
+项目定位：{project_positioning}
+项目描述：{project_description}
+用户补充要求：{user_message}
+
+输出要求：
+1. 必须只输出一个 JSON 对象。
+2. 顶层对象必须只包含 topics 字段。
+3. topics 数组每项必须包含 title、angle、target_audience、hook_points、content_type、score、score_reason、tags。
+4. score 必须是 0 到 100 的数字。
+5. hook_points 和 tags 必须是非空字符串数组。
+6. 不允许把 topics 写成字符串数组；每个选题必须是包含完整字段的对象。
+
+JSON Schema：
+{{
+  "topics": [
+    {{
+      "title": "选题标题",
+      "angle": "选题角度",
+      "target_audience": "目标受众",
+      "hook_points": ["主要看点"],
+      "content_type": "knowledge",
+      "score": 88,
+      "score_reason": "评分理由",
+      "tags": ["标签"]
+    }}
+  ]
+}}"#,
+            requested_count = requested_count,
+            project_positioning = project_positioning,
+            project_description = project_description,
+            user_message = user_message
+        ),
+        max_output_tokens: Some(2_000),
+        output_schema: Some(topic_generation_output_schema()),
+    }
+}
+
+fn topic_generation_output_schema() -> LLMJsonSchema {
+    LLMJsonSchema {
+        name: "topic_generation_batch".to_string(),
+        strict: true,
+        schema: json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["topics"],
+            "properties": {
+                "topics": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                            "title",
+                            "angle",
+                            "target_audience",
+                            "hook_points",
+                            "content_type",
+                            "score",
+                            "score_reason",
+                            "tags"
+                        ],
+                        "properties": {
+                            "title": { "type": "string", "minLength": 1 },
+                            "angle": { "type": "string", "minLength": 1 },
+                            "target_audience": { "type": "string", "minLength": 1 },
+                            "hook_points": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": { "type": "string", "minLength": 1 }
+                            },
+                            "content_type": { "type": "string", "minLength": 1 },
+                            "score": { "type": "number", "minimum": 0, "maximum": 100 },
+                            "score_reason": { "type": "string", "minLength": 1 },
+                            "tags": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": { "type": "string", "minLength": 1 }
+                            }
+                        }
+                    }
+                }
+            }
+        }),
+    }
+}
+
+fn requested_topic_count(user_message: &str) -> i32 {
+    let parsed = user_message
+        .split(|character: char| !character.is_ascii_digit())
+        .find_map(|segment| segment.parse::<i32>().ok())
+        .unwrap_or(5);
+    parsed.clamp(1, 20)
 }
 
 fn extract_json_object(raw: &str) -> Result<&str, AgentRuntimeError> {
@@ -583,6 +1032,21 @@ fn extract_json_object(raw: &str) -> Result<&str, AgentRuntimeError> {
     Ok(&raw[start..=end])
 }
 
+fn extract_topic_json_object(raw: &str) -> Result<&str, TopicOutputError> {
+    let start = raw
+        .find('{')
+        .ok_or_else(|| TopicOutputError::Validation("missing JSON object start".to_string()))?;
+    let end = raw
+        .rfind('}')
+        .ok_or_else(|| TopicOutputError::Validation("missing JSON object end".to_string()))?;
+    if start > end {
+        return Err(TopicOutputError::Validation(
+            "invalid JSON object bounds".to_string(),
+        ));
+    }
+    Ok(&raw[start..=end])
+}
+
 #[derive(Debug)]
 pub enum AgentRuntimeError {
     Validation(String),
@@ -591,6 +1055,8 @@ pub enum AgentRuntimeError {
     SceneNotFound { script_id: Uuid, sequence: i32 },
     ConversationRepository(ConversationRepositoryError),
     ScriptRepository(ScriptRepositoryError),
+    ProjectRepository(ProjectRepositoryError),
+    TopicRepository(TopicRepositoryError),
     ScriptAgent(ScriptAgentError),
     Llm(LLMError),
 }
@@ -604,6 +1070,18 @@ impl From<ConversationRepositoryError> for AgentRuntimeError {
 impl From<ScriptRepositoryError> for AgentRuntimeError {
     fn from(error: ScriptRepositoryError) -> Self {
         Self::ScriptRepository(error)
+    }
+}
+
+impl From<ProjectRepositoryError> for AgentRuntimeError {
+    fn from(error: ProjectRepositoryError) -> Self {
+        Self::ProjectRepository(error)
+    }
+}
+
+impl From<TopicRepositoryError> for AgentRuntimeError {
+    fn from(error: TopicRepositoryError) -> Self {
+        Self::TopicRepository(error)
     }
 }
 
@@ -640,6 +1118,8 @@ impl fmt::Display for AgentRuntimeError {
             ),
             Self::ConversationRepository(error) => write!(formatter, "{error}"),
             Self::ScriptRepository(error) => write!(formatter, "{error}"),
+            Self::ProjectRepository(error) => write!(formatter, "{error}"),
+            Self::TopicRepository(error) => write!(formatter, "{error}"),
             Self::ScriptAgent(error) => write!(formatter, "{error}"),
             Self::Llm(error) => write!(formatter, "{error}"),
         }

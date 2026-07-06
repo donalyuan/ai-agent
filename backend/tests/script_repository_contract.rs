@@ -10,6 +10,7 @@ fn sample_script(project_id: Uuid, status: ScriptStatus) -> Script {
     Script::new(
         Uuid::new_v4(),
         project_id,
+        None,
         "程序员必看：ChatGPT工作流".to_string(),
         "还在手写重复代码？".to_string(),
         json!({"topic": "ChatGPT如何改变程序员工作流"}),
@@ -77,6 +78,13 @@ impl ScriptRepository for MemoryScriptRepository {
             .into_iter()
             .map(|script| ScriptSummary {
                 script_id: script.id,
+                topic_id: script.topic_id,
+                source_topic_title: script
+                    .content
+                    .get("topic_snapshot")
+                    .and_then(|snapshot| snapshot.get("title"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
                 title: script.title,
                 status: script.status,
                 scene_count: script.scenes.len() as i64,

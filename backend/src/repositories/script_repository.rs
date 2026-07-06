@@ -45,6 +45,7 @@ impl PostgresScriptRepository {
         Ok(Script::new(
             script_id,
             row.get("project_id"),
+            row.get("topic_id"),
             row.get("title"),
             row.get("hook"),
             row.get("content"),
@@ -107,13 +108,14 @@ impl ScriptRepository for PostgresScriptRepository {
         sqlx::query(
             r#"
             INSERT INTO scripts (
-                id, project_id, title, hook, content, status, parent_id, created_at, updated_at
+                id, project_id, topic_id, title, hook, content, status, parent_id, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(script.id)
         .bind(script.project_id)
+        .bind(script.topic_id)
         .bind(&script.title)
         .bind(&script.hook)
         .bind(&script.content)
@@ -156,7 +158,7 @@ impl ScriptRepository for PostgresScriptRepository {
     async fn get_script(&self, script_id: Uuid) -> Result<Script, ScriptRepositoryError> {
         let row = sqlx::query(
             r#"
-            SELECT id, project_id, title, hook, content, status, parent_id, created_at, updated_at
+            SELECT id, project_id, topic_id, title, hook, content, status, parent_id, created_at, updated_at
             FROM scripts
             WHERE id = $1
             "#,
@@ -180,7 +182,7 @@ impl ScriptRepository for PostgresScriptRepository {
         let rows = if let Some(status) = filter.status {
             sqlx::query(
                 r#"
-                SELECT id, project_id, title, hook, content, status, parent_id, created_at, updated_at
+                SELECT id, project_id, topic_id, title, hook, content, status, parent_id, created_at, updated_at
                 FROM scripts
                 WHERE project_id = $1 AND status = $2
                 ORDER BY created_at DESC
@@ -197,7 +199,7 @@ impl ScriptRepository for PostgresScriptRepository {
         } else {
             sqlx::query(
                 r#"
-                SELECT id, project_id, title, hook, content, status, parent_id, created_at, updated_at
+                SELECT id, project_id, topic_id, title, hook, content, status, parent_id, created_at, updated_at
                 FROM scripts
                 WHERE project_id = $1
                 ORDER BY created_at DESC
@@ -231,6 +233,8 @@ impl ScriptRepository for PostgresScriptRepository {
                 r#"
                 SELECT
                     s.id,
+                    s.topic_id,
+                    COALESCE(t.title, s.content #>> '{topic_snapshot,title}') AS source_topic_title,
                     s.title,
                     s.status,
                     s.parent_id,
@@ -238,8 +242,9 @@ impl ScriptRepository for PostgresScriptRepository {
                     COUNT(sc.id) AS scene_count
                 FROM scripts s
                 LEFT JOIN scenes sc ON sc.script_id = s.id
+                LEFT JOIN content_topics t ON t.id = s.topic_id
                 WHERE s.project_id = $1 AND s.status = $2
-                GROUP BY s.id
+                GROUP BY s.id, t.title
                 ORDER BY s.created_at DESC
                 LIMIT $3 OFFSET $4
                 "#,
@@ -256,6 +261,8 @@ impl ScriptRepository for PostgresScriptRepository {
                 r#"
                 SELECT
                     s.id,
+                    s.topic_id,
+                    COALESCE(t.title, s.content #>> '{topic_snapshot,title}') AS source_topic_title,
                     s.title,
                     s.status,
                     s.parent_id,
@@ -263,8 +270,9 @@ impl ScriptRepository for PostgresScriptRepository {
                     COUNT(sc.id) AS scene_count
                 FROM scripts s
                 LEFT JOIN scenes sc ON sc.script_id = s.id
+                LEFT JOIN content_topics t ON t.id = s.topic_id
                 WHERE s.project_id = $1
-                GROUP BY s.id
+                GROUP BY s.id, t.title
                 ORDER BY s.created_at DESC
                 LIMIT $2 OFFSET $3
                 "#,
@@ -431,6 +439,8 @@ fn script_summary_from_row(row: PgRow) -> Result<ScriptSummary, ScriptRepository
 
     Ok(ScriptSummary {
         script_id: row.get("id"),
+        topic_id: row.get("topic_id"),
+        source_topic_title: row.get("source_topic_title"),
         title: row.get("title"),
         status,
         scene_count: row.get("scene_count"),

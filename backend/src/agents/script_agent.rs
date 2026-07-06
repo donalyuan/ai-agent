@@ -3,13 +3,15 @@ use crate::agents::llm::{
     ScriptSceneLLMOutput,
 };
 use crate::agents::models::{
-    GenerateScriptRequest, Scene, Script, ScriptListFilter, ScriptStatus, ScriptSummary,
+    ContentTopic, ContentTopicStatus, GenerateScriptRequest, Scene, Script, ScriptListFilter,
+    ScriptStatus, ScriptSummary,
 };
 use crate::repositories::{
     ProjectRepository, ProjectRepositoryError, ScriptRepository, ScriptRepositoryError,
+    TopicRepository, TopicRepositoryError,
 };
 use chrono::Utc;
-use novex_model::{LLMClient, LLMError};
+use novex_model::{LLMClient, LLMError, LLMPrompt};
 use serde_json::json;
 use std::fmt;
 use std::sync::Arc;
@@ -17,12 +19,14 @@ use uuid::Uuid;
 use validator::Validate;
 
 const MAX_LLM_PARSE_ATTEMPTS: usize = 3;
+const MAX_LLM_PROVIDER_ATTEMPTS: usize = 3;
 
 #[derive(Clone)]
 pub struct ScriptAgentService {
     llm_client: Arc<dyn LLMClient>,
     script_repository: Arc<dyn ScriptRepository>,
     project_repository: Arc<dyn ProjectRepository>,
+    topic_repository: Option<Arc<dyn TopicRepository>>,
     generation_mode: ScriptGenerationMode,
 }
 
@@ -42,12 +46,18 @@ impl ScriptAgentService {
             llm_client,
             script_repository,
             project_repository,
+            topic_repository: None,
             generation_mode: ScriptGenerationMode::Complete,
         }
     }
 
     pub fn with_generation_mode(mut self, generation_mode: ScriptGenerationMode) -> Self {
         self.generation_mode = generation_mode;
+        self
+    }
+
+    pub fn with_topic_repository(mut self, topic_repository: Arc<dyn TopicRepository>) -> Self {
+        self.topic_repository = Some(topic_repository);
         self
     }
 
@@ -59,31 +69,32 @@ impl ScriptAgentService {
             return self.generate_script_stepwise(request).await;
         }
 
-        self.prepare_generate_request(&request).await?;
+        let (request, topic_context) = self.prepare_generate_request(request).await?;
 
-        let prompt = ScriptPromptBuilder::build(&request);
+        let prompt: LLMPrompt = ScriptPromptBuilder::build(&request).into();
         let scene_count = request.scene_count_or_default();
         let mut last_parse_error: Option<LLMOutputError> = None;
+        let mut retry_count = 0;
 
-        for attempt_index in 0..MAX_LLM_PARSE_ATTEMPTS {
-            let raw = self
-                .llm_client
-                .generate_script(prompt.clone().into())
-                .await
-                .map_err(ScriptAgentError::from)?;
+        for _ in 0..MAX_LLM_PARSE_ATTEMPTS {
+            let (raw, provider_retry_count) =
+                self.generate_raw_with_retries(prompt.clone()).await?;
+            retry_count += provider_retry_count;
 
             match ScriptLLMOutput::parse_and_validate(&raw, scene_count) {
                 Ok(output) => {
-                    let retry_count = attempt_index;
-                    let script = self.build_script(request, output, retry_count, "complete");
-                    return self
-                        .script_repository
-                        .save_script(script)
-                        .await
-                        .map_err(ScriptAgentError::from);
+                    let script = self.build_script(
+                        request,
+                        output,
+                        retry_count,
+                        "complete",
+                        topic_context.as_ref(),
+                    );
+                    return self.save_script_and_update_topic(script).await;
                 }
                 Err(error) => {
                     last_parse_error = Some(error);
+                    retry_count += 1;
                 }
             }
         }
@@ -99,7 +110,7 @@ impl ScriptAgentService {
         &self,
         request: GenerateScriptRequest,
     ) -> Result<Script, ScriptAgentError> {
-        self.prepare_generate_request(&request).await?;
+        let (request, topic_context) = self.prepare_generate_request(request).await?;
 
         let (metadata, metadata_retries) = self.generate_metadata(&request).await?;
         let scene_count = request.scene_count_or_default();
@@ -117,12 +128,15 @@ impl ScriptAgentService {
             hook: metadata.hook,
             scenes,
         };
-        let script = self.build_script(request, output, retry_count, "stepwise_single_scene");
+        let script = self.build_script(
+            request,
+            output,
+            retry_count,
+            "stepwise_single_scene",
+            topic_context.as_ref(),
+        );
 
-        self.script_repository
-            .save_script(script)
-            .await
-            .map_err(ScriptAgentError::from)
+        self.save_script_and_update_topic(script).await
     }
 
     pub async fn get_script(&self, script_id: Uuid) -> Result<Script, ScriptAgentError> {
@@ -182,8 +196,8 @@ impl ScriptAgentService {
 
     async fn prepare_generate_request(
         &self,
-        request: &GenerateScriptRequest,
-    ) -> Result<(), ScriptAgentError> {
+        mut request: GenerateScriptRequest,
+    ) -> Result<(GenerateScriptRequest, Option<ContentTopic>), ScriptAgentError> {
         request.validate().map_err(|error| {
             ScriptAgentError::Validation(format!("invalid generate script request: {error}"))
         })?;
@@ -192,26 +206,60 @@ impl ScriptAgentService {
             self.ensure_parent_script_matches_project(parent_id, request.project_id)
                 .await?;
         }
-        Ok(())
+
+        let topic_context = if let Some(topic_id) = request.topic_id {
+            let topic_repository = self.topic_repository.as_ref().ok_or_else(|| {
+                ScriptAgentError::Validation("topic repository is not configured".to_string())
+            })?;
+            let topic = topic_repository.get_topic(topic_id).await?;
+            if topic.project_id != request.project_id {
+                return Err(ScriptAgentError::Validation(
+                    "topic_id must belong to the same project".to_string(),
+                ));
+            }
+            if topic.status != ContentTopicStatus::Approved {
+                return Err(ScriptAgentError::Validation(
+                    "only approved topics can generate scripts".to_string(),
+                ));
+            }
+            if request.topic.trim().is_empty() {
+                request.topic = topic.title.clone();
+            }
+            Some(topic)
+        } else {
+            let topic = request.topic.trim().to_string();
+            if topic.chars().count() < 10 {
+                return Err(ScriptAgentError::Validation(
+                    "topic must be at least 10 characters when topic_id is not provided"
+                        .to_string(),
+                ));
+            }
+            request.topic = topic;
+            None
+        };
+
+        Ok((request, topic_context))
     }
 
     async fn generate_metadata(
         &self,
         request: &GenerateScriptRequest,
     ) -> Result<(ScriptMetadataLLMOutput, usize), ScriptAgentError> {
-        let prompt = ScriptPromptBuilder::build_metadata(request);
+        let prompt: LLMPrompt = ScriptPromptBuilder::build_metadata(request).into();
         let mut last_parse_error: Option<LLMOutputError> = None;
+        let mut retry_count = 0;
 
-        for attempt_index in 0..MAX_LLM_PARSE_ATTEMPTS {
-            let raw = self
-                .llm_client
-                .generate_script(prompt.clone().into())
-                .await
-                .map_err(ScriptAgentError::from)?;
+        for _ in 0..MAX_LLM_PARSE_ATTEMPTS {
+            let (raw, provider_retry_count) =
+                self.generate_raw_with_retries(prompt.clone()).await?;
+            retry_count += provider_retry_count;
 
             match ScriptMetadataLLMOutput::parse_and_validate(&raw) {
-                Ok(output) => return Ok((output, attempt_index)),
-                Err(error) => last_parse_error = Some(error),
+                Ok(output) => return Ok((output, retry_count)),
+                Err(error) => {
+                    last_parse_error = Some(error);
+                    retry_count += 1;
+                }
             }
         }
 
@@ -227,19 +275,21 @@ impl ScriptAgentService {
         request: &GenerateScriptRequest,
         sequence: u8,
     ) -> Result<(ScriptLLMScene, usize), ScriptAgentError> {
-        let prompt = ScriptPromptBuilder::build_single_scene(request, sequence);
+        let prompt: LLMPrompt = ScriptPromptBuilder::build_single_scene(request, sequence).into();
         let mut last_parse_error: Option<LLMOutputError> = None;
+        let mut retry_count = 0;
 
-        for attempt_index in 0..MAX_LLM_PARSE_ATTEMPTS {
-            let raw = self
-                .llm_client
-                .generate_script(prompt.clone().into())
-                .await
-                .map_err(ScriptAgentError::from)?;
+        for _ in 0..MAX_LLM_PARSE_ATTEMPTS {
+            let (raw, provider_retry_count) =
+                self.generate_raw_with_retries(prompt.clone()).await?;
+            retry_count += provider_retry_count;
 
             match ScriptSceneLLMOutput::parse_and_validate(&raw, sequence) {
-                Ok(output) => return Ok((output.scene, attempt_index)),
-                Err(error) => last_parse_error = Some(error),
+                Ok(output) => return Ok((output.scene, retry_count)),
+                Err(error) => {
+                    last_parse_error = Some(error);
+                    retry_count += 1;
+                }
             }
         }
 
@@ -265,12 +315,35 @@ impl ScriptAgentService {
         }
     }
 
+    async fn generate_raw_with_retries(
+        &self,
+        prompt: LLMPrompt,
+    ) -> Result<(String, usize), ScriptAgentError> {
+        let mut retry_count = 0;
+
+        for attempt_index in 0..MAX_LLM_PROVIDER_ATTEMPTS {
+            match self.llm_client.generate_script(prompt.clone()).await {
+                Ok(raw) => return Ok((raw, retry_count)),
+                Err(error)
+                    if attempt_index + 1 < MAX_LLM_PROVIDER_ATTEMPTS
+                        && is_retryable_llm_error(&error) =>
+                {
+                    retry_count += 1;
+                }
+                Err(error) => return Err(ScriptAgentError::from(error)),
+            }
+        }
+
+        unreachable!("provider retry loop must return on success or final error")
+    }
+
     fn build_script(
         &self,
         request: GenerateScriptRequest,
         output: ScriptLLMOutput,
         retry_count: usize,
         generation_mode: &str,
+        topic_context: Option<&ContentTopic>,
     ) -> Script {
         let now = Utc::now();
         let scenes: Vec<Scene> = output
@@ -287,7 +360,7 @@ impl ScriptAgentService {
             .collect();
         let total_duration_sec: i32 = scenes.iter().map(|scene| scene.duration_sec).sum();
         let style = request.style_or_default();
-        let content = json!({
+        let mut content = json!({
             "topic": request.topic,
             "style": style.as_str(),
             "total_duration_sec": total_duration_sec,
@@ -296,10 +369,15 @@ impl ScriptAgentService {
                 "generation_mode": generation_mode
             }
         });
+        if let Some(topic) = topic_context {
+            content["topic_id"] = json!(topic.id);
+            content["topic_snapshot"] = topic.snapshot();
+        }
 
         Script::new(
             Uuid::new_v4(),
             request.project_id,
+            topic_context.map(|topic| topic.id),
             output.title,
             output.hook,
             content,
@@ -309,6 +387,41 @@ impl ScriptAgentService {
             now,
             now,
         )
+    }
+
+    async fn save_script_and_update_topic(
+        &self,
+        script: Script,
+    ) -> Result<Script, ScriptAgentError> {
+        let topic_id = script.topic_id;
+        let saved = self.script_repository.save_script(script).await?;
+        if let Some(topic_id) = topic_id {
+            let topic_repository = self.topic_repository.as_ref().ok_or_else(|| {
+                ScriptAgentError::Validation("topic repository is not configured".to_string())
+            })?;
+            topic_repository
+                .update_topic_status(topic_id, ContentTopicStatus::Scripted)
+                .await?;
+        }
+        Ok(saved)
+    }
+}
+
+fn is_retryable_llm_error(error: &LLMError) -> bool {
+    match error {
+        LLMError::Provider(message) => {
+            let normalized = message.to_ascii_lowercase();
+            normalized.contains("502")
+                || normalized.contains("503")
+                || normalized.contains("504")
+                || normalized.contains("429")
+                || normalized.contains("upstream_error")
+                || normalized.contains("temporarily unavailable")
+                || normalized.contains("decoding response body")
+                || normalized.contains("rate limit")
+        }
+        LLMError::Transport(_) => true,
+        LLMError::Config(_) | LLMError::Timeout => false,
     }
 }
 
@@ -343,6 +456,22 @@ impl From<LLMError> for ScriptAgentError {
 impl From<ProjectRepositoryError> for ScriptAgentError {
     fn from(error: ProjectRepositoryError) -> Self {
         Self::DatabaseError(error.to_string())
+    }
+}
+
+impl From<TopicRepositoryError> for ScriptAgentError {
+    fn from(error: TopicRepositoryError) -> Self {
+        match error {
+            TopicRepositoryError::TopicNotFound(topic_id) => {
+                Self::Validation(format!("content topic not found: {topic_id}"))
+            }
+            TopicRepositoryError::InvalidStatusTransition { .. } => {
+                Self::Validation(error.to_string())
+            }
+            TopicRepositoryError::BatchNotFound(_) | TopicRepositoryError::Storage(_) => {
+                Self::DatabaseError(error.to_string())
+            }
+        }
     }
 }
 

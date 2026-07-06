@@ -144,6 +144,8 @@ async fn migrations_create_video_agent_core_schema() {
         "agent_steps",
         "agent_conversations",
         "agent_messages",
+        "content_topics",
+        "topic_generation_batches",
         "viral_videos",
         "content_strategies",
         "video_workspace_menus",
@@ -163,6 +165,13 @@ async fn migrations_create_video_agent_core_schema() {
         "idx_agent_runs_type",
         "idx_agent_conversations_project",
         "idx_agent_messages_conversation_created",
+        "idx_content_topics_project",
+        "idx_content_topics_status",
+        "idx_content_topics_source",
+        "idx_content_topics_batch",
+        "idx_content_topics_created",
+        "idx_topic_generation_batches_project",
+        "idx_scripts_topic",
         "idx_video_workspace_menus_parent_sort",
     ] {
         assert!(
@@ -191,6 +200,23 @@ async fn migrations_create_video_agent_core_schema() {
         )
         .await,
         "conversation agent type should be constrained"
+    );
+    assert!(
+        constraint_exists(&test_pool, "content_topics", "content_topics_status_check").await,
+        "content topic status should be constrained"
+    );
+    assert!(
+        constraint_exists(&test_pool, "content_topics", "content_topics_source_check").await,
+        "content topic source should be constrained"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "topic_generation_batches",
+            "topic_generation_batches_status_check"
+        )
+        .await,
+        "topic generation batch status should be constrained"
     );
     assert!(
         constraint_exists(
@@ -247,12 +273,39 @@ async fn migrations_create_video_agent_core_schema() {
     .expect("script creation seed query should run");
     assert_eq!(script_creation, (true, "active".to_string()));
 
+    let content_strategy = sqlx::query_as::<_, (bool, String)>(
+        r#"
+        SELECT is_enabled, status
+        FROM video_workspace_menus
+        WHERE menu_key = 'content-strategy'
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .expect("content strategy seed query should run");
+    assert_eq!(content_strategy, (true, "active".to_string()));
+
+    let topic_generator = sqlx::query_as::<_, (bool, String)>(
+        r#"
+        SELECT child.is_enabled, child.status
+        FROM video_workspace_menus child
+        JOIN video_workspace_menus parent ON parent.id = child.parent_id
+        WHERE parent.menu_key = 'content-strategy'
+          AND child.menu_key = 'topic-generator'
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .expect("topic generator seed query should run");
+    assert_eq!(topic_generator, (true, "active".to_string()));
+
     let planned_top_level_count = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)
         FROM video_workspace_menus
         WHERE parent_id IS NULL
           AND menu_key <> 'script-creation'
+          AND menu_key <> 'content-strategy'
           AND is_visible = true
           AND is_enabled = false
           AND status = 'planned'
@@ -261,7 +314,7 @@ async fn migrations_create_video_agent_core_schema() {
     .fetch_one(&test_pool)
     .await
     .expect("planned menu seed query should run");
-    assert_eq!(planned_top_level_count, 6);
+    assert_eq!(planned_top_level_count, 5);
 
     let script_child_count = sqlx::query_scalar::<_, i64>(
         r#"
@@ -279,6 +332,74 @@ async fn migrations_create_video_agent_core_schema() {
     assert_eq!(script_child_count, 1);
 
     test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn runtime_postgres_connection_syncs_content_strategy_menu_state() {
+    let base_url = database_url();
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_nanos();
+    let database_name = format!("video_agent_runtime_menu_sync_test_{}", suffix);
+    let admin_url = with_database_name(&base_url, "postgres");
+    let test_url = with_database_name(&base_url, &database_name);
+
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&admin_url)
+        .await
+        .expect("admin database should be reachable");
+    create_database(&admin_pool, &database_name).await;
+
+    let setup_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&test_url)
+        .await
+        .expect("temporary runtime menu sync database should be reachable");
+    sqlx::migrate!("./migrations")
+        .run(&setup_pool)
+        .await
+        .expect("migrations should run before stale menu fixture");
+    sqlx::query(
+        r#"
+        UPDATE video_workspace_menus
+        SET is_enabled = false,
+            status = 'planned'
+        WHERE menu_key IN ('content-strategy', 'topic-generator')
+        "#,
+    )
+    .execute(&setup_pool)
+    .await
+    .expect("stale content strategy menu fixture should update");
+    setup_pool.close().await;
+
+    let runtime_pool = novex_api::connect_runtime_pg_pool(&test_url, 1)
+        .await
+        .expect("runtime postgres connection should sync menu state");
+
+    let menu_states = sqlx::query_as::<_, (String, bool, String)>(
+        r#"
+        SELECT menu_key, is_enabled, status
+        FROM video_workspace_menus
+        WHERE menu_key IN ('content-strategy', 'topic-generator')
+        ORDER BY menu_key
+        "#,
+    )
+    .fetch_all(&runtime_pool)
+    .await
+    .expect("content strategy menu state should be readable");
+    assert_eq!(
+        menu_states,
+        vec![
+            ("content-strategy".to_string(), true, "active".to_string()),
+            ("topic-generator".to_string(), true, "active".to_string()),
+        ]
+    );
+
+    runtime_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
     admin_pool.close().await;
 }
