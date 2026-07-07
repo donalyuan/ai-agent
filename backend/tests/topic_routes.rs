@@ -3,9 +3,12 @@ use axum::http::{Request, StatusCode};
 use novex_api::{build_app_with_state, AppConfig, AppState};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
 use uuid::Uuid;
+
+mod support;
+
+use support::test_database::TestDatabase;
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -26,12 +29,17 @@ fn with_database_name(database_url: &str, database_name: &str) -> String {
     format!("{}{}{}", &base[..=slash_index], database_name, query)
 }
 
-async fn create_database(admin_pool: &PgPool, database_name: &str) {
+async fn create_database(
+    admin_pool: &PgPool,
+    admin_url: &str,
+    database_name: &str,
+) -> TestDatabase {
     let query = format!(r#"CREATE DATABASE "{}""#, database_name);
     sqlx::query(&query)
         .execute(admin_pool)
         .await
         .expect("temporary topic route database should be created");
+    TestDatabase::new(admin_url, database_name)
 }
 
 async fn drop_database(admin_pool: &PgPool, database_name: &str) {
@@ -49,12 +57,9 @@ async fn drop_database(admin_pool: &PgPool, database_name: &str) {
     let _ = sqlx::query(&drop).execute(admin_pool).await;
 }
 
-async fn migrated_pool() -> (PgPool, PgPool, String, String) {
+async fn migrated_pool() -> (PgPool, PgPool, TestDatabase, String) {
     let base_url = database_url();
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after unix epoch")
-        .as_nanos();
+    let suffix = Uuid::new_v4().simple().to_string();
     let database_name = format!("video_agent_topic_route_test_{}", suffix);
     let admin_url = with_database_name(&base_url, "postgres");
     let test_url = with_database_name(&base_url, &database_name);
@@ -64,7 +69,7 @@ async fn migrated_pool() -> (PgPool, PgPool, String, String) {
         .connect(&admin_url)
         .await
         .expect("admin database should be reachable");
-    create_database(&admin_pool, &database_name).await;
+    let database_name = create_database(&admin_pool, &admin_url, &database_name).await;
 
     let test_pool = PgPoolOptions::new()
         .max_connections(3)
@@ -162,6 +167,22 @@ async fn insert_agent_topic(
     .fetch_one(pool)
     .await
     .expect("agent topic fixture should be inserted")
+}
+
+async fn insert_script_for_topic(pool: &PgPool, project_id: Uuid, topic_id: Uuid) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO scripts (project_id, topic_id, title, hook, content, status)
+        VALUES ($1, $2, '选题生成脚本', '选题脚本 hook', $3, 'draft')
+        RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .bind(topic_id)
+    .bind(json!({"topic_snapshot": {"topic_id": topic_id}}))
+    .fetch_one(pool)
+    .await
+    .expect("script fixture should be inserted for topic")
 }
 
 async fn response_json(response: axum::response::Response) -> Value {
@@ -447,6 +468,129 @@ async fn topic_routes_list_topics_by_score_descending() {
     let topics = listed["topics"].as_array().unwrap();
     assert_eq!(topics[0]["title"], "高分选题");
     assert_eq!(topics[1]["title"], "低分选题");
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn topic_routes_soft_delete_hides_topic_and_rejects_referenced_topic() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool, "科技博主").await;
+    let app = test_app(test_url, test_pool.clone());
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/topics"))
+                .header("content-type", "application/json")
+                .body(Body::from(valid_topic_payload().to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+    let created = response_json(create_response).await;
+    let removable_topic_id = created["topic_id"].as_str().unwrap().to_string();
+
+    let approve_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/topics/{removable_topic_id}/status"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"status": "approved"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approve_response.status(), StatusCode::OK);
+
+    let delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/topics/{removable_topic_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::OK);
+    let deleted = response_json(delete_response).await;
+    assert_eq!(deleted["topic_id"], removable_topic_id);
+    assert!(deleted["deleted_at"].as_str().is_some());
+
+    let duplicate_delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/topics/{removable_topic_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate_delete_response.status(), StatusCode::BAD_REQUEST);
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_id}/topics"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let listed = response_json(list_response).await;
+    assert!(listed["topics"].as_array().unwrap().is_empty());
+    assert_eq!(listed["stats"]["total"], 0);
+
+    let prepare_deleted_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/topics/{removable_topic_id}/prepare-script"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"style": "knowledge", "scene_count": 5}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prepare_deleted_response.status(), StatusCode::BAD_REQUEST);
+
+    let referenced_topic_id = insert_agent_topic(
+        &test_pool,
+        project_id,
+        insert_topic_batch(&test_pool, project_id, "引用选题批次", 1).await,
+        "已生成脚本选题",
+        93,
+    )
+    .await;
+    insert_script_for_topic(&test_pool, project_id, referenced_topic_id).await;
+
+    let delete_referenced_response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/topics/{referenced_topic_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_referenced_response.status(), StatusCode::BAD_REQUEST);
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

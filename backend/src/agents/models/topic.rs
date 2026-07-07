@@ -173,6 +173,7 @@ pub struct ContentTopic {
     pub source: ContentTopicSource,
     pub status: ContentTopicStatus,
     pub metadata: Value,
+    pub deleted_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

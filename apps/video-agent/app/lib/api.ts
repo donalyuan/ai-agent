@@ -96,6 +96,7 @@ export type ContentTopic = {
   source: ContentTopicSource;
   status: ContentTopicStatus;
   metadata: Record<string, unknown>;
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -144,6 +145,11 @@ export type ContentTopicListResponse = {
 
 export type TopicGenerationBatchListResponse = {
   batches: TopicGenerationBatchSummary[];
+};
+
+export type DeletedContentTopicResponse = {
+  topic_id: string;
+  deleted_at: string;
 };
 
 export type ContentTopicFilters = {
@@ -408,6 +414,12 @@ export function updateContentTopicStatus(
   });
 }
 
+export function deleteContentTopic(client: ApiClient, topicId: string) {
+  return request<DeletedContentTopicResponse>(client, `/api/topics/${topicId}`, {
+    method: "DELETE",
+  });
+}
+
 export function prepareScriptFromTopic(
   client: ApiClient,
   topicId: string,
@@ -493,7 +505,7 @@ function getScriptAgentIntent(value: unknown): ScriptAgentIntent {
 async function request<T>(
   client: ApiClient,
   path: string,
-  options: { method?: "GET" | "POST" | "PUT"; body?: unknown } = {},
+  options: { method?: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown } = {},
 ): Promise<T> {
   const headers: HeadersInit = { accept: "application/json" };
   const init: RequestInit = { headers };

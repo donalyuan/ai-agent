@@ -4,8 +4,11 @@ import type {
   ContentTopicSource,
   ContentTopicStats,
   ContentTopicStatus,
+  TopicGenerationBatchSummary,
   ScriptStyle,
 } from "../../lib/api";
+
+export type ContentStrategyView = "history" | "pool";
 
 export const topicStatusOptions: Array<{ value: "all" | ContentTopicStatus; label: string }> = [
   { value: "all", label: "全部" },
@@ -49,6 +52,12 @@ export const scriptStyleLabels: Record<ScriptStyle, string> = {
   story: "故事叙述",
   tutorial: "教程讲解",
 };
+
+export const topicBatchStatusLabels = {
+  running: "生成中",
+  succeeded: "已生成",
+  failed: "生成失败",
+} satisfies Record<TopicGenerationBatchSummary["status"], string>;
 
 export function getTopicContentTypeLabel(contentType: string) {
   return topicContentTypeLabels[contentType] ?? contentType;
@@ -142,6 +151,18 @@ export function sortContentTopicsByScore(topics: ContentTopic[]) {
     }
     return right.topic_id.localeCompare(left.topic_id);
   });
+}
+
+export function formatTopicBatchTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${month}-${day} ${hour}:${minute}`;
 }
 
 function splitLines(value: string) {

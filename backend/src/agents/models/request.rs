@@ -179,6 +179,7 @@ pub struct ContentTopicResponse {
     pub source: ContentTopicSource,
     pub status: ContentTopicStatus,
     pub metadata: Value,
+    pub deleted_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -200,6 +201,7 @@ impl From<ContentTopic> for ContentTopicResponse {
             source: topic.source,
             status: topic.status,
             metadata: topic.metadata,
+            deleted_at: topic.deleted_at,
             created_at: topic.created_at,
             updated_at: topic.updated_at,
         }

@@ -8,8 +8,11 @@ use novex_api::repositories::{
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+mod support;
+
+use support::test_database::TestDatabase;
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -30,12 +33,17 @@ fn with_database_name(database_url: &str, database_name: &str) -> String {
     format!("{}{}{}", &base[..=slash_index], database_name, query)
 }
 
-async fn create_database(admin_pool: &PgPool, database_name: &str) {
+async fn create_database(
+    admin_pool: &PgPool,
+    admin_url: &str,
+    database_name: &str,
+) -> TestDatabase {
     let query = format!(r#"CREATE DATABASE "{}""#, database_name);
     sqlx::query(&query)
         .execute(admin_pool)
         .await
         .expect("temporary topic database should be created");
+    TestDatabase::new(admin_url, database_name)
 }
 
 async fn drop_database(admin_pool: &PgPool, database_name: &str) {
@@ -53,12 +61,9 @@ async fn drop_database(admin_pool: &PgPool, database_name: &str) {
     let _ = sqlx::query(&drop).execute(admin_pool).await;
 }
 
-async fn migrated_pool() -> (PgPool, PgPool, String) {
+async fn migrated_pool() -> (PgPool, PgPool, TestDatabase) {
     let base_url = database_url();
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after unix epoch")
-        .as_nanos();
+    let suffix = Uuid::new_v4().simple().to_string();
     let database_name = format!("video_agent_topic_repo_test_{}", suffix);
     let admin_url = with_database_name(&base_url, "postgres");
     let test_url = with_database_name(&base_url, &database_name);
@@ -68,7 +73,7 @@ async fn migrated_pool() -> (PgPool, PgPool, String) {
         .connect(&admin_url)
         .await
         .expect("admin database should be reachable");
-    create_database(&admin_pool, &database_name).await;
+    let database_name = create_database(&admin_pool, &admin_url, &database_name).await;
 
     let test_pool = PgPoolOptions::new()
         .max_connections(3)
@@ -94,6 +99,22 @@ async fn insert_project(pool: &PgPool) -> Uuid {
         .await
         .unwrap()
         .id
+}
+
+async fn insert_script_for_topic(pool: &PgPool, project_id: Uuid, topic_id: Uuid) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO scripts (project_id, topic_id, title, hook, content, status)
+        VALUES ($1, $2, '选题生成脚本', '选题脚本 hook', $3, 'draft')
+        RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .bind(topic_id)
+    .bind(json!({"topic_snapshot": {"topic_id": topic_id}}))
+    .fetch_one(pool)
+    .await
+    .expect("script fixture should be inserted for topic")
 }
 
 fn manual_topic(project_id: Uuid) -> CreateContentTopicInput {
@@ -223,6 +244,80 @@ async fn postgres_topic_repository_persists_topics_batches_and_filters() {
         .unwrap();
     assert_eq!(finished_batch.status, TopicGenerationBatchStatus::Succeeded);
     assert_eq!(finished_batch.metadata["topic_count"], 1);
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn postgres_topic_repository_soft_deletes_only_unreferenced_visible_topics() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let repository = PostgresTopicRepository::new(test_pool.clone());
+
+    let batch = repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            prompt: "生成 AI 工具方向选题".to_string(),
+            requested_count: 2,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    let removable = repository
+        .create_topic(CreateContentTopicInput {
+            batch_id: Some(batch.id),
+            source: ContentTopicSource::Agent,
+            title: "未生成脚本的选题".to_string(),
+            ..manual_topic(project_id)
+        })
+        .await
+        .unwrap();
+    let referenced = repository
+        .create_topic(CreateContentTopicInput {
+            batch_id: Some(batch.id),
+            source: ContentTopicSource::Agent,
+            title: "已被脚本引用的选题".to_string(),
+            ..manual_topic(project_id)
+        })
+        .await
+        .unwrap();
+    insert_script_for_topic(&test_pool, project_id, referenced.id).await;
+
+    let deleted = repository.soft_delete_topic(removable.id).await.unwrap();
+    assert!(deleted.deleted_at.is_some());
+    assert_eq!(deleted.status, ContentTopicStatus::Idea);
+
+    let topics = repository
+        .list_topics(project_id, ContentTopicFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(topics.len(), 1);
+    assert_eq!(topics[0].id, referenced.id);
+
+    let counts = repository.count_topics_by_status(project_id).await.unwrap();
+    assert_eq!(counts, vec![(ContentTopicStatus::Idea, 1)]);
+
+    let batches = repository
+        .list_generation_batches(project_id, 20)
+        .await
+        .unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].topic_count, 1);
+
+    let error = repository
+        .soft_delete_topic(referenced.id)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        novex_api::repositories::TopicRepositoryError::TopicCannotBeDeleted(topic_id)
+            if topic_id == referenced.id
+    ));
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

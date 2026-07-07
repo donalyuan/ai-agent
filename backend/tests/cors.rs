@@ -52,3 +52,36 @@ async fn cors_allows_admin_origin_preflight_for_json_writes() {
         "*",
     );
 }
+
+#[tokio::test]
+async fn cors_allows_video_agent_origin_preflight_for_topic_delete() {
+    let response = build_app()
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/api/topics/00000000-0000-4000-8000-000000000000")
+                .header(header::ORIGIN, "http://127.0.0.1:18183")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "DELETE")
+                .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "accept")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap(),
+        "*",
+    );
+    assert!(response
+        .headers()
+        .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("DELETE"));
+}

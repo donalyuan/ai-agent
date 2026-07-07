@@ -110,6 +110,11 @@ textarea:disabled {
   gap: 8px;
 }
 
+.agentMenuGroup {
+  display: grid;
+  gap: 8px;
+}
+
 .agentItem {
   width: 100%;
   min-height: 58px;
@@ -138,6 +143,31 @@ textarea:disabled {
 
 .agentItem.active small {
   color: var(--color-primary);
+}
+
+.agentSubMenu {
+  display: grid;
+  gap: 8px;
+  padding-left: 22px;
+}
+
+.agentSubItem {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: left;
+}
+
+.agentSubItem.active {
+  border-color: var(--color-success-border);
+  background: var(--color-success-soft);
+  color: var(--color-success-text);
 }
 
 .railStateText,
@@ -819,7 +849,7 @@ button:focus-visible {
 .contentStrategyWorkspace {
   min-width: 0;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 16px;
   padding: 16px;
 }
@@ -917,6 +947,162 @@ button:focus-visible {
   display: grid;
   grid-template-columns: 360px minmax(360px, 1fr) 360px;
   gap: 16px;
+}
+
+.topicHistoryLayout {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.topicHistoryBatchPanel,
+.topicHistoryDetailPanel {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  background: var(--color-surface);
+  padding: 14px;
+}
+
+.topicHistoryBatchPanel {
+  max-height: calc(100vh - 306px);
+  overflow: hidden;
+}
+
+.topicHistoryDetailPanel {
+  max-height: calc(100vh - 306px);
+  overflow: hidden;
+}
+
+.topicHistoryBatchList,
+.topicHistoryTopicList {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.topicHistoryBatchItem {
+  min-height: 72px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  padding: 10px 12px;
+  background: var(--color-surface-muted);
+  text-align: left;
+}
+
+.topicHistoryBatchItem.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.topicHistoryBatchItem strong,
+.topicHistoryBatchItem span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topicHistoryBatchItem strong {
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.topicHistoryBatchItem span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.topicHistoryBatchSummary {
+  min-height: 42px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--color-surface-muted);
+}
+
+.topicHistoryBatchSummary span {
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topicHistoryTopicRow {
+  min-height: 72px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 88px 72px 160px;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  background: var(--color-surface);
+}
+
+.topicHistoryTopicMain {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.topicHistoryTopicMain strong,
+.topicHistoryTopicMain span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topicHistoryTopicMain strong {
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.topicHistoryTopicMain span,
+.topicHistoryScore,
+.topicHistoryLocked {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.topicHistoryActions {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.topicHistoryActions .secondaryButton {
+  min-width: 74px;
+  min-height: 32px;
+}
+
+.topicHistoryLocked {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  background: var(--color-surface-muted);
+  text-align: center;
 }
 
 .strategyMainColumn {

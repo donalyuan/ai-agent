@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use novex_model::{LLMError, LLMPrompt, OpenAIClient, OpenAIConfig};
 use repositories::{
     ConversationRepository, ConversationRepositoryError, CreateContentTopicInput,
@@ -263,6 +264,12 @@ struct ReadyResponse {
     redis: &'static str,
 }
 
+#[derive(Serialize)]
+struct DeletedContentTopicResponse {
+    topic_id: Uuid,
+    deleted_at: DateTime<Utc>,
+}
+
 pub fn build_app() -> Router {
     build_app_with_state(AppState::test())
 }
@@ -270,7 +277,13 @@ pub fn build_app() -> Router {
 pub fn build_app_with_state(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin("*".parse::<HeaderValue>().unwrap())
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::ACCEPT, header::CONTENT_TYPE]);
 
     Router::new()
@@ -286,7 +299,10 @@ pub fn build_app_with_state(state: AppState) -> Router {
             "/api/projects/:project_id/topic-generation-batches",
             get(list_topic_generation_batches),
         )
-        .route("/api/topics/:topic_id", put(update_topic))
+        .route(
+            "/api/topics/:topic_id",
+            put(update_topic).delete(delete_topic),
+        )
         .route("/api/topics/:topic_id/status", put(update_topic_status))
         .route(
             "/api/topics/:topic_id/prepare-script",
@@ -345,7 +361,7 @@ async fn sync_content_strategy_menu_state(pool: &PgPool) -> Result<(), sqlx::Err
             status = 'active',
             metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{phase}', '2'::jsonb, true),
             updated_at = NOW()
-        WHERE menu_key IN ('content-strategy', 'topic-generator')
+        WHERE menu_key IN ('content-strategy', 'topic-history', 'topic-generator')
         "#,
     )
     .execute(pool)
@@ -538,6 +554,22 @@ async fn update_topic(
     Ok(Json(ContentTopicResponse::from(topic)))
 }
 
+async fn delete_topic(
+    State(state): State<AppState>,
+    Path(topic_id): Path<Uuid>,
+) -> Result<Json<DeletedContentTopicResponse>, ScriptApiError> {
+    let repository = state.topic_repository()?;
+    let topic = repository.soft_delete_topic(topic_id).await?;
+    let deleted_at = topic.deleted_at.ok_or_else(|| {
+        ScriptApiError::TopicValidation("选题删除失败：缺少软删除时间".to_string())
+    })?;
+
+    Ok(Json(DeletedContentTopicResponse {
+        topic_id: topic.id,
+        deleted_at,
+    }))
+}
+
 async fn update_topic_status(
     State(state): State<AppState>,
     Path(topic_id): Path<Uuid>,
@@ -567,6 +599,11 @@ async fn prepare_script_from_topic(
         .map_err(ScriptApiError::TopicValidation)?;
     let repository = state.topic_repository()?;
     let topic = repository.get_topic(topic_id).await?;
+    if topic.deleted_at.is_some() {
+        return Err(ScriptApiError::TopicValidation(
+            "已移除选题不能进入脚本生成确认流程".to_string(),
+        ));
+    }
     if topic.status != ContentTopicStatus::Approved {
         return Err(ScriptApiError::TopicValidation(
             "只有已确认选题可以进入脚本生成确认流程".to_string(),
@@ -883,6 +920,12 @@ fn topic_repository_error_response(
         TopicRepositoryError::BatchNotFound(batch_id) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "选题生成批次不存在", "batch_id": batch_id })),
+        ),
+        TopicRepositoryError::TopicCannotBeDeleted(topic_id) => (
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({ "error": "已生成脚本或已被脚本引用的选题不可删除", "topic_id": topic_id }),
+            ),
         ),
         TopicRepositoryError::InvalidStatusTransition { topic_id, from, to } => (
             StatusCode::BAD_REQUEST,

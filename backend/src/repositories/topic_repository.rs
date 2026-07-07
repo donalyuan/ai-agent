@@ -98,6 +98,9 @@ pub trait TopicRepository: Send + Sync {
         project_id: Uuid,
     ) -> Result<Vec<(ContentTopicStatus, i64)>, TopicRepositoryError>;
 
+    async fn soft_delete_topic(&self, topic_id: Uuid)
+        -> Result<ContentTopic, TopicRepositoryError>;
+
     async fn create_generation_batch(
         &self,
         input: CreateTopicGenerationBatchInput,
@@ -136,6 +139,7 @@ impl TopicRepository for PostgresTopicRepository {
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'idea', $12)
             RETURNING id, project_id, batch_id, title, angle, target_audience, hook_points,
                       content_type, score, score_reason, tags, source, status, metadata,
+                      deleted_at,
                       created_at, updated_at
             "#,
         )
@@ -178,6 +182,7 @@ impl TopicRepository for PostgresTopicRepository {
             WHERE id = $1
             RETURNING id, project_id, batch_id, title, angle, target_audience, hook_points,
                       content_type, score, score_reason, tags, source, status, metadata,
+                      deleted_at,
                       created_at, updated_at
             "#,
         )
@@ -220,6 +225,7 @@ impl TopicRepository for PostgresTopicRepository {
             WHERE id = $1
             RETURNING id, project_id, batch_id, title, angle, target_audience, hook_points,
                       content_type, score, score_reason, tags, source, status, metadata,
+                      deleted_at,
                       created_at, updated_at
             "#,
         )
@@ -238,6 +244,7 @@ impl TopicRepository for PostgresTopicRepository {
             r#"
             SELECT id, project_id, batch_id, title, angle, target_audience, hook_points,
                    content_type, score, score_reason, tags, source, status, metadata,
+                   deleted_at,
                    created_at, updated_at
             FROM content_topics
             WHERE id = $1
@@ -263,9 +270,11 @@ impl TopicRepository for PostgresTopicRepository {
             r#"
             SELECT id, project_id, batch_id, title, angle, target_audience, hook_points,
                    content_type, score, score_reason, tags, source, status, metadata,
+                   deleted_at,
                    created_at, updated_at
             FROM content_topics
             WHERE project_id = $1
+              AND deleted_at IS NULL
               AND ($2::text IS NULL OR status = $2)
               AND ($3::text IS NULL OR source = $3)
               AND ($4::uuid IS NULL OR batch_id = $4)
@@ -292,6 +301,7 @@ impl TopicRepository for PostgresTopicRepository {
             SELECT status, COUNT(*) AS topic_count
             FROM content_topics
             WHERE project_id = $1
+              AND deleted_at IS NULL
             GROUP BY status
             "#,
         )
@@ -309,6 +319,52 @@ impl TopicRepository for PostgresTopicRepository {
                 Ok((status, count))
             })
             .collect()
+    }
+
+    async fn soft_delete_topic(
+        &self,
+        topic_id: Uuid,
+    ) -> Result<ContentTopic, TopicRepositoryError> {
+        let current = self.get_topic(topic_id).await?;
+        if current.deleted_at.is_some() || current.status == ContentTopicStatus::Scripted {
+            return Err(TopicRepositoryError::TopicCannotBeDeleted(topic_id));
+        }
+
+        let referenced_by_script = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM scripts
+                WHERE topic_id = $1
+            )
+            "#,
+        )
+        .bind(topic_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(TopicRepositoryError::from)?;
+        if referenced_by_script {
+            return Err(TopicRepositoryError::TopicCannotBeDeleted(topic_id));
+        }
+
+        let row = sqlx::query(
+            r#"
+            UPDATE content_topics
+            SET deleted_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, project_id, batch_id, title, angle, target_audience, hook_points,
+                      content_type, score, score_reason, tags, source, status, metadata,
+                      deleted_at, created_at, updated_at
+            "#,
+        )
+        .bind(topic_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(TopicRepositoryError::from)?
+        .ok_or(TopicRepositoryError::TopicNotFound(topic_id))?;
+
+        topic_from_row(row)
     }
 
     async fn create_generation_batch(
@@ -410,6 +466,7 @@ impl TopicRepository for PostgresTopicRepository {
                 COUNT(t.id) AS topic_count
             FROM topic_generation_batches b
             LEFT JOIN content_topics t ON t.batch_id = b.id
+                AND t.deleted_at IS NULL
             WHERE b.project_id = $1
               AND b.status = 'succeeded'
             GROUP BY b.id
@@ -432,6 +489,7 @@ impl TopicRepository for PostgresTopicRepository {
 pub enum TopicRepositoryError {
     TopicNotFound(Uuid),
     BatchNotFound(Uuid),
+    TopicCannotBeDeleted(Uuid),
     InvalidStatusTransition {
         topic_id: Uuid,
         from: ContentTopicStatus,
@@ -454,6 +512,9 @@ impl fmt::Display for TopicRepositoryError {
             }
             Self::BatchNotFound(batch_id) => {
                 write!(formatter, "topic generation batch not found: {batch_id}")
+            }
+            Self::TopicCannotBeDeleted(topic_id) => {
+                write!(formatter, "content topic cannot be deleted: {topic_id}")
             }
             Self::InvalidStatusTransition { topic_id, from, to } => write!(
                 formatter,
@@ -491,6 +552,7 @@ fn topic_from_row(row: PgRow) -> Result<ContentTopic, TopicRepositoryError> {
         source,
         status,
         metadata: row.get("metadata"),
+        deleted_at: row.get("deleted_at"),
         created_at: row.get::<DateTime<Utc>, _>("created_at"),
         updated_at: row.get::<DateTime<Utc>, _>("updated_at"),
     })

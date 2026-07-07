@@ -3,6 +3,7 @@ import {
   createAgentConversation,
   createApiClient,
   createContentTopic,
+  deleteContentTopic,
   generateScript,
   getApiBaseUrl,
   getScript,
@@ -209,16 +210,32 @@ const workspaceMenus = [
     metadata: { phase: 2 },
     children: [
       {
+        menu_id: "20000000-0000-4000-8000-000000000008",
+        menu_key: "topic-history",
+        label: "历史生成",
+        description: "历史生成批次。",
+        route_path: "/strategy/topic-history",
+        icon: "history",
+        menu_type: "page",
+        module_key: "strategy.topic-history",
+        agent_key: "topic-generation-agent",
+        sort_order: 10,
+        is_enabled: true,
+        status: "active",
+        metadata: { phase: 2 },
+        children: [],
+      },
+      {
         menu_id: "20000000-0000-4000-8000-000000000001",
         menu_key: "topic-generator",
-        label: "选题生成",
+        label: "当前选题池",
         description: "基于账号定位、热点趋势和数据回流生成候选选题。",
         route_path: "/strategy/topics",
         icon: "sparkles",
         menu_type: "page",
         module_key: "strategy.topics",
         agent_key: "topic-generation-agent",
-        sort_order: 10,
+        sort_order: 20,
         is_enabled: true,
         status: "active",
         metadata: { phase: 2 },
@@ -326,6 +343,8 @@ describe("video-agent api client", () => {
       headers: { accept: "application/json" },
     });
     expect(result.menus[0].label).toBe("内容策略");
+    expect(result.menus[0].children[0].menu_key).toBe("topic-history");
+    expect(result.menus[0].children[1].label).toBe("当前选题池");
     expect(result.menus[1].children[0].agent_key).toBe("script-generation-agent");
   });
 
@@ -421,6 +440,27 @@ describe("video-agent api client", () => {
     expect(created.topic_id).toBe(contentTopic.topic_id);
     expect(updated.angle).toBe("新角度");
     expect(approved.status).toBe("approved");
+  });
+
+  it("删除选题时调用软删除接口", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        topic_id: contentTopic.topic_id,
+        deleted_at: "2026-07-07T10:00:00Z",
+      }),
+    );
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await deleteContentTopic(client, contentTopic.topic_id);
+
+    expect(fetchMock).toHaveBeenCalledWith(`http://api.test/api/topics/${contentTopic.topic_id}`, {
+      method: "DELETE",
+      headers: {
+        accept: "application/json",
+      },
+    });
+    expect(result.topic_id).toBe(contentTopic.topic_id);
+    expect(result.deleted_at).toBe("2026-07-07T10:00:00Z");
   });
 
   it("准备从已确认选题生成脚本", async () => {

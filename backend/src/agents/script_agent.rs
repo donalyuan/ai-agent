@@ -468,9 +468,9 @@ impl From<TopicRepositoryError> for ScriptAgentError {
             TopicRepositoryError::InvalidStatusTransition { .. } => {
                 Self::Validation(error.to_string())
             }
-            TopicRepositoryError::BatchNotFound(_) | TopicRepositoryError::Storage(_) => {
-                Self::DatabaseError(error.to_string())
-            }
+            TopicRepositoryError::BatchNotFound(_)
+            | TopicRepositoryError::TopicCannotBeDeleted(_)
+            | TopicRepositoryError::Storage(_) => Self::DatabaseError(error.to_string()),
         }
     }
 }

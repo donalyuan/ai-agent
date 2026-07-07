@@ -9,9 +9,11 @@ type WorkspaceShellProps = {
   overlay?: ReactNode;
   projects: Project[];
   selectedMenuKey: string;
+  selectedSubMenuKey: string | null;
   selectedProjectId: string;
   workspaceMenus: WorkspaceMenuNode[];
   onSelectMenu: (menuKey: string) => void;
+  onSelectSubMenu: (menuKey: string) => void;
   onSelectProject: (projectId: string) => void;
 };
 
@@ -23,9 +25,11 @@ export function WorkspaceShell({
   overlay,
   projects,
   selectedMenuKey,
+  selectedSubMenuKey,
   selectedProjectId,
   workspaceMenus,
   onSelectMenu,
+  onSelectSubMenu,
   onSelectProject,
 }: WorkspaceShellProps) {
   return (
@@ -48,7 +52,9 @@ export function WorkspaceShell({
                   key={menu.menu_id}
                   menu={menu}
                   selectedMenuKey={selectedMenuKey}
+                  selectedSubMenuKey={selectedSubMenuKey}
                   onSelect={onSelectMenu}
+                  onSelectSubMenu={onSelectSubMenu}
                 />
               ))
             : null}
@@ -94,24 +100,46 @@ export function WorkspaceShell({
 function MenuButton({
   menu,
   selectedMenuKey,
+  selectedSubMenuKey,
   onSelect,
+  onSelectSubMenu,
 }: {
   menu: WorkspaceMenuNode;
   selectedMenuKey: string;
+  selectedSubMenuKey: string | null;
   onSelect: (menuKey: string) => void;
+  onSelectSubMenu: (menuKey: string) => void;
 }) {
   const active = menu.menu_key === selectedMenuKey;
   return (
-    <button
-      className={active ? "agentItem active" : "agentItem"}
-      disabled={!menu.is_enabled}
-      onClick={() => onSelect(menu.menu_key)}
-      title={menu.description}
-      type="button"
-    >
-      <span>{menu.label}</span>
-      <small>{menuStatusLabel(menu)}</small>
-    </button>
+    <div className="agentMenuGroup">
+      <button
+        className={active ? "agentItem active" : "agentItem"}
+        disabled={!menu.is_enabled}
+        onClick={() => onSelect(menu.menu_key)}
+        title={menu.description}
+        type="button"
+      >
+        <span>{menu.label}</span>
+        <small>{menuStatusLabel(menu)}</small>
+      </button>
+      {active && menu.children.length ? (
+        <div aria-label={`${menu.label}二级菜单`} className="agentSubMenu">
+          {menu.children.map((child) => (
+            <button
+              className={child.menu_key === selectedSubMenuKey ? "agentSubItem active" : "agentSubItem"}
+              disabled={!child.is_enabled}
+              key={child.menu_id}
+              onClick={() => onSelectSubMenu(child.menu_key)}
+              title={child.description}
+              type="button"
+            >
+              {child.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

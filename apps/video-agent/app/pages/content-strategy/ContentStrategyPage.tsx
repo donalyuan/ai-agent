@@ -7,7 +7,6 @@ import type {
   PrepareScriptFromTopicResponse,
   Project,
   ScriptStyle,
-  TopicGenerationBatchSummary,
 } from "../../lib/api";
 import {
   getTopicContentTypeLabel,
@@ -27,7 +26,6 @@ type ContentStrategyPageProps = {
   editingTopicId: string | null;
   error: string;
   loading: boolean;
-  loadingTopicBatches: boolean;
   preparingScript: boolean;
   project?: Project;
   savingTopic: boolean;
@@ -38,8 +36,6 @@ type ContentStrategyPageProps = {
   statusFilter: "all" | ContentTopicStatus;
   activeTopicBatchId: string | null;
   showingAllTopicBatches: boolean;
-  topicBatchError: string;
-  topicBatches: TopicGenerationBatchSummary[];
   topicForm: TopicFormState;
   topics: ContentTopic[];
   writesDisabled: boolean;
@@ -49,7 +45,6 @@ type ContentStrategyPageProps = {
   onNewTopic: () => void;
   onPrepareScript: (topic: ContentTopic) => void;
   onSelectTopic: (topicId: string) => void;
-  onSelectTopicBatch: (batchId: string) => void;
   onStatusFilterChange: (status: "all" | ContentTopicStatus) => void;
   onSubmitAgentMessage: (event: FormEvent<HTMLFormElement>) => void;
   onSubmitTopic: (event: FormEvent<HTMLFormElement>) => void;
@@ -66,9 +61,6 @@ export function ContentStrategyPage({
   statusFilter,
   activeTopicBatchId,
   showingAllTopicBatches,
-  topicBatches,
-  loadingTopicBatches,
-  topicBatchError,
   loading,
   error,
   actionError,
@@ -83,7 +75,6 @@ export function ContentStrategyPage({
   sendingAgentMessage,
   preparingScript,
   onSelectTopic,
-  onSelectTopicBatch,
   onClearTopicBatchFilter,
   onStatusFilterChange,
   onNewTopic,
@@ -142,17 +133,7 @@ export function ContentStrategyPage({
               </div>
             </div>
 
-            <TopicBatchHistory
-              activeBatchId={activeTopicBatchId}
-              batches={topicBatches}
-              error={topicBatchError}
-              loading={loadingTopicBatches}
-              showingAll={showingAllTopicBatches}
-              onSelectBatch={onSelectTopicBatch}
-              onShowAll={onClearTopicBatchFilter}
-            />
-
-            {activeTopicBatchId && !topicBatches.length ? (
+            {activeTopicBatchId && !showingAllTopicBatches ? (
               <div className="topicBatchNotice">
                 <span>当前生成批次</span>
                 <button className="filterButton" onClick={onClearTopicBatchFilter} type="button">
@@ -228,65 +209,6 @@ export function ContentStrategyPage({
         </aside>
       </div>
     </div>
-  );
-}
-
-function TopicBatchHistory({
-  activeBatchId,
-  batches,
-  error,
-  loading,
-  showingAll,
-  onSelectBatch,
-  onShowAll,
-}: {
-  activeBatchId: string | null;
-  batches: TopicGenerationBatchSummary[];
-  error: string;
-  loading: boolean;
-  showingAll: boolean;
-  onSelectBatch: (batchId: string) => void;
-  onShowAll: () => void;
-}) {
-  if (!loading && !error && !batches.length) {
-    return null;
-  }
-
-  return (
-    <section aria-label="历史生成选题" className="topicBatchHistory">
-      <div className="topicBatchHistoryHeader">
-        <div>
-          <span>历史生成</span>
-          <small>{loading ? "加载中" : `${batches.length} 批`}</small>
-        </div>
-        <button
-          className={showingAll ? "filterButton selected" : "filterButton"}
-          onClick={onShowAll}
-          type="button"
-        >
-          全部选题
-        </button>
-      </div>
-      {error ? <p className="errorText" role="alert">{error}</p> : null}
-      {batches.length ? (
-        <div className="topicBatchList">
-          {batches.map((batch) => (
-            <button
-              aria-pressed={!showingAll && activeBatchId === batch.batch_id}
-              className={!showingAll && activeBatchId === batch.batch_id ? "topicBatchItem selected" : "topicBatchItem"}
-              key={batch.batch_id}
-              onClick={() => onSelectBatch(batch.batch_id)}
-              type="button"
-            >
-              <strong>{batch.prompt}</strong>
-              <span>
-                {`${formatTopicBatchTime(batch.created_at)} · ${batch.topic_count} 条 · ${topicBatchStatusLabels[batch.status]}`}
-              </span>
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </section>
   );
 }
 
@@ -675,28 +597,10 @@ export function ScriptPreparationDialog({
   );
 }
 
-function TopicStatusBadge({ status }: { status: ContentTopicStatus }) {
+export function TopicStatusBadge({ status }: { status: ContentTopicStatus }) {
   return (
     <span className={`statusBadge ${topicStatusClassNames[status]}`}>
       {topicStatusLabels[status]}
     </span>
   );
-}
-
-const topicBatchStatusLabels = {
-  running: "生成中",
-  succeeded: "已生成",
-  failed: "生成失败",
-} satisfies Record<TopicGenerationBatchSummary["status"], string>;
-
-function formatTopicBatchTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const hour = String(date.getHours()).padStart(2, "0");
-  const minute = String(date.getMinutes()).padStart(2, "0");
-  return `${month}-${day} ${hour}:${minute}`;
 }

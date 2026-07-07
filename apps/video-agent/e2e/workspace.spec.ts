@@ -208,7 +208,13 @@ const workspaceMenus = [
     ...menuNode("content-strategy", "内容策略", true, "active", 10),
     children: [
       {
-        ...menuNode("topic-generator", "选题生成", true, "active", 10),
+        ...menuNode("topic-history", "历史生成", true, "active", 10),
+        agent_key: "topic-generation-agent",
+        menu_type: "page",
+        module_key: "strategy.topic-history",
+      },
+      {
+        ...menuNode("topic-generator", "当前选题池", true, "active", 20),
         agent_key: "topic-generation-agent",
         menu_type: "page",
         module_key: "strategy.topics",
@@ -234,7 +240,23 @@ const workspaceMenus = [
 ];
 
 const contentStrategyWorkspaceMenus = [
-  menuNode("content-strategy", "内容策略", true, "active", 10),
+  {
+    ...menuNode("content-strategy", "内容策略", true, "active", 10),
+    children: [
+      {
+        ...menuNode("topic-history", "历史生成", true, "active", 10),
+        agent_key: "topic-generation-agent",
+        menu_type: "page",
+        module_key: "strategy.topic-history",
+      },
+      {
+        ...menuNode("topic-generator", "当前选题池", true, "active", 20),
+        agent_key: "topic-generation-agent",
+        menu_type: "page",
+        module_key: "strategy.topics",
+      },
+    ],
+  },
   {
     ...menuNode("script-creation", "脚本创作", true, "active", 20),
     children: [
@@ -268,6 +290,7 @@ const ideaTopic = {
   source: "manual",
   status: "idea",
   metadata: {},
+  deleted_at: null,
   created_at: "2026-07-02T00:20:00Z",
   updated_at: "2026-07-02T00:20:00Z",
 };
@@ -287,6 +310,51 @@ const archivedTopic = {
   title: "已经过时的工具清单",
   status: "archived",
   score: 40,
+};
+
+const scriptedTopic = {
+  ...ideaTopic,
+  topic_id: "657dcd2b-ebbd-47fd-ac1d-15663bae6cfa",
+  title: "程序员如何用 AI 搭一条短视频生产流水线：从脚本到发布",
+  source: "agent",
+  status: "scripted",
+  score: 94,
+};
+
+const latestTopicBatch = {
+  batch_id: "88888888-8888-4888-8888-888888888888",
+  project_id: projectId,
+  prompt: "最新一批 AI 工具选题",
+  requested_count: 5,
+  topic_count: 5,
+  status: "succeeded",
+  error_message: null,
+  created_at: "2026-07-06T10:00:00Z",
+  updated_at: "2026-07-06T10:00:10Z",
+};
+
+const previousTopicBatch = {
+  batch_id: "77777777-7777-4777-8777-777777777777",
+  project_id: projectId,
+  prompt: "上一批 AI 内容流水线选题",
+  requested_count: 5,
+  topic_count: 5,
+  status: "succeeded",
+  error_message: null,
+  created_at: "2026-07-02T00:22:00Z",
+  updated_at: "2026-07-02T00:22:20Z",
+};
+
+const failedTopicBatch = {
+  batch_id: "66666666-6666-4666-8666-666666666666",
+  project_id: projectId,
+  prompt: "失败的 AI 选题生成",
+  requested_count: 5,
+  topic_count: 0,
+  status: "failed",
+  error_message: "invalid topic JSON",
+  created_at: "2026-07-02T00:20:00Z",
+  updated_at: "2026-07-02T00:20:20Z",
 };
 
 const overflowTopics = Array.from({ length: 12 }, (_, index) => ({
@@ -521,6 +589,49 @@ async function mockContentStrategyWorkflow(page: Page) {
   });
 }
 
+async function mockContentStrategyHistoryWorkflow(page: Page) {
+  await page.unroute(/\/api\/video-workspace\/menus$/);
+  await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { menus: contentStrategyWorkspaceMenus } });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/topic-generation-batches$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: { batches: [latestTopicBatch, failedTopicBatch, previousTopicBatch] },
+    });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/topics(\\?.*)?$`), async (route) => {
+    const url = new URL(route.request().url());
+    const batchId = url.searchParams.get("batch_id");
+    if (batchId === previousTopicBatch.batch_id) {
+      await route.fulfill({
+        contentType: "application/json",
+        json: {
+          topics: [{ ...ideaTopic, batch_id: previousTopicBatch.batch_id, title: "历史批次选题" }],
+          stats: { total: 3, idea: 1, approved: 1, scripted: 1, archived: 0 },
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        topics: [
+          { ...approvedTopic, batch_id: latestTopicBatch.batch_id },
+          { ...scriptedTopic, batch_id: latestTopicBatch.batch_id },
+        ],
+        stats: { total: 3, idea: 1, approved: 1, scripted: 1, archived: 0 },
+      },
+    });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/scripts(\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: { scripts: [], total: 0, limit: 20, offset: 0 },
+    });
+  });
+}
+
 async function mockEmptyContentStrategyWorkflow(page: Page) {
   await page.unroute(/\/api\/video-workspace\/menus$/);
   await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
@@ -699,6 +810,42 @@ test("内容策略页从已确认选题确认参数并生成脚本", async ({ pa
   const sourceTopicPanel = page.locator(".sourceTopicPanel");
   await expect(sourceTopicPanel.getByText(approvedTopic.title, { exact: true })).toBeVisible();
   await expect(sourceTopicPanel.getByText(approvedTopic.angle)).toBeVisible();
+});
+
+test("内容策略历史生成列表页展示批次并限制已成稿选题删除", async ({ page }) => {
+  await mockContentStrategyHistoryWorkflow(page);
+  await page.goto("/");
+
+  const workspaceMenu = page.getByRole("navigation", { name: "视频工作台菜单" });
+  const contentStrategySubMenu = workspaceMenu.getByLabel("内容策略二级菜单");
+  await expect(contentStrategySubMenu.getByRole("button")).toHaveText(["历史生成", "当前选题池"]);
+  await expect(contentStrategySubMenu.getByRole("button", { name: "当前选题池" })).toHaveClass(/active/);
+  const contentStrategyRows = await page.locator(".contentStrategyWorkspace").evaluate((element) =>
+    getComputedStyle(element).gridTemplateRows.split(" ").length,
+  );
+  expect(contentStrategyRows).toBe(2);
+  await expect(page.getByRole("navigation", { name: "内容策略视图菜单" })).toHaveCount(0);
+  await contentStrategySubMenu.getByRole("button", { name: "历史生成" }).click();
+
+  const historyPage = page.getByRole("region", { name: "历史生成列表页" });
+  await expect(historyPage).toBeVisible();
+  await expect(contentStrategySubMenu.getByRole("button", { name: "历史生成" })).toHaveClass(/active/);
+  await expect(historyPage.getByRole("button", { name: /最新一批 AI 工具选题/ })).toHaveClass(/selected/);
+  await expect(historyPage.getByRole("button", { name: /上一批 AI 内容流水线选题/ })).toBeVisible();
+  await expect(historyPage.getByRole("button", { name: /失败的 AI 选题生成/ })).toHaveCount(0);
+
+  const removableRow = historyPage.getByRole("article", { name: `历史选题：${approvedTopic.title}` });
+  await expect(removableRow.getByRole("button", { name: "移除" })).toBeVisible();
+  const lockedRow = historyPage.getByRole("article", { name: `历史选题：${scriptedTopic.title}` });
+  await expect(lockedRow.getByText("已生成脚本，不可删除")).toBeVisible();
+  await expect(lockedRow.getByRole("button", { name: "移除" })).toHaveCount(0);
+
+  await historyPage.getByRole("button", { name: /上一批 AI 内容流水线选题/ }).click();
+  await expect(historyPage.getByRole("article", { name: "历史选题：历史批次选题" })).toBeVisible();
+  await contentStrategySubMenu.getByRole("button", { name: "当前选题池" }).click();
+  const topicPool = page.getByRole("region", { name: "选题池" });
+  await expect(topicPool.getByRole("button", { name: /历史批次选题/ })).toBeVisible();
+  await expect(topicPool.getByRole("button", { name: /最新批次选题/ })).toHaveCount(0);
 });
 
 test("内容策略空选题池布局贴近原型顶部", async ({ page }) => {

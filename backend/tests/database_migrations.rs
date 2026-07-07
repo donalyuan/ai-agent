@@ -1,5 +1,9 @@
 use sqlx::{postgres::PgPoolOptions, PgPool};
-use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
+
+mod support;
+
+use support::test_database::TestDatabase;
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -73,12 +77,17 @@ async fn constraint_exists(pool: &PgPool, table_name: &str, constraint_name: &st
     .expect("constraint existence query should run")
 }
 
-async fn create_database(admin_pool: &PgPool, database_name: &str) {
+async fn create_database(
+    admin_pool: &PgPool,
+    admin_url: &str,
+    database_name: &str,
+) -> TestDatabase {
     let query = format!(r#"CREATE DATABASE "{}""#, database_name);
     sqlx::query(&query)
         .execute(admin_pool)
         .await
         .expect("temporary migration database should be created");
+    TestDatabase::new(admin_url, database_name)
 }
 
 async fn drop_database(admin_pool: &PgPool, database_name: &str) {
@@ -99,10 +108,7 @@ async fn drop_database(admin_pool: &PgPool, database_name: &str) {
 #[tokio::test]
 async fn migrations_create_video_agent_core_schema() {
     let base_url = database_url();
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after unix epoch")
-        .as_nanos();
+    let suffix = Uuid::new_v4().simple().to_string();
     let database_name = format!("video_agent_migration_test_{}", suffix);
     let admin_url = with_database_name(&base_url, "postgres");
     let test_url = with_database_name(&base_url, &database_name);
@@ -113,7 +119,7 @@ async fn migrations_create_video_agent_core_schema() {
         .await
         .expect("admin database should be reachable");
 
-    create_database(&admin_pool, &database_name).await;
+    let database_name = create_database(&admin_pool, &admin_url, &database_name).await;
 
     let test_pool = PgPoolOptions::new()
         .max_connections(1)
@@ -285,19 +291,36 @@ async fn migrations_create_video_agent_core_schema() {
     .expect("content strategy seed query should run");
     assert_eq!(content_strategy, (true, "active".to_string()));
 
-    let topic_generator = sqlx::query_as::<_, (bool, String)>(
+    let content_strategy_children = sqlx::query_as::<_, (String, String, bool, String)>(
         r#"
-        SELECT child.is_enabled, child.status
+        SELECT child.menu_key, child.label, child.is_enabled, child.status
         FROM video_workspace_menus child
         JOIN video_workspace_menus parent ON parent.id = child.parent_id
         WHERE parent.menu_key = 'content-strategy'
-          AND child.menu_key = 'topic-generator'
+          AND child.menu_key IN ('topic-history', 'topic-generator')
+        ORDER BY child.sort_order ASC
         "#,
     )
-    .fetch_one(&test_pool)
+    .fetch_all(&test_pool)
     .await
-    .expect("topic generator seed query should run");
-    assert_eq!(topic_generator, (true, "active".to_string()));
+    .expect("content strategy child menu seed query should run");
+    assert_eq!(
+        content_strategy_children,
+        vec![
+            (
+                "topic-history".to_string(),
+                "历史生成".to_string(),
+                true,
+                "active".to_string()
+            ),
+            (
+                "topic-generator".to_string(),
+                "当前选题池".to_string(),
+                true,
+                "active".to_string()
+            ),
+        ]
+    );
 
     let planned_top_level_count = sqlx::query_scalar::<_, i64>(
         r#"
@@ -339,10 +362,7 @@ async fn migrations_create_video_agent_core_schema() {
 #[tokio::test]
 async fn runtime_postgres_connection_syncs_content_strategy_menu_state() {
     let base_url = database_url();
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after unix epoch")
-        .as_nanos();
+    let suffix = Uuid::new_v4().simple().to_string();
     let database_name = format!("video_agent_runtime_menu_sync_test_{}", suffix);
     let admin_url = with_database_name(&base_url, "postgres");
     let test_url = with_database_name(&base_url, &database_name);
@@ -352,7 +372,7 @@ async fn runtime_postgres_connection_syncs_content_strategy_menu_state() {
         .connect(&admin_url)
         .await
         .expect("admin database should be reachable");
-    create_database(&admin_pool, &database_name).await;
+    let database_name = create_database(&admin_pool, &admin_url, &database_name).await;
 
     let setup_pool = PgPoolOptions::new()
         .max_connections(1)
@@ -368,7 +388,7 @@ async fn runtime_postgres_connection_syncs_content_strategy_menu_state() {
         UPDATE video_workspace_menus
         SET is_enabled = false,
             status = 'planned'
-        WHERE menu_key IN ('content-strategy', 'topic-generator')
+        WHERE menu_key IN ('content-strategy', 'topic-history', 'topic-generator')
         "#,
     )
     .execute(&setup_pool)
@@ -384,8 +404,13 @@ async fn runtime_postgres_connection_syncs_content_strategy_menu_state() {
         r#"
         SELECT menu_key, is_enabled, status
         FROM video_workspace_menus
-        WHERE menu_key IN ('content-strategy', 'topic-generator')
-        ORDER BY menu_key
+        WHERE menu_key IN ('content-strategy', 'topic-history', 'topic-generator')
+        ORDER BY CASE menu_key
+            WHEN 'content-strategy' THEN 1
+            WHEN 'topic-history' THEN 2
+            WHEN 'topic-generator' THEN 3
+            ELSE 4
+        END
         "#,
     )
     .fetch_all(&runtime_pool)
@@ -395,6 +420,7 @@ async fn runtime_postgres_connection_syncs_content_strategy_menu_state() {
         menu_states,
         vec![
             ("content-strategy".to_string(), true, "active".to_string()),
+            ("topic-history".to_string(), true, "active".to_string()),
             ("topic-generator".to_string(), true, "active".to_string()),
         ]
     );

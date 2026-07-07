@@ -22,6 +22,7 @@ import {
   createAgentConversation,
   createApiClient,
   createContentTopic,
+  deleteContentTopic,
   generateScript,
   getScript,
   getScriptAgentTurnMetadata,
@@ -37,6 +38,7 @@ import {
   updateScriptStatus,
 } from "./lib/api";
 import { ContentStrategyPage, ScriptPreparationDialog } from "./pages/content-strategy/ContentStrategyPage";
+import { TopicHistoryPage } from "./pages/content-strategy/TopicHistoryPage";
 import {
   adjustTopicStats,
   defaultTopicForm,
@@ -44,13 +46,17 @@ import {
   sortContentTopicsByScore,
   topicPayloadFromForm,
   topicToForm,
+  type ContentStrategyView,
   type TopicFormState,
 } from "./pages/content-strategy/topicModel";
 import { ScriptCreationPage } from "./pages/script-creation/ScriptCreationPage";
 import { upsertSummary } from "./pages/script-creation/scriptModel";
 
 const contentStrategyMenuKey = "content-strategy";
+const topicHistoryMenuKey = "topic-history";
+const topicGeneratorMenuKey = "topic-generator";
 const scriptCreationMenuKey = "script-creation";
+const scriptGeneratorMenuKey = "script-generator";
 const defaultMenuKey = contentStrategyMenuKey;
 
 function visibleTopicGenerationBatches(batches: TopicGenerationBatchSummary[]) {
@@ -70,6 +76,8 @@ export default function Home() {
   const [topicBatches, setTopicBatches] = useState<TopicGenerationBatchSummary[]>([]);
   const [topicBatchesLoaded, setTopicBatchesLoaded] = useState(false);
   const [topicBatchViewMode, setTopicBatchViewMode] = useState<"latest" | "batch" | "all">("latest");
+  const [contentStrategyView, setContentStrategyView] = useState<ContentStrategyView>("pool");
+  const [historyTopicBatchId, setHistoryTopicBatchId] = useState<string | null>(null);
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [topicStatusFilter, setTopicStatusFilter] = useState<"all" | ContentTopicStatus>("all");
   const [topicSourceFilter] = useState<"all" | ContentTopicSource>("all");
@@ -90,6 +98,7 @@ export default function Home() {
   const [topicError, setTopicError] = useState("");
   const [topicBatchError, setTopicBatchError] = useState("");
   const [topicActionError, setTopicActionError] = useState("");
+  const [deletingTopicId, setDeletingTopicId] = useState<string | null>(null);
   const [showTopicForm, setShowTopicForm] = useState(false);
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
   const [topicForm, setTopicForm] = useState<TopicFormState>(defaultTopicForm);
@@ -118,14 +127,27 @@ export default function Home() {
   const preserveAgentConversationRef = useRef<string | null>(null);
 
   const selectedProject = projects.find((project) => project.project_id === selectedProjectId);
-  const activeTopicBatchId =
+  const poolActiveTopicBatchId =
     topicBatchViewMode === "all"
       ? null
       : topicBatchViewMode === "batch"
         ? topicBatchFilter
         : topicBatches[0]?.batch_id || null;
+  const selectedHistoryBatch =
+    topicBatches.find((batch) => batch.batch_id === historyTopicBatchId) || topicBatches[0] || null;
+  const historyActiveTopicBatchId = selectedHistoryBatch?.batch_id || null;
+  const activeTopicBatchId =
+    contentStrategyView === "history" ? historyActiveTopicBatchId : poolActiveTopicBatchId;
   const selectedTopic = topics.find((topic) => topic.topic_id === selectedTopicId) || null;
   const writesDisabled = apiAvailable === false;
+  const selectedSubMenuKey =
+    selectedMenuKey === contentStrategyMenuKey
+      ? contentStrategyView === "history"
+        ? topicHistoryMenuKey
+        : topicGeneratorMenuKey
+      : selectedMenuKey === scriptCreationMenuKey
+        ? scriptGeneratorMenuKey
+        : null;
 
   useEffect(() => {
     let active = true;
@@ -301,7 +323,7 @@ export default function Home() {
   }, [client, selectedProjectId, selectedMenuKey]);
 
   useEffect(() => {
-    if (!selectedProjectId || selectedMenuKey !== "content-strategy") {
+    if (!selectedProjectId || selectedMenuKey !== contentStrategyMenuKey) {
       if (!selectedProjectId) {
         setTopics([]);
         setTopicStats(emptyTopicStats);
@@ -310,6 +332,12 @@ export default function Home() {
       return;
     }
     if (!topicBatchesLoaded) {
+      return;
+    }
+    if (contentStrategyView === "history" && !activeTopicBatchId) {
+      setTopics([]);
+      setTopicStats(emptyTopicStats);
+      setSelectedTopicId(null);
       return;
     }
 
@@ -356,6 +384,7 @@ export default function Home() {
   }, [
     activeTopicBatchId,
     client,
+    contentStrategyView,
     selectedProjectId,
     selectedMenuKey,
     topicBatchesLoaded,
@@ -381,9 +410,12 @@ export default function Home() {
     setTopicScriptError("");
     setTopicBatchFilter(null);
     setTopicBatchViewMode("latest");
+    setContentStrategyView("pool");
+    setHistoryTopicBatchId(null);
     setTopicBatches([]);
     setTopicBatchesLoaded(false);
     setTopicBatchError("");
+    setDeletingTopicId(null);
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -413,6 +445,35 @@ export default function Home() {
       setScriptError,
       () => selectedScriptIdRef.current === scriptId,
     );
+  }
+
+  function handleSelectWorkspaceMenu(menuKey: string) {
+    setSelectedMenuKey(menuKey);
+    if (menuKey === contentStrategyMenuKey) {
+      setContentStrategyView("pool");
+    }
+  }
+
+  function handleSelectWorkspaceSubMenu(menuKey: string) {
+    if (menuKey === topicHistoryMenuKey) {
+      setSelectedMenuKey(contentStrategyMenuKey);
+      setContentStrategyView("history");
+      return;
+    }
+    if (menuKey === topicGeneratorMenuKey) {
+      setSelectedMenuKey(contentStrategyMenuKey);
+      setContentStrategyView("pool");
+      return;
+    }
+    if (menuKey === scriptGeneratorMenuKey) {
+      setSelectedMenuKey(scriptCreationMenuKey);
+    }
+  }
+
+  function handleSelectHistoryTopicBatch(batchId: string) {
+    setHistoryTopicBatchId(batchId);
+    setTopicBatchFilter(batchId);
+    setTopicBatchViewMode("batch");
   }
 
   function handleNewScript() {
@@ -573,6 +634,31 @@ export default function Home() {
       setTopicStats((currentStats) => adjustTopicStats(currentStats, topic.status, updatedTopic.status));
     } catch (error) {
       setTopicActionError(errorToMessage(error));
+    }
+  }
+
+  async function handleDeleteTopic(topic: ContentTopic) {
+    if (topic.status === "scripted") {
+      return;
+    }
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(`确认从管理视图移除「${topic.title}」吗？`)
+    ) {
+      return;
+    }
+
+    setTopicActionError("");
+    setDeletingTopicId(topic.topic_id);
+
+    try {
+      await deleteContentTopic(client, topic.topic_id);
+      await refreshTopicBatches();
+      await refreshContentTopics(activeTopicBatchId);
+    } catch (error) {
+      setTopicActionError(errorToMessage(error));
+    } finally {
+      setDeletingTopicId(null);
     }
   }
 
@@ -788,9 +874,11 @@ export default function Home() {
       menuError={menuError}
       projects={projects}
       selectedMenuKey={selectedMenuKey}
+      selectedSubMenuKey={selectedSubMenuKey}
       selectedProjectId={selectedProjectId}
       workspaceMenus={workspaceMenus}
-      onSelectMenu={setSelectedMenuKey}
+      onSelectMenu={handleSelectWorkspaceMenu}
+      onSelectSubMenu={handleSelectWorkspaceSubMenu}
       onSelectProject={setSelectedProjectId}
       overlay={
         scriptPreparation ? (
@@ -806,18 +894,32 @@ export default function Home() {
         ) : null
       }
     >
-      {selectedMenuKey === contentStrategyMenuKey ? (
+      {selectedMenuKey === contentStrategyMenuKey && contentStrategyView === "history" ? (
+        <TopicHistoryPage
+          project={selectedProject}
+          topics={topics}
+          stats={topicStats}
+          activeTopicBatchId={historyActiveTopicBatchId}
+          topicBatches={topicBatches}
+          loadingTopicBatches={!topicBatchesLoaded}
+          topicBatchError={topicBatchError}
+          loading={loadingTopics}
+          error={topicError}
+          actionError={topicActionError}
+          deletingTopicId={deletingTopicId}
+          writesDisabled={writesDisabled}
+          onDeleteTopic={handleDeleteTopic}
+          onSelectTopicBatch={handleSelectHistoryTopicBatch}
+        />
+      ) : selectedMenuKey === contentStrategyMenuKey ? (
         <ContentStrategyPage
           project={selectedProject}
           topics={topics}
           stats={topicStats}
           selectedTopic={selectedTopic}
           statusFilter={topicStatusFilter}
-          activeTopicBatchId={activeTopicBatchId}
+          activeTopicBatchId={poolActiveTopicBatchId}
           showingAllTopicBatches={topicBatchViewMode === "all"}
-          topicBatches={topicBatches}
-          loadingTopicBatches={!topicBatchesLoaded}
-          topicBatchError={topicBatchError}
           loading={loadingTopics}
           error={topicError}
           actionError={topicActionError}
@@ -835,10 +937,6 @@ export default function Home() {
           onClearTopicBatchFilter={() => {
             setTopicBatchViewMode("all");
             setTopicBatchFilter(null);
-          }}
-          onSelectTopicBatch={(batchId) => {
-            setTopicBatchViewMode("batch");
-            setTopicBatchFilter(batchId);
           }}
           onStatusFilterChange={setTopicStatusFilter}
           onNewTopic={handleNewTopic}

@@ -41,6 +41,7 @@ impl TopicRepository for MemoryTopicRepository {
             source: input.source,
             status: ContentTopicStatus::Idea,
             metadata: input.metadata,
+            deleted_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -103,6 +104,7 @@ impl TopicRepository for MemoryTopicRepository {
             .unwrap()
             .values()
             .filter(|topic| topic.project_id == project_id)
+            .filter(|topic| topic.deleted_at.is_none())
             .filter(|topic| {
                 filter
                     .status
@@ -137,10 +139,27 @@ impl TopicRepository for MemoryTopicRepository {
             .unwrap()
             .values()
             .filter(|topic| topic.project_id == project_id)
+            .filter(|topic| topic.deleted_at.is_none())
         {
             *counts.entry(topic.status.clone()).or_insert(0) += 1;
         }
         Ok(counts.into_iter().collect())
+    }
+
+    async fn soft_delete_topic(
+        &self,
+        topic_id: Uuid,
+    ) -> Result<ContentTopic, TopicRepositoryError> {
+        let mut topics = self.topics.lock().unwrap();
+        let topic = topics
+            .get_mut(&topic_id)
+            .ok_or(TopicRepositoryError::TopicNotFound(topic_id))?;
+        if topic.status == ContentTopicStatus::Scripted {
+            return Err(TopicRepositoryError::TopicCannotBeDeleted(topic_id));
+        }
+        topic.deleted_at = Some(Utc::now());
+        topic.updated_at = Utc::now();
+        Ok(topic.clone())
     }
 
     async fn create_generation_batch(
@@ -212,6 +231,7 @@ impl TopicRepository for MemoryTopicRepository {
                 topic_count: topics
                     .values()
                     .filter(|topic| topic.batch_id == Some(batch.id))
+                    .filter(|topic| topic.deleted_at.is_none())
                     .count() as i64,
             })
             .filter(|summary| summary.topic_count > 0)
@@ -388,4 +408,73 @@ async fn topic_repository_trait_supports_generation_batches() {
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0].batch.id, batch.id);
     assert_eq!(batches[0].topic_count, 1);
+}
+
+#[tokio::test]
+async fn topic_repository_trait_soft_deletes_visible_topics_only() {
+    let repository = MemoryTopicRepository::default();
+    let project_id = Uuid::new_v4();
+    let batch = repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            prompt: "本周 AI 工具方向，生成 2 个选题".to_string(),
+            requested_count: 2,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    let topic = repository
+        .create_topic(CreateContentTopicInput {
+            batch_id: Some(batch.id),
+            source: ContentTopicSource::Agent,
+            ..manual_topic(project_id)
+        })
+        .await
+        .unwrap();
+
+    let deleted = repository.soft_delete_topic(topic.id).await.unwrap();
+    assert!(deleted.deleted_at.is_some());
+    assert_eq!(deleted.status, ContentTopicStatus::Idea);
+
+    let listed = repository
+        .list_topics(project_id, ContentTopicFilter::default())
+        .await
+        .unwrap();
+    assert!(listed.is_empty());
+
+    let counts = repository.count_topics_by_status(project_id).await.unwrap();
+    assert!(counts.is_empty());
+
+    let batches = repository
+        .list_generation_batches(project_id, 20)
+        .await
+        .unwrap();
+    assert!(batches.is_empty());
+}
+
+#[tokio::test]
+async fn topic_repository_trait_rejects_soft_deleting_scripted_topic() {
+    let repository = MemoryTopicRepository::default();
+    let project_id = Uuid::new_v4();
+    let topic = repository
+        .create_topic(manual_topic(project_id))
+        .await
+        .unwrap();
+    repository
+        .update_topic_status(topic.id, ContentTopicStatus::Approved)
+        .await
+        .unwrap();
+    repository
+        .update_topic_status(topic.id, ContentTopicStatus::Scripted)
+        .await
+        .unwrap();
+
+    let error = repository.soft_delete_topic(topic.id).await.unwrap_err();
+    assert!(matches!(
+        error,
+        TopicRepositoryError::TopicCannotBeDeleted(topic_id) if topic_id == topic.id
+    ));
 }
