@@ -74,6 +74,7 @@ impl From<ScriptStatus> for String {
 pub struct Script {
     pub id: Uuid,
     pub project_id: Uuid,
+    pub topic_id: Option<Uuid>,
     pub title: String,
     pub hook: String,
     pub content: Value,
@@ -87,6 +88,8 @@ pub struct Script {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScriptSummary {
     pub script_id: Uuid,
+    pub topic_id: Option<Uuid>,
+    pub source_topic_title: Option<String>,
     pub title: String,
     pub status: ScriptStatus,
     pub scene_count: i64,
@@ -99,6 +102,7 @@ impl Script {
     pub fn new(
         id: Uuid,
         project_id: Uuid,
+        topic_id: Option<Uuid>,
         title: String,
         hook: String,
         content: Value,
@@ -114,6 +118,7 @@ impl Script {
         Self {
             id,
             project_id,
+            topic_id,
             title,
             hook,
             content,

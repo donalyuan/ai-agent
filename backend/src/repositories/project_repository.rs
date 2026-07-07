@@ -37,6 +37,8 @@ impl PostgresProjectRepository {
 pub trait ProjectRepository: Send + Sync {
     async fn project_exists(&self, project_id: Uuid) -> Result<bool, ProjectRepositoryError>;
 
+    async fn get_project(&self, project_id: Uuid) -> Result<Project, ProjectRepositoryError>;
+
     async fn create_project(
         &self,
         input: CreateProjectInput,
@@ -53,6 +55,23 @@ impl ProjectRepository for PostgresProjectRepository {
             .fetch_one(&self.pool)
             .await
             .map_err(ProjectRepositoryError::from)
+    }
+
+    async fn get_project(&self, project_id: Uuid) -> Result<Project, ProjectRepositoryError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, name, positioning, description, status, created_at, updated_at
+            FROM projects
+            WHERE id = $1
+            "#,
+        )
+        .bind(project_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(ProjectRepositoryError::from)?
+        .ok_or(ProjectRepositoryError::NotFound(project_id))?;
+
+        Ok(project_from_row(row))
     }
 
     async fn create_project(
@@ -109,6 +128,7 @@ fn project_from_row(row: sqlx::postgres::PgRow) -> Project {
 
 #[derive(Debug)]
 pub enum ProjectRepositoryError {
+    NotFound(Uuid),
     Storage(String),
 }
 
@@ -121,6 +141,7 @@ impl From<sqlx::Error> for ProjectRepositoryError {
 impl fmt::Display for ProjectRepositoryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NotFound(project_id) => write!(formatter, "project not found: {project_id}"),
             Self::Storage(message) => write!(formatter, "project storage error: {message}"),
         }
     }

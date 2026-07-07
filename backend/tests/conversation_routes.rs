@@ -5,10 +5,13 @@ use novex_api::{build_app_with_state, AppConfig, AppState};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tower::ServiceExt;
 use uuid::Uuid;
+
+mod support;
+
+use support::test_database::TestDatabase;
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -29,12 +32,17 @@ fn with_database_name(database_url: &str, database_name: &str) -> String {
     format!("{}{}{}", &base[..=slash_index], database_name, query)
 }
 
-async fn create_database(admin_pool: &PgPool, database_name: &str) {
+async fn create_database(
+    admin_pool: &PgPool,
+    admin_url: &str,
+    database_name: &str,
+) -> TestDatabase {
     let query = format!(r#"CREATE DATABASE "{}""#, database_name);
     sqlx::query(&query)
         .execute(admin_pool)
         .await
         .expect("temporary conversation route database should be created");
+    TestDatabase::new(admin_url, database_name)
 }
 
 async fn drop_database(admin_pool: &PgPool, database_name: &str) {
@@ -52,12 +60,9 @@ async fn drop_database(admin_pool: &PgPool, database_name: &str) {
     let _ = sqlx::query(&drop).execute(admin_pool).await;
 }
 
-async fn migrated_pool() -> (PgPool, PgPool, String, String) {
+async fn migrated_pool() -> (PgPool, PgPool, TestDatabase, String) {
     let base_url = database_url();
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after unix epoch")
-        .as_nanos();
+    let suffix = Uuid::new_v4().simple().to_string();
     let database_name = format!("video_agent_conversation_route_test_{}", suffix);
     let admin_url = with_database_name(&base_url, "postgres");
     let test_url = with_database_name(&base_url, &database_name);
@@ -67,7 +72,7 @@ async fn migrated_pool() -> (PgPool, PgPool, String, String) {
         .connect(&admin_url)
         .await
         .expect("admin database should be reachable");
-    create_database(&admin_pool, &database_name).await;
+    let database_name = create_database(&admin_pool, &admin_url, &database_name).await;
 
     let test_pool = PgPoolOptions::new()
         .max_connections(3)
@@ -244,8 +249,48 @@ async fn conversation_routes_create_unbound_script_generation_conversation() {
         .unwrap();
     assert_eq!(missing_project_response.status(), StatusCode::BAD_REQUEST);
     let missing_project_body = response_json(missing_project_response).await;
-    assert_eq!(missing_project_body["error"], "脚本会话必须绑定项目");
+    assert_eq!(missing_project_body["error"], "Agent 会话必须绑定项目");
 
+    assert!(openai_requests.lock().unwrap().is_empty());
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn conversation_routes_create_topic_generation_conversation() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let openai_requests = Arc::new(Mutex::new(Vec::new()));
+    let openai_base_url = local_scripted_openai_base_url(openai_requests.clone()).await;
+    let app = build_app_with_state(app_state(test_url, test_pool.clone(), openai_base_url));
+
+    let create_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agent/conversations")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "agent_type": "topic",
+                        "project_id": project_id,
+                        "title": "选题生成"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+    let conversation = response_json(create_response).await;
+    assert_eq!(conversation["agent_type"], "topic");
+    assert_eq!(conversation["project_id"], project_id.to_string());
+    assert!(conversation["subject_type"].is_null());
+    assert!(conversation["subject_id"].is_null());
+    assert_eq!(conversation["status"], "active");
     assert!(openai_requests.lock().unwrap().is_empty());
 
     test_pool.close().await;

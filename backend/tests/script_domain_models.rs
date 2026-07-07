@@ -47,6 +47,7 @@ fn script_aggregate_orders_scenes_by_sequence() {
     let script = Script::new(
         Uuid::new_v4(),
         Uuid::new_v4(),
+        None,
         "程序员必看：ChatGPT工作流".to_string(),
         "还在手写重复代码？".to_string(),
         json!({"topic": "ChatGPT如何改变程序员工作流"}),

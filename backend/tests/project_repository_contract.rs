@@ -3,6 +3,7 @@ use chrono::Utc;
 use novex_api::repositories::{
     CreateProjectInput, Project, ProjectRepository, ProjectRepositoryError,
 };
+use std::cmp::Reverse;
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -19,6 +20,16 @@ impl ProjectRepository for MemoryProjectRepository {
             .unwrap()
             .iter()
             .any(|project| project.id == project_id))
+    }
+
+    async fn get_project(&self, project_id: Uuid) -> Result<Project, ProjectRepositoryError> {
+        self.projects
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|project| project.id == project_id)
+            .cloned()
+            .ok_or(ProjectRepositoryError::NotFound(project_id))
     }
 
     async fn create_project(
@@ -40,7 +51,7 @@ impl ProjectRepository for MemoryProjectRepository {
 
     async fn list_projects(&self) -> Result<Vec<Project>, ProjectRepositoryError> {
         let mut projects = self.projects.lock().unwrap().clone();
-        projects.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        projects.sort_by_key(|project| Reverse(project.created_at));
         Ok(projects)
     }
 }

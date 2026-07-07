@@ -13,8 +13,11 @@ use novex_model::LLMPrompt;
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+mod support;
+
+use support::test_database::TestDatabase;
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -35,12 +38,17 @@ fn with_database_name(database_url: &str, database_name: &str) -> String {
     format!("{}{}{}", &base[..=slash_index], database_name, query)
 }
 
-async fn create_database(admin_pool: &PgPool, database_name: &str) {
+async fn create_database(
+    admin_pool: &PgPool,
+    admin_url: &str,
+    database_name: &str,
+) -> TestDatabase {
     let query = format!(r#"CREATE DATABASE "{}""#, database_name);
     sqlx::query(&query)
         .execute(admin_pool)
         .await
         .expect("temporary conversational script database should be created");
+    TestDatabase::new(admin_url, database_name)
 }
 
 async fn drop_database(admin_pool: &PgPool, database_name: &str) {
@@ -58,12 +66,9 @@ async fn drop_database(admin_pool: &PgPool, database_name: &str) {
     let _ = sqlx::query(&drop).execute(admin_pool).await;
 }
 
-async fn migrated_pool() -> (PgPool, PgPool, String) {
+async fn migrated_pool() -> (PgPool, PgPool, TestDatabase) {
     let base_url = database_url();
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after unix epoch")
-        .as_nanos();
+    let suffix = Uuid::new_v4().simple().to_string();
     let database_name = format!("video_agent_conversational_script_test_{}", suffix);
     let admin_url = with_database_name(&base_url, "postgres");
     let test_url = with_database_name(&base_url, &database_name);
@@ -73,7 +78,7 @@ async fn migrated_pool() -> (PgPool, PgPool, String) {
         .connect(&admin_url)
         .await
         .expect("admin database should be reachable");
-    create_database(&admin_pool, &database_name).await;
+    let database_name = create_database(&admin_pool, &admin_url, &database_name).await;
 
     let test_pool = PgPoolOptions::new()
         .max_connections(3)
@@ -241,6 +246,7 @@ async fn script_agent_dialogue_updates_target_scene_and_records_messages() {
         .handle_turn(AgentTurnRequest {
             conversation_id: conversation.id,
             user_message: "把第 3 镜改得更有冲突感，画面换成办公室深夜加班".to_string(),
+            supplement_of_batch_id: None,
         })
         .await
         .unwrap();
@@ -273,10 +279,12 @@ async fn script_agent_dialogue_updates_target_scene_and_records_messages() {
     assert_eq!(messages[0].role, AgentMessageRole::User);
     assert_eq!(messages[1].role, AgentMessageRole::Assistant);
 
-    let prompts = llm_client.prompts.lock().unwrap();
-    assert_eq!(prompts.len(), 1);
-    assert!(prompts[0].user.contains("第 3 镜"));
-    assert!(prompts[0].user.contains("当前脚本"));
+    {
+        let prompts = llm_client.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].user.contains("第 3 镜"));
+        assert!(prompts[0].user.contains("当前脚本"));
+    }
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
@@ -327,7 +335,7 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
                     "duration_sec": 10
                 }
             ]
-        })
+        }),
     ]));
     let runtime = AgentRuntime::new(
         conversation_repository.clone(),
@@ -351,6 +359,7 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
         .handle_turn(AgentTurnRequest {
             conversation_id: conversation.id,
             user_message: "帮我生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本".to_string(),
+            supplement_of_batch_id: None,
         })
         .await
         .unwrap();
@@ -370,7 +379,10 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
         .await
         .unwrap();
     assert_eq!(updated_conversation.subject_type.as_deref(), Some("script"));
-    assert_eq!(updated_conversation.subject_id.unwrap().to_string(), script_id);
+    assert_eq!(
+        updated_conversation.subject_id.unwrap().to_string(),
+        script_id
+    );
 
     let script = script_repository
         .get_script(Uuid::parse_str(script_id).unwrap())
@@ -378,7 +390,10 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
         .unwrap();
     assert_eq!(script.project_id, project_id);
     assert_eq!(script.scenes.len(), 3);
-    assert!(script.content["topic"].as_str().unwrap().contains("ChatGPT"));
+    assert!(script.content["topic"]
+        .as_str()
+        .unwrap()
+        .contains("ChatGPT"));
 
     let messages = conversation_repository
         .list_messages(conversation.id)
@@ -388,10 +403,12 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
     assert_eq!(messages[0].role, AgentMessageRole::User);
     assert_eq!(messages[1].role, AgentMessageRole::Assistant);
 
-    let prompts = llm_client.prompts.lock().unwrap();
-    assert_eq!(prompts.len(), 2);
-    assert!(prompts[0].user.contains("生成脚本参数"));
-    assert!(prompts[1].user.contains("请根据以下选题生成3个分镜"));
+    {
+        let prompts = llm_client.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[0].user.contains("生成脚本参数"));
+        assert!(prompts[1].user.contains("请根据以下选题生成3个分镜"));
+    }
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
@@ -437,6 +454,7 @@ async fn script_agent_dialogue_asks_for_missing_generation_fields_without_creati
         .handle_turn(AgentTurnRequest {
             conversation_id: conversation.id,
             user_message: "帮我生成脚本".to_string(),
+            supplement_of_batch_id: None,
         })
         .await
         .unwrap();
@@ -507,6 +525,7 @@ async fn script_agent_dialogue_records_failed_run_when_generation_llm_fails() {
         .handle_turn(AgentTurnRequest {
             conversation_id: conversation.id,
             user_message: "帮我生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本".to_string(),
+            supplement_of_batch_id: None,
         })
         .await
         .unwrap_err();

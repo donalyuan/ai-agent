@@ -25,6 +25,23 @@ impl ProjectRepository for MemoryProjectRepository {
         Ok(self.project_ids.contains(&project_id))
     }
 
+    async fn get_project(&self, project_id: Uuid) -> Result<Project, ProjectRepositoryError> {
+        if self.project_ids.contains(&project_id) {
+            let now = Utc::now();
+            Ok(Project {
+                id: project_id,
+                name: "测试项目".to_string(),
+                positioning: "测试定位".to_string(),
+                description: "脚本服务测试项目".to_string(),
+                status: "active".to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+        } else {
+            Err(ProjectRepositoryError::NotFound(project_id))
+        }
+    }
+
     async fn create_project(
         &self,
         input: CreateProjectInput,
@@ -118,6 +135,13 @@ impl ScriptRepository for MemoryScriptRepository {
             .into_iter()
             .map(|script| ScriptSummary {
                 script_id: script.id,
+                topic_id: script.topic_id,
+                source_topic_title: script
+                    .content
+                    .get("topic_snapshot")
+                    .and_then(|snapshot| snapshot.get("title"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
                 title: script.title,
                 status: script.status,
                 scene_count: script.scenes.len() as i64,
@@ -295,6 +319,7 @@ fn request(project_id: Uuid) -> GenerateScriptRequest {
     GenerateScriptRequest {
         project_id,
         topic: "ChatGPT如何改变程序员工作流".to_string(),
+        topic_id: None,
         style: Some(ScriptStyle::Knowledge),
         scene_count: Some(5),
         parent_id: None,
@@ -318,6 +343,48 @@ async fn generate_script_retries_invalid_llm_json_then_persists_script() {
 }
 
 #[tokio::test]
+async fn generate_script_retries_transient_provider_errors_then_persists_script() {
+    let project_id = Uuid::new_v4();
+    let (service, repository, llm) = service(
+        HashSet::from([project_id]),
+        vec![
+            Err(LLMError::Provider(
+                "502 Bad Gateway: upstream_error".to_string(),
+            )),
+            Ok(valid_llm_json()),
+        ],
+    );
+
+    let script = service.generate_script(request(project_id)).await.unwrap();
+
+    assert_eq!(script.scenes.len(), 5);
+    assert_eq!(script.content["metadata"]["retry_count"], 1);
+    assert_eq!(repository.count_scripts(project_id, None).await.unwrap(), 1);
+    assert_eq!(llm.prompts.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn generate_script_retries_stream_body_provider_errors_then_persists_script() {
+    let project_id = Uuid::new_v4();
+    let (service, repository, llm) = service(
+        HashSet::from([project_id]),
+        vec![
+            Err(LLMError::Provider(
+                "error decoding response body".to_string(),
+            )),
+            Ok(valid_llm_json()),
+        ],
+    );
+
+    let script = service.generate_script(request(project_id)).await.unwrap();
+
+    assert_eq!(script.scenes.len(), 5);
+    assert_eq!(script.content["metadata"]["retry_count"], 1);
+    assert_eq!(repository.count_scripts(project_id, None).await.unwrap(), 1);
+    assert_eq!(llm.prompts.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn generate_script_stepwise_requests_metadata_then_single_scenes() {
     let project_id = Uuid::new_v4();
     let (service, repository, llm) = service(
@@ -332,6 +399,7 @@ async fn generate_script_stepwise_requests_metadata_then_single_scenes() {
     let request = GenerateScriptRequest {
         project_id,
         topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
+        topic_id: None,
         style: Some(ScriptStyle::Knowledge),
         scene_count: Some(3),
         parent_id: None,
@@ -355,6 +423,38 @@ async fn generate_script_stepwise_requests_metadata_then_single_scenes() {
     assert!(prompts[1].user.contains("当前分镜序号：1"));
     assert!(prompts[2].user.contains("当前分镜序号：2"));
     assert!(prompts[3].user.contains("当前分镜序号：3"));
+}
+
+#[tokio::test]
+async fn generate_script_stepwise_retries_transient_provider_errors_for_single_scene() {
+    let project_id = Uuid::new_v4();
+    let (service, repository, llm) = service(
+        HashSet::from([project_id]),
+        vec![
+            Ok(valid_metadata_json()),
+            Err(LLMError::Provider(
+                "502 Bad Gateway: upstream_error".to_string(),
+            )),
+            Ok(valid_scene_json(1)),
+            Ok(valid_scene_json(2)),
+            Ok(valid_scene_json(3)),
+        ],
+    );
+    let request = GenerateScriptRequest {
+        project_id,
+        topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
+        topic_id: None,
+        style: Some(ScriptStyle::Knowledge),
+        scene_count: Some(3),
+        parent_id: None,
+    };
+
+    let script = service.generate_script_stepwise(request).await.unwrap();
+
+    assert_eq!(script.scenes.len(), 3);
+    assert_eq!(script.content["metadata"]["retry_count"], 1);
+    assert_eq!(repository.count_scripts(project_id, None).await.unwrap(), 1);
+    assert_eq!(llm.prompts.lock().unwrap().len(), 5);
 }
 
 #[tokio::test]

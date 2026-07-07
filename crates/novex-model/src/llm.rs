@@ -1,14 +1,23 @@
 use async_trait::async_trait;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fmt;
 use std::time::Duration;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LLMPrompt {
     pub system: String,
     pub user: String,
     pub max_output_tokens: Option<u32>,
+    pub output_schema: Option<LLMJsonSchema>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LLMJsonSchema {
+    pub name: String,
+    pub strict: bool,
+    pub schema: Value,
 }
 
 const OPENAI_COMPATIBLE_USER_AGENT: &str = "codex-cli/0.142.5";
@@ -135,12 +144,11 @@ impl OpenAIClient {
             "{}/chat/completions",
             self.config.base_url.trim_end_matches('/')
         );
+        let response_format = OpenAIResponseFormat::for_chat(prompt.output_schema.as_ref());
         let payload = OpenAIChatCompletionRequest {
             model: self.config.model.clone(),
             temperature: 0.8,
-            response_format: OpenAIResponseFormat {
-                response_type: "json_object".to_string(),
-            },
+            response_format,
             messages: vec![
                 OpenAIMessage {
                     role: "system".to_string(),
@@ -188,6 +196,7 @@ impl OpenAIClient {
 
     async fn generate_script_with_responses(&self, prompt: LLMPrompt) -> Result<String, LLMError> {
         let endpoint = self.config.base_url.trim_end_matches('/').to_string();
+        let response_format = OpenAIResponseFormat::for_responses(prompt.output_schema.as_ref());
         let payload = OpenAIResponsesRequest {
             model: self.config.model.clone(),
             temperature: 0.8,
@@ -212,9 +221,7 @@ impl OpenAIClient {
                 },
             ],
             text: OpenAIResponsesTextConfig {
-                format: OpenAIResponseFormat {
-                    response_type: "json_object".to_string(),
-                },
+                format: response_format,
             },
             reasoning: self
                 .config
@@ -279,6 +286,65 @@ struct OpenAIMessage {
 struct OpenAIResponseFormat {
     #[serde(rename = "type")]
     response_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    strict: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    json_schema: Option<OpenAIChatJsonSchema>,
+}
+
+impl OpenAIResponseFormat {
+    fn for_chat(schema: Option<&LLMJsonSchema>) -> Self {
+        match schema {
+            Some(schema) => Self {
+                response_type: "json_schema".to_string(),
+                name: None,
+                strict: None,
+                schema: None,
+                json_schema: Some(OpenAIChatJsonSchema {
+                    name: schema.name.clone(),
+                    strict: schema.strict,
+                    schema: schema.schema.clone(),
+                }),
+            },
+            None => Self {
+                response_type: "json_object".to_string(),
+                name: None,
+                strict: None,
+                schema: None,
+                json_schema: None,
+            },
+        }
+    }
+
+    fn for_responses(schema: Option<&LLMJsonSchema>) -> Self {
+        match schema {
+            Some(schema) => Self {
+                response_type: "json_schema".to_string(),
+                name: Some(schema.name.clone()),
+                strict: Some(schema.strict),
+                schema: Some(schema.schema.clone()),
+                json_schema: None,
+            },
+            None => Self {
+                response_type: "json_object".to_string(),
+                name: None,
+                strict: None,
+                schema: None,
+                json_schema: None,
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct OpenAIChatJsonSchema {
+    name: String,
+    strict: bool,
+    schema: Value,
 }
 
 #[derive(Serialize)]

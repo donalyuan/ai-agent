@@ -1,12 +1,15 @@
 use crate::agents::models::GenerateScriptRequest;
+use novex_model::LLMJsonSchema;
 use serde::Deserialize;
+use serde_json::json;
 use std::fmt;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ScriptPrompt {
     pub system: String,
     pub user: String,
     pub max_output_tokens: Option<u32>,
+    pub output_schema: Option<LLMJsonSchema>,
 }
 
 pub struct ScriptPromptBuilder;
@@ -58,6 +61,7 @@ JSON Schema：
                 variant_instruction = variant_instruction,
             ),
             max_output_tokens: None,
+            output_schema: Some(script_output_schema(scene_count)),
         }
     }
 
@@ -94,6 +98,7 @@ JSON Schema：
                 variant_instruction = variant_instruction,
             ),
             max_output_tokens: Some(400),
+            output_schema: Some(script_metadata_output_schema()),
         }
     }
 
@@ -142,6 +147,7 @@ JSON Schema：
                 variant_instruction = variant_instruction,
             ),
             max_output_tokens: Some(1_200),
+            output_schema: Some(script_scene_output_schema()),
         }
     }
 }
@@ -156,8 +162,77 @@ impl From<ScriptPrompt> for novex_model::LLMPrompt {
             system: prompt.system,
             user: prompt.user,
             max_output_tokens: prompt.max_output_tokens,
+            output_schema: prompt.output_schema,
         }
     }
+}
+
+fn script_output_schema(scene_count: u8) -> LLMJsonSchema {
+    LLMJsonSchema {
+        name: "script".to_string(),
+        strict: true,
+        schema: json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "hook", "scenes"],
+            "properties": {
+                "title": { "type": "string" },
+                "hook": { "type": "string" },
+                "scenes": {
+                    "type": "array",
+                    "minItems": scene_count,
+                    "maxItems": scene_count,
+                    "items": script_scene_schema()
+                }
+            }
+        }),
+    }
+}
+
+fn script_metadata_output_schema() -> LLMJsonSchema {
+    LLMJsonSchema {
+        name: "script_metadata".to_string(),
+        strict: true,
+        schema: json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "hook"],
+            "properties": {
+                "title": { "type": "string" },
+                "hook": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn script_scene_output_schema() -> LLMJsonSchema {
+    LLMJsonSchema {
+        name: "script_scene".to_string(),
+        strict: true,
+        schema: json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scene"],
+            "properties": {
+                "scene": script_scene_schema()
+            }
+        }),
+    }
+}
+
+fn script_scene_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sequence", "narration", "visual_description", "emotion", "duration_sec"],
+        "properties": {
+            "sequence": { "type": "integer" },
+            "narration": { "type": "string" },
+            "visual_description": { "type": "string" },
+            "emotion": { "type": "string" },
+            "duration_sec": { "type": "integer" }
+        }
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]

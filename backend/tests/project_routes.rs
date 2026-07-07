@@ -3,8 +3,12 @@ use axum::http::{Request, StatusCode};
 use novex_api::{build_app_with_state, AppConfig, AppState};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
+use uuid::Uuid;
+
+mod support;
+
+use support::test_database::TestDatabase;
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -25,12 +29,17 @@ fn with_database_name(database_url: &str, database_name: &str) -> String {
     format!("{}{}{}", &base[..=slash_index], database_name, query)
 }
 
-async fn create_database(admin_pool: &PgPool, database_name: &str) {
+async fn create_database(
+    admin_pool: &PgPool,
+    admin_url: &str,
+    database_name: &str,
+) -> TestDatabase {
     let query = format!(r#"CREATE DATABASE "{}""#, database_name);
     sqlx::query(&query)
         .execute(admin_pool)
         .await
         .expect("temporary project route database should be created");
+    TestDatabase::new(admin_url, database_name)
 }
 
 async fn drop_database(admin_pool: &PgPool, database_name: &str) {
@@ -48,12 +57,9 @@ async fn drop_database(admin_pool: &PgPool, database_name: &str) {
     let _ = sqlx::query(&drop).execute(admin_pool).await;
 }
 
-async fn migrated_pool() -> (PgPool, PgPool, String, String) {
+async fn migrated_pool() -> (PgPool, PgPool, TestDatabase, String) {
     let base_url = database_url();
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after unix epoch")
-        .as_nanos();
+    let suffix = Uuid::new_v4().simple().to_string();
     let database_name = format!("video_agent_project_route_test_{}", suffix);
     let admin_url = with_database_name(&base_url, "postgres");
     let test_url = with_database_name(&base_url, &database_name);
@@ -63,7 +69,7 @@ async fn migrated_pool() -> (PgPool, PgPool, String, String) {
         .connect(&admin_url)
         .await
         .expect("admin database should be reachable");
-    create_database(&admin_pool, &database_name).await;
+    let database_name = create_database(&admin_pool, &admin_url, &database_name).await;
 
     let test_pool = PgPoolOptions::new()
         .max_connections(3)

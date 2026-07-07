@@ -85,10 +85,10 @@ fn project_response_maps_repository_project_to_api_shape() {
 }
 
 #[test]
-fn generate_script_request_rejects_invalid_topic_and_scene_count() {
+fn generate_script_request_rejects_too_long_topic_and_invalid_scene_count() {
     let payload = json!({
         "project_id": Uuid::new_v4(),
-        "topic": "太短",
+        "topic": "太".repeat(201),
         "scene_count": 13
     });
 
@@ -97,6 +97,21 @@ fn generate_script_request_rejects_invalid_topic_and_scene_count() {
 
     assert!(errors.field_errors().contains_key("topic"));
     assert!(errors.field_errors().contains_key("scene_count"));
+}
+
+#[test]
+fn generate_script_request_allows_empty_topic_for_topic_id_flow() {
+    let request: GenerateScriptRequest = serde_json::from_value(json!({
+        "project_id": Uuid::new_v4(),
+        "topic_id": Uuid::new_v4(),
+        "style": "knowledge",
+        "scene_count": 5
+    }))
+    .unwrap();
+
+    request.validate().unwrap();
+    assert!(request.topic.is_empty());
+    assert!(request.topic_id.is_some());
 }
 
 #[test]
@@ -136,6 +151,7 @@ fn script_response_maps_domain_script_to_api_shape() {
     let script = Script::new(
         script_id,
         project_id,
+        None,
         "程序员必看：ChatGPT工作流".to_string(),
         "还在手写重复代码？".to_string(),
         json!({"topic": "ChatGPT如何改变程序员工作流"}),
@@ -161,4 +177,49 @@ fn script_response_maps_domain_script_to_api_shape() {
     assert_eq!(json_value["status"], "draft");
     assert_eq!(json_value["scenes"][0]["scene_id"], scene_id.to_string());
     assert_eq!(json_value["scenes"][0]["sequence"], 1);
+}
+
+#[test]
+fn script_response_exposes_topic_snapshot_when_script_was_generated_from_topic() {
+    let now = Utc::now();
+    let script_id = Uuid::new_v4();
+    let project_id = Uuid::new_v4();
+    let topic_id = Uuid::new_v4();
+    let script = Script::new(
+        script_id,
+        project_id,
+        Some(topic_id),
+        "AI 工具如何重塑内容团队".to_string(),
+        "三个镜头看懂内容团队的 AI 工作流。".to_string(),
+        json!({
+            "topic": "AI 工具如何重塑内容团队",
+            "topic_id": topic_id,
+            "topic_snapshot": {
+                "topic_id": topic_id,
+                "title": "AI 工具如何重塑内容团队",
+                "content_type": "knowledge",
+                "score": 91,
+                "tags": ["AI工具", "内容运营"]
+            }
+        }),
+        ScriptStatus::Draft,
+        None,
+        vec![],
+        now,
+        now,
+    );
+
+    let response = ScriptResponse::from(script);
+    let json_value: Value = serde_json::to_value(response).unwrap();
+
+    assert_eq!(json_value["topic_id"], topic_id.to_string());
+    assert_eq!(
+        json_value["topic_snapshot"]["topic_id"],
+        topic_id.to_string()
+    );
+    assert_eq!(
+        json_value["topic_snapshot"]["title"],
+        "AI 工具如何重塑内容团队"
+    );
+    assert_eq!(json_value["topic_snapshot"]["content_type"], "knowledge");
 }

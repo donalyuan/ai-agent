@@ -1,5 +1,6 @@
 use novex_api::agents::llm::{ScriptLLMOutput, ScriptPromptBuilder, ScriptSceneLLMOutput};
 use novex_api::agents::models::{GenerateScriptRequest, ScriptStyle};
+use novex_model::LLMPrompt;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -8,6 +9,7 @@ fn script_prompt_builder_includes_topic_style_and_scene_count() {
     let request = GenerateScriptRequest {
         project_id: Uuid::new_v4(),
         topic: "ChatGPT如何改变程序员工作流".to_string(),
+        topic_id: None,
         style: Some(ScriptStyle::Tutorial),
         scene_count: Some(7),
         parent_id: None,
@@ -27,6 +29,7 @@ fn script_prompt_builder_marks_parent_requests_as_variants() {
     let request = GenerateScriptRequest {
         project_id: Uuid::new_v4(),
         topic: "ChatGPT如何改变程序员工作流".to_string(),
+        topic_id: None,
         style: Some(ScriptStyle::Knowledge),
         scene_count: Some(5),
         parent_id: Some(Uuid::new_v4()),
@@ -43,6 +46,7 @@ fn script_prompt_builder_can_create_small_metadata_and_scene_prompts() {
     let request = GenerateScriptRequest {
         project_id: Uuid::new_v4(),
         topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
+        topic_id: None,
         style: Some(ScriptStyle::Knowledge),
         scene_count: Some(6),
         parent_id: None,
@@ -58,6 +62,60 @@ fn script_prompt_builder_can_create_small_metadata_and_scene_prompts() {
     assert!(scene_prompt.user.contains("scene.sequence 必须等于 4"));
     assert!(scene_prompt.user.contains("只输出单个 scene 对象"));
     assert_eq!(scene_prompt.max_output_tokens, Some(1_200));
+}
+
+#[test]
+fn script_prompts_request_strict_structured_output() {
+    let request = GenerateScriptRequest {
+        project_id: Uuid::new_v4(),
+        topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
+        topic_id: None,
+        style: Some(ScriptStyle::Knowledge),
+        scene_count: Some(3),
+        parent_id: None,
+    };
+
+    let complete_prompt: LLMPrompt = ScriptPromptBuilder::build(&request).into();
+    let complete_schema = complete_prompt
+        .output_schema
+        .expect("complete script prompt should request strict JSON schema");
+    assert_eq!(complete_schema.name, "script");
+    assert!(complete_schema.strict);
+    assert_eq!(
+        complete_schema.schema["required"],
+        json!(["title", "hook", "scenes"])
+    );
+    assert_eq!(
+        complete_schema.schema["properties"]["scenes"]["minItems"],
+        3
+    );
+    assert_eq!(
+        complete_schema.schema["properties"]["scenes"]["maxItems"],
+        3
+    );
+
+    let metadata_prompt: LLMPrompt = ScriptPromptBuilder::build_metadata(&request).into();
+    let metadata_schema = metadata_prompt
+        .output_schema
+        .expect("metadata prompt should request strict JSON schema");
+    assert_eq!(metadata_schema.name, "script_metadata");
+    assert_eq!(metadata_schema.schema["required"], json!(["title", "hook"]));
+
+    let scene_prompt: LLMPrompt = ScriptPromptBuilder::build_single_scene(&request, 2).into();
+    let scene_schema = scene_prompt
+        .output_schema
+        .expect("single-scene prompt should request strict JSON schema");
+    assert_eq!(scene_schema.name, "script_scene");
+    assert_eq!(
+        scene_schema.schema["properties"]["scene"]["required"],
+        json!([
+            "sequence",
+            "narration",
+            "visual_description",
+            "emotion",
+            "duration_sec"
+        ])
+    );
 }
 
 #[test]
