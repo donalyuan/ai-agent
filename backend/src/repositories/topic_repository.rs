@@ -52,6 +52,7 @@ pub struct UpdateContentTopicInput {
 pub struct CreateTopicGenerationBatchInput {
     pub project_id: Uuid,
     pub source_run_id: Option<Uuid>,
+    pub supplement_of_batch_id: Option<Uuid>,
     pub prompt: String,
     pub requested_count: i32,
     pub status: TopicGenerationBatchStatus,
@@ -93,6 +94,12 @@ pub trait TopicRepository: Send + Sync {
         filter: ContentTopicFilter,
     ) -> Result<Vec<ContentTopic>, TopicRepositoryError>;
 
+    async fn list_topics_for_batch_group(
+        &self,
+        project_id: Uuid,
+        root_batch_id: Uuid,
+    ) -> Result<Vec<ContentTopic>, TopicRepositoryError>;
+
     async fn count_topics_by_status(
         &self,
         project_id: Uuid,
@@ -115,6 +122,12 @@ pub trait TopicRepository: Send + Sync {
     async fn get_generation_batch(
         &self,
         batch_id: Uuid,
+    ) -> Result<TopicGenerationBatch, TopicRepositoryError>;
+
+    async fn resolve_supplement_root_batch(
+        &self,
+        project_id: Uuid,
+        target_batch_id: Uuid,
     ) -> Result<TopicGenerationBatch, TopicRepositoryError>;
 
     async fn list_generation_batches(
@@ -292,6 +305,34 @@ impl TopicRepository for PostgresTopicRepository {
         rows.into_iter().map(topic_from_row).collect()
     }
 
+    async fn list_topics_for_batch_group(
+        &self,
+        project_id: Uuid,
+        root_batch_id: Uuid,
+    ) -> Result<Vec<ContentTopic>, TopicRepositoryError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT t.id, t.project_id, t.batch_id, t.title, t.angle, t.target_audience,
+                   t.hook_points, t.content_type, t.score, t.score_reason, t.tags,
+                   t.source, t.status, t.metadata, t.deleted_at, t.created_at, t.updated_at
+            FROM content_topics t
+            INNER JOIN topic_generation_batches b ON b.id = t.batch_id
+            WHERE t.project_id = $1
+              AND b.project_id = $1
+              AND t.deleted_at IS NULL
+              AND (b.id = $2 OR b.supplement_of_batch_id = $2)
+            ORDER BY t.created_at ASC, t.id ASC
+            "#,
+        )
+        .bind(project_id)
+        .bind(root_batch_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(TopicRepositoryError::from)?;
+
+        rows.into_iter().map(topic_from_row).collect()
+    }
+
     async fn count_topics_by_status(
         &self,
         project_id: Uuid,
@@ -374,15 +415,18 @@ impl TopicRepository for PostgresTopicRepository {
         let row = sqlx::query(
             r#"
             INSERT INTO topic_generation_batches (
-                project_id, source_run_id, prompt, requested_count, status, error_message, metadata
+                project_id, source_run_id, supplement_of_batch_id, prompt, requested_count,
+                status, error_message, metadata
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING id, project_id, source_run_id, prompt, requested_count, status,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id, project_id, source_run_id, supplement_of_batch_id,
+                      prompt, requested_count, status,
                       error_message, metadata, created_at, updated_at
             "#,
         )
         .bind(input.project_id)
         .bind(input.source_run_id)
+        .bind(input.supplement_of_batch_id)
         .bind(input.prompt)
         .bind(input.requested_count)
         .bind(input.status.as_str())
@@ -408,7 +452,8 @@ impl TopicRepository for PostgresTopicRepository {
                 metadata = $4,
                 updated_at = NOW()
             WHERE id = $1
-            RETURNING id, project_id, source_run_id, prompt, requested_count, status,
+            RETURNING id, project_id, source_run_id, supplement_of_batch_id,
+                      prompt, requested_count, status,
                       error_message, metadata, created_at, updated_at
             "#,
         )
@@ -430,7 +475,8 @@ impl TopicRepository for PostgresTopicRepository {
     ) -> Result<TopicGenerationBatch, TopicRepositoryError> {
         let row = sqlx::query(
             r#"
-            SELECT id, project_id, source_run_id, prompt, requested_count, status,
+            SELECT id, project_id, source_run_id, supplement_of_batch_id,
+                   prompt, requested_count, status,
                    error_message, metadata, created_at, updated_at
             FROM topic_generation_batches
             WHERE id = $1
@@ -445,6 +491,48 @@ impl TopicRepository for PostgresTopicRepository {
         batch_from_row(row)
     }
 
+    async fn resolve_supplement_root_batch(
+        &self,
+        project_id: Uuid,
+        target_batch_id: Uuid,
+    ) -> Result<TopicGenerationBatch, TopicRepositoryError> {
+        let target = self
+            .get_generation_batch_for_project(project_id, target_batch_id)
+            .await?;
+        if target.status != TopicGenerationBatchStatus::Succeeded {
+            return Err(TopicRepositoryError::BatchCannotBeSupplemented(
+                target_batch_id,
+            ));
+        }
+
+        let visible_topic_count = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)
+            FROM content_topics
+            WHERE project_id = $1
+              AND batch_id = $2
+              AND deleted_at IS NULL
+            "#,
+        )
+        .bind(project_id)
+        .bind(target_batch_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(TopicRepositoryError::from)?;
+        if visible_topic_count == 0 {
+            return Err(TopicRepositoryError::BatchCannotBeSupplemented(
+                target_batch_id,
+            ));
+        }
+
+        let root_batch_id = target.supplement_of_batch_id.unwrap_or(target.id);
+        if root_batch_id == target.id {
+            return Ok(target);
+        }
+        self.get_generation_batch_for_project(project_id, root_batch_id)
+            .await
+    }
+
     async fn list_generation_batches(
         &self,
         project_id: Uuid,
@@ -456,6 +544,7 @@ impl TopicRepository for PostgresTopicRepository {
                 b.id,
                 b.project_id,
                 b.source_run_id,
+                b.supplement_of_batch_id,
                 b.prompt,
                 b.requested_count,
                 b.status,
@@ -485,10 +574,38 @@ impl TopicRepository for PostgresTopicRepository {
     }
 }
 
+impl PostgresTopicRepository {
+    async fn get_generation_batch_for_project(
+        &self,
+        project_id: Uuid,
+        batch_id: Uuid,
+    ) -> Result<TopicGenerationBatch, TopicRepositoryError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, project_id, source_run_id, supplement_of_batch_id,
+                   prompt, requested_count, status,
+                   error_message, metadata, created_at, updated_at
+            FROM topic_generation_batches
+            WHERE id = $1
+              AND project_id = $2
+            "#,
+        )
+        .bind(batch_id)
+        .bind(project_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(TopicRepositoryError::from)?
+        .ok_or(TopicRepositoryError::BatchNotFound(batch_id))?;
+
+        batch_from_row(row)
+    }
+}
+
 #[derive(Debug)]
 pub enum TopicRepositoryError {
     TopicNotFound(Uuid),
     BatchNotFound(Uuid),
+    BatchCannotBeSupplemented(Uuid),
     TopicCannotBeDeleted(Uuid),
     InvalidStatusTransition {
         topic_id: Uuid,
@@ -512,6 +629,12 @@ impl fmt::Display for TopicRepositoryError {
             }
             Self::BatchNotFound(batch_id) => {
                 write!(formatter, "topic generation batch not found: {batch_id}")
+            }
+            Self::BatchCannotBeSupplemented(batch_id) => {
+                write!(
+                    formatter,
+                    "topic generation batch cannot be supplemented: {batch_id}"
+                )
             }
             Self::TopicCannotBeDeleted(topic_id) => {
                 write!(formatter, "content topic cannot be deleted: {topic_id}")
@@ -567,6 +690,7 @@ fn batch_from_row(row: PgRow) -> Result<TopicGenerationBatch, TopicRepositoryErr
         id: row.get("id"),
         project_id: row.get("project_id"),
         source_run_id: row.get("source_run_id"),
+        supplement_of_batch_id: row.get("supplement_of_batch_id"),
         prompt: row.get("prompt"),
         requested_count: row.get("requested_count"),
         status,

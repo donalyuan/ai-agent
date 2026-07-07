@@ -2,6 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const scriptId = "22222222-2222-4222-8222-222222222222";
+const previousTopicBatchId = "77777777-7777-4777-8777-777777777777";
+const supplementTopicBatchId = "99999999-9999-4999-8999-999999999901";
 
 const project = {
   project_id: projectId,
@@ -108,6 +110,7 @@ const refreshedScriptDetail = {
 
 const conversationId = "55555555-5555-4555-8555-555555555555";
 const unboundConversationId = "99999999-9999-4999-8999-999999999999";
+const topicConversationId = "12121212-1212-4212-8212-121212121212";
 
 const conversation = {
   conversation_id: conversationId,
@@ -201,6 +204,57 @@ const generatedAgentRun = {
   error_message: null,
   started_at: "2026-07-02T00:12:00Z",
   ended_at: "2026-07-02T00:12:05Z",
+};
+
+const topicConversation = {
+  conversation_id: topicConversationId,
+  project_id: projectId,
+  agent_type: "topic",
+  subject_type: null,
+  subject_id: null,
+  title: "选题 Agent 对话",
+  status: "active",
+  metadata: {},
+  created_at: "2026-07-06T10:05:00Z",
+  updated_at: "2026-07-06T10:05:00Z",
+};
+
+const supplementUserMessage = {
+  message_id: "13131313-1313-4313-8313-131313131313",
+  conversation_id: topicConversationId,
+  role: "user",
+  content: "补充遗漏的 AI 工作流复盘角度",
+  metadata: {},
+  created_at: "2026-07-06T10:05:00Z",
+};
+
+const supplementAssistantMessage = {
+  message_id: "14141414-1414-4414-8414-141414141414",
+  conversation_id: topicConversationId,
+  role: "assistant",
+  content: "已生成 2 个候选选题。",
+  metadata: {
+    intent: "generate_topics",
+    batch_id: supplementTopicBatchId,
+    supplement_of_batch_id: previousTopicBatchId,
+    created_topic_ids: ["15151515-1515-4515-8515-151515151515"],
+    topic_count: 2,
+    status: "idea",
+  },
+  created_at: "2026-07-06T10:05:05Z",
+};
+
+const supplementAgentRun = {
+  run_id: "16161616-1616-4616-8616-161616161616",
+  conversation_id: topicConversationId,
+  project_id: projectId,
+  agent_type: "topic",
+  status: "succeeded",
+  input: { content: supplementUserMessage.content },
+  output: { batch_id: supplementTopicBatchId },
+  error_message: null,
+  started_at: "2026-07-06T10:05:00Z",
+  ended_at: "2026-07-06T10:05:05Z",
 };
 
 const workspaceMenus = [
@@ -324,6 +378,7 @@ const scriptedTopic = {
 const latestTopicBatch = {
   batch_id: "88888888-8888-4888-8888-888888888888",
   project_id: projectId,
+  supplement_of_batch_id: null,
   prompt: "最新一批 AI 工具选题",
   requested_count: 5,
   topic_count: 5,
@@ -334,8 +389,9 @@ const latestTopicBatch = {
 };
 
 const previousTopicBatch = {
-  batch_id: "77777777-7777-4777-8777-777777777777",
+  batch_id: previousTopicBatchId,
   project_id: projectId,
+  supplement_of_batch_id: null,
   prompt: "上一批 AI 内容流水线选题",
   requested_count: 5,
   topic_count: 5,
@@ -348,6 +404,7 @@ const previousTopicBatch = {
 const failedTopicBatch = {
   batch_id: "66666666-6666-4666-8666-666666666666",
   project_id: projectId,
+  supplement_of_batch_id: null,
   prompt: "失败的 AI 选题生成",
   requested_count: 5,
   topic_count: 0,
@@ -355,6 +412,19 @@ const failedTopicBatch = {
   error_message: "invalid topic JSON",
   created_at: "2026-07-02T00:20:00Z",
   updated_at: "2026-07-02T00:20:20Z",
+};
+
+const supplementTopicBatch = {
+  batch_id: supplementTopicBatchId,
+  project_id: projectId,
+  supplement_of_batch_id: previousTopicBatchId,
+  prompt: "补充上一批 AI 内容流水线选题",
+  requested_count: 2,
+  topic_count: 2,
+  status: "succeeded",
+  error_message: null,
+  created_at: "2026-07-06T10:05:00Z",
+  updated_at: "2026-07-06T10:05:20Z",
 };
 
 const overflowTopics = Array.from({ length: 12 }, (_, index) => ({
@@ -590,6 +660,8 @@ async function mockContentStrategyWorkflow(page: Page) {
 }
 
 async function mockContentStrategyHistoryWorkflow(page: Page) {
+  let supplementGenerated = false;
+
   await page.unroute(/\/api\/video-workspace\/menus$/);
   await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
     await route.fulfill({ contentType: "application/json", json: { menus: contentStrategyWorkspaceMenus } });
@@ -597,17 +669,38 @@ async function mockContentStrategyHistoryWorkflow(page: Page) {
   await page.route(new RegExp(`/api/projects/${projectId}/topic-generation-batches$`), async (route) => {
     await route.fulfill({
       contentType: "application/json",
-      json: { batches: [latestTopicBatch, failedTopicBatch, previousTopicBatch] },
+      json: {
+        batches: supplementGenerated
+          ? [supplementTopicBatch, latestTopicBatch, failedTopicBatch, previousTopicBatch]
+          : [latestTopicBatch, failedTopicBatch, previousTopicBatch],
+      },
     });
   });
   await page.route(new RegExp(`/api/projects/${projectId}/topics(\\?.*)?$`), async (route) => {
     const url = new URL(route.request().url());
     const batchId = url.searchParams.get("batch_id");
+    if (batchId === supplementTopicBatch.batch_id) {
+      await route.fulfill({
+        contentType: "application/json",
+        json: {
+          topics: [
+            {
+              ...ideaTopic,
+              batch_id: supplementTopicBatch.batch_id,
+              title: "补充批次选题",
+              source: "agent",
+            },
+          ],
+          stats: { total: 4, idea: 2, approved: 1, scripted: 1, archived: 0 },
+        },
+      });
+      return;
+    }
     if (batchId === previousTopicBatch.batch_id) {
       await route.fulfill({
         contentType: "application/json",
         json: {
-          topics: [{ ...ideaTopic, batch_id: previousTopicBatch.batch_id, title: "历史批次选题" }],
+          topics: [{ ...approvedTopic, batch_id: previousTopicBatch.batch_id, title: "历史批次选题" }],
           stats: { total: 3, idea: 1, approved: 1, scripted: 1, archived: 0 },
         },
       });
@@ -628,6 +721,36 @@ async function mockContentStrategyHistoryWorkflow(page: Page) {
     await route.fulfill({
       contentType: "application/json",
       json: { scripts: [], total: 0, limit: 20, offset: 0 },
+    });
+  });
+  await page.route(/\/api\/agent\/conversations$/, async (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({
+      project_id: projectId,
+      agent_type: "topic",
+      title: "选题 Agent 对话",
+    });
+    await route.fulfill({ contentType: "application/json", json: topicConversation });
+  });
+  await page.route(new RegExp(`/api/agent/conversations/${topicConversationId}/messages$`), async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ contentType: "application/json", json: { messages: [] } });
+      return;
+    }
+
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({
+      content: supplementUserMessage.content,
+      supplement_of_batch_id: previousTopicBatch.batch_id,
+    });
+    supplementGenerated = true;
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        user_message: supplementUserMessage,
+        assistant_message: supplementAssistantMessage,
+        run: supplementAgentRun,
+      },
     });
   });
 }
@@ -829,6 +952,13 @@ test("内容策略历史生成列表页展示批次并限制已成稿选题删�
 
   const historyPage = page.getByRole("region", { name: "历史生成列表页" });
   await expect(historyPage).toBeVisible();
+  await expect(historyPage.getByRole("complementary", { name: "历史生成批次" })).toBeVisible();
+  await expect(historyPage.getByRole("region", { name: "当前主题选题" })).toBeVisible();
+  await expect(historyPage.getByRole("complementary", { name: "补充操作" })).toBeVisible();
+  const historyColumns = await historyPage.evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean).length,
+  );
+  expect(historyColumns).toBe(3);
   await expect(contentStrategySubMenu.getByRole("button", { name: "历史生成" })).toHaveClass(/active/);
   await expect(historyPage.getByRole("button", { name: /最新一批 AI 工具选题/ })).toHaveClass(/selected/);
   await expect(historyPage.getByRole("button", { name: /上一批 AI 内容流水线选题/ })).toBeVisible();
@@ -842,9 +972,20 @@ test("内容策略历史生成列表页展示批次并限制已成稿选题删�
 
   await historyPage.getByRole("button", { name: /上一批 AI 内容流水线选题/ }).click();
   await expect(historyPage.getByRole("article", { name: "历史选题：历史批次选题" })).toBeVisible();
+  const supplementPanel = page.getByRole("region", { name: "补充选题" });
+  await supplementPanel.getByLabel("补充要求").fill(supplementUserMessage.content);
+  await supplementPanel.getByRole("button", { name: "补充生成" }).click();
+  await expect(historyPage.getByRole("button", { name: /补充上一批 AI 内容流水线选题/ }).first()).toHaveClass(/selected/);
+  const topicGroupPanel = historyPage.getByRole("region", { name: "当前主题选题" });
+  await expect(topicGroupPanel.getByRole("article", { name: "历史选题：历史批次选题" })).toBeVisible();
+  await expect(topicGroupPanel.getByRole("article", { name: "历史选题：补充批次选题" })).toBeVisible();
+  await expect(topicGroupPanel.getByText("原始生成", { exact: true })).toBeVisible();
+  await expect(topicGroupPanel.getByText("补充生成", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "关联补充批次" })).toBeVisible();
+
   await contentStrategySubMenu.getByRole("button", { name: "当前选题池" }).click();
   const topicPool = page.getByRole("region", { name: "选题池" });
-  await expect(topicPool.getByRole("button", { name: /历史批次选题/ })).toBeVisible();
+  await expect(topicPool.getByRole("button", { name: /补充批次选题/ })).toBeVisible();
   await expect(topicPool.getByRole("button", { name: /最新批次选题/ })).toHaveCount(0);
 });
 

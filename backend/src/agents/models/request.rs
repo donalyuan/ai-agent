@@ -243,6 +243,7 @@ pub struct ContentTopicListResponse {
 pub struct TopicGenerationBatchSummaryResponse {
     pub batch_id: Uuid,
     pub project_id: Uuid,
+    pub supplement_of_batch_id: Option<Uuid>,
     pub prompt: String,
     pub requested_count: i32,
     pub topic_count: i64,
@@ -257,6 +258,7 @@ impl From<TopicGenerationBatchSummary> for TopicGenerationBatchSummaryResponse {
         Self {
             batch_id: summary.batch.id,
             project_id: summary.batch.project_id,
+            supplement_of_batch_id: summary.batch.supplement_of_batch_id,
             prompt: summary.batch.prompt,
             requested_count: summary.batch.requested_count,
             topic_count: summary.topic_count,
@@ -415,6 +417,8 @@ impl CreateAgentConversationRequest {
 pub struct SendAgentMessageRequest {
     #[validate(length(min = 1, max = 4000))]
     pub content: String,
+    #[serde(default)]
+    pub supplement_of_batch_id: Option<Uuid>,
 }
 
 impl SendAgentMessageRequest {

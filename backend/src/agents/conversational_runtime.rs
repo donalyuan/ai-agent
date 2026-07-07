@@ -4,8 +4,8 @@ use crate::agents::conversation::{
     CreateAgentStepInput, FinishAgentRunInput,
 };
 use crate::agents::models::{
-    ContentTopicSource, ContentTopicStatus, GenerateScriptRequest, Scene, Script, ScriptStyle,
-    TopicGenerationBatchStatus,
+    ContentTopic, ContentTopicSource, ContentTopicStatus, GenerateScriptRequest, Scene, Script,
+    ScriptStyle, TopicGenerationBatch, TopicGenerationBatchStatus,
 };
 use crate::agents::{ScriptAgentError, ScriptAgentService};
 use crate::repositories::{
@@ -87,8 +87,13 @@ impl AgentRuntime {
                     .await
             }
             "topic" => {
-                self.handle_topic_turn(&conversation, &user_message, &run)
-                    .await
+                self.handle_topic_turn(
+                    &conversation,
+                    &user_message,
+                    &run,
+                    request.supplement_of_batch_id,
+                )
+                .await
             }
             agent_type => Err(AgentRuntimeError::UnsupportedAgent(agent_type.to_string())),
         };
@@ -343,6 +348,7 @@ impl AgentRuntime {
         conversation: &AgentConversation,
         user_message: &AgentMessage,
         run: &AgentRunRecord,
+        supplement_target_batch_id: Option<Uuid>,
     ) -> Result<AgentMessage, AgentRuntimeError> {
         let project_id = conversation
             .project_id
@@ -369,15 +375,44 @@ impl AgentRuntime {
             .await?;
 
         let requested_count = requested_topic_count(&user_message.content);
+        let supplement_context = match supplement_target_batch_id {
+            Some(target_batch_id) => {
+                let root_batch = topic_repository
+                    .resolve_supplement_root_batch(project_id, target_batch_id)
+                    .await?;
+                let existing_topics = topic_repository
+                    .list_topics_for_batch_group(project_id, root_batch.id)
+                    .await?;
+                let history_messages = previous_conversation_messages(
+                    self.conversation_repository
+                        .list_messages(conversation.id)
+                        .await?,
+                    user_message.id,
+                );
+                Some(TopicSupplementPromptContext {
+                    root_batch,
+                    existing_topics,
+                    history_messages,
+                })
+            }
+            None => None,
+        };
+        let supplement_of_batch_id = supplement_context
+            .as_ref()
+            .map(|context| context.root_batch.id);
         let batch = topic_repository
             .create_generation_batch(CreateTopicGenerationBatchInput {
                 project_id,
                 source_run_id: Some(run.id),
+                supplement_of_batch_id,
                 prompt: user_message.content.clone(),
                 requested_count,
                 status: TopicGenerationBatchStatus::Running,
                 error_message: None,
-                metadata: json!({ "conversation_id": conversation.id }),
+                metadata: json!({
+                    "conversation_id": conversation.id,
+                    "supplement_of_batch_id": supplement_of_batch_id
+                }),
             })
             .await?;
 
@@ -388,6 +423,7 @@ impl AgentRuntime {
                 &project.description,
                 requested_count,
                 &user_message.content,
+                supplement_context.as_ref(),
             ))
             .await;
 
@@ -460,6 +496,7 @@ impl AgentRuntime {
                     error_message: None,
                     metadata: json!({
                         "conversation_id": conversation.id,
+                        "supplement_of_batch_id": supplement_of_batch_id,
                         "created_topic_ids": created_topic_ids,
                         "topic_count": created_topic_ids.len()
                     }),
@@ -476,6 +513,7 @@ impl AgentRuntime {
                 input: json!({ "batch_id": batch.id }),
                 output: Some(json!({
                     "batch_id": batch.id,
+                    "supplement_of_batch_id": supplement_of_batch_id,
                     "created_topic_ids": created_topic_ids,
                     "topic_count": created_topic_ids.len()
                 })),
@@ -492,6 +530,7 @@ impl AgentRuntime {
                 metadata: json!({
                     "intent": "generate_topics",
                     "batch_id": batch.id,
+                    "supplement_of_batch_id": supplement_of_batch_id,
                     "created_topic_ids": created_topic_ids,
                     "topic_count": topic_count,
                     "status": ContentTopicStatus::Idea
@@ -545,6 +584,7 @@ impl AgentRuntime {
 pub struct AgentTurnRequest {
     pub conversation_id: Uuid,
     pub user_message: String,
+    pub supplement_of_batch_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -910,12 +950,41 @@ impl fmt::Display for TopicOutputError {
 
 impl std::error::Error for TopicOutputError {}
 
+// 补充生成使用的主题上下文；批次关系只负责归属，这里负责影响 LLM 生成语义。
+#[derive(Clone, Debug)]
+struct TopicSupplementPromptContext {
+    root_batch: TopicGenerationBatch,
+    existing_topics: Vec<ContentTopic>,
+    history_messages: Vec<AgentMessage>,
+}
+
+fn previous_conversation_messages(
+    messages: Vec<AgentMessage>,
+    current_user_message_id: Uuid,
+) -> Vec<AgentMessage> {
+    let mut previous_messages = messages
+        .into_iter()
+        .filter(|message| message.id != current_user_message_id)
+        .filter(|message| !message.content.trim().is_empty())
+        .collect::<Vec<_>>();
+    const MAX_HISTORY_MESSAGES: usize = 6;
+    if previous_messages.len() > MAX_HISTORY_MESSAGES {
+        previous_messages =
+            previous_messages.split_off(previous_messages.len() - MAX_HISTORY_MESSAGES);
+    }
+    previous_messages
+}
+
 fn build_topic_generation_prompt(
     project_positioning: &str,
     project_description: &str,
     requested_count: i32,
     user_message: &str,
+    supplement_context: Option<&TopicSupplementPromptContext>,
 ) -> LLMPrompt {
+    let supplement_context_text = supplement_context
+        .map(format_topic_supplement_context)
+        .unwrap_or_default();
     LLMPrompt {
         system: "你是短视频内容策略选题 Agent。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。"
             .to_string(),
@@ -925,6 +994,7 @@ fn build_topic_generation_prompt(
 项目定位：{project_positioning}
 项目描述：{project_description}
 用户补充要求：{user_message}
+{supplement_context_text}
 
 输出要求：
 1. 必须只输出一个 JSON 对象。
@@ -952,11 +1022,105 @@ JSON Schema：
             requested_count = requested_count,
             project_positioning = project_positioning,
             project_description = project_description,
-            user_message = user_message
+            user_message = user_message,
+            supplement_context_text = supplement_context_text
         ),
         max_output_tokens: Some(2_000),
         output_schema: Some(topic_generation_output_schema()),
     }
+}
+
+fn format_topic_supplement_context(context: &TopicSupplementPromptContext) -> String {
+    format!(
+        r#"
+主题上下文：
+原始生成要求：{original_prompt}
+已有选题：
+{existing_topics}
+历史对话摘要：
+{history_messages}
+
+补充生成要求：
+1. 必须基于同一主题继续扩展，不要转向无关主题。
+2. 必须避免重复已有选题的标题、角度和核心看点。
+3. 可以补充遗漏人群、场景、反例、复盘、工具链或执行细节，但必须延续原始生成要求。
+"#,
+        original_prompt = truncate_for_prompt(&context.root_batch.prompt, 500),
+        existing_topics = format_existing_topic_context(context),
+        history_messages = format_conversation_history(&context.history_messages)
+    )
+}
+
+fn format_existing_topic_context(context: &TopicSupplementPromptContext) -> String {
+    if context.existing_topics.is_empty() {
+        return "- 无".to_string();
+    }
+
+    const MAX_EXISTING_TOPICS: usize = 20;
+    context
+        .existing_topics
+        .iter()
+        .take(MAX_EXISTING_TOPICS)
+        .enumerate()
+        .map(|(index, topic)| {
+            let source = if topic.batch_id == Some(context.root_batch.id) {
+                "原始生成"
+            } else {
+                "补充生成"
+            };
+            let tags = if topic.tags.is_empty() {
+                "无".to_string()
+            } else {
+                topic.tags.join("、")
+            };
+            format!(
+                "{}. [{}] 标题：{}；角度：{}；标签：{}",
+                index + 1,
+                source,
+                truncate_for_prompt(&topic.title, 120),
+                truncate_for_prompt(&topic.angle, 180),
+                truncate_for_prompt(&tags, 160)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_conversation_history(messages: &[AgentMessage]) -> String {
+    if messages.is_empty() {
+        return "- 无".to_string();
+    }
+
+    messages
+        .iter()
+        .enumerate()
+        .map(|(index, message)| {
+            format!(
+                "{}. {}：{}",
+                index + 1,
+                agent_message_role_label(&message.role),
+                truncate_for_prompt(&message.content, 240)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn agent_message_role_label(role: &AgentMessageRole) -> &'static str {
+    match role {
+        AgentMessageRole::System => "system",
+        AgentMessageRole::User => "user",
+        AgentMessageRole::Assistant => "assistant",
+        AgentMessageRole::Tool => "tool",
+    }
+}
+
+fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    format!("{}...", trimmed.chars().take(max_chars).collect::<String>())
 }
 
 fn topic_generation_output_schema() -> LLMJsonSchema {

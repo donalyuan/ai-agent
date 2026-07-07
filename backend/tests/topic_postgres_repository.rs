@@ -145,6 +145,7 @@ async fn postgres_topic_repository_persists_topics_batches_and_filters() {
         .create_generation_batch(CreateTopicGenerationBatchInput {
             project_id,
             source_run_id: None,
+            supplement_of_batch_id: None,
             prompt: "生成 AI 工具方向选题".to_string(),
             requested_count: 2,
             status: TopicGenerationBatchStatus::Running,
@@ -260,6 +261,7 @@ async fn postgres_topic_repository_soft_deletes_only_unreferenced_visible_topics
         .create_generation_batch(CreateTopicGenerationBatchInput {
             project_id,
             source_run_id: None,
+            supplement_of_batch_id: None,
             prompt: "生成 AI 工具方向选题".to_string(),
             requested_count: 2,
             status: TopicGenerationBatchStatus::Succeeded,
@@ -317,6 +319,221 @@ async fn postgres_topic_repository_soft_deletes_only_unreferenced_visible_topics
         error,
         novex_api::repositories::TopicRepositoryError::TopicCannotBeDeleted(topic_id)
             if topic_id == referenced.id
+    ));
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn postgres_topic_repository_tracks_supplement_batches_independently() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let repository = PostgresTopicRepository::new(test_pool.clone());
+
+    let original_batch = repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            prompt: "原始生成 AI 工具方向选题".to_string(),
+            requested_count: 2,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+            supplement_of_batch_id: None,
+        })
+        .await
+        .unwrap();
+    let original_topic = repository
+        .create_topic(CreateContentTopicInput {
+            batch_id: Some(original_batch.id),
+            source: ContentTopicSource::Agent,
+            title: "原始批次选题 1".to_string(),
+            ..manual_topic(project_id)
+        })
+        .await
+        .unwrap();
+    repository
+        .create_topic(CreateContentTopicInput {
+            batch_id: Some(original_batch.id),
+            source: ContentTopicSource::Agent,
+            title: "原始批次选题 2".to_string(),
+            ..manual_topic(project_id)
+        })
+        .await
+        .unwrap();
+
+    let supplement_batch = repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            prompt: "补充生成 AI 工具方向选题".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+            supplement_of_batch_id: Some(original_batch.id),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        supplement_batch.supplement_of_batch_id,
+        Some(original_batch.id)
+    );
+    let supplement_topic = repository
+        .create_topic(CreateContentTopicInput {
+            batch_id: Some(supplement_batch.id),
+            source: ContentTopicSource::Agent,
+            title: "补充批次选题".to_string(),
+            ..manual_topic(project_id)
+        })
+        .await
+        .unwrap();
+    assert_eq!(supplement_topic.batch_id, Some(supplement_batch.id));
+
+    repository
+        .soft_delete_topic(original_topic.id)
+        .await
+        .unwrap();
+
+    let batches = repository
+        .list_generation_batches(project_id, 20)
+        .await
+        .unwrap();
+    let original_summary = batches
+        .iter()
+        .find(|summary| summary.batch.id == original_batch.id)
+        .expect("original batch should remain visible with one topic");
+    let supplement_summary = batches
+        .iter()
+        .find(|summary| summary.batch.id == supplement_batch.id)
+        .expect("supplement batch should be listed separately");
+
+    assert_eq!(original_summary.topic_count, 1);
+    assert_eq!(original_summary.batch.supplement_of_batch_id, None);
+    assert_eq!(supplement_summary.topic_count, 1);
+    assert_eq!(
+        supplement_summary.batch.supplement_of_batch_id,
+        Some(original_batch.id)
+    );
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn postgres_topic_repository_resolves_supplement_root_and_rejects_unusable_targets() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let other_project_id = insert_project(&test_pool).await;
+    let repository = PostgresTopicRepository::new(test_pool.clone());
+
+    let original_batch = repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            prompt: "原始生成 AI 工具方向选题".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+            supplement_of_batch_id: None,
+        })
+        .await
+        .unwrap();
+    repository
+        .create_topic(CreateContentTopicInput {
+            batch_id: Some(original_batch.id),
+            source: ContentTopicSource::Agent,
+            ..manual_topic(project_id)
+        })
+        .await
+        .unwrap();
+
+    let supplement_batch = repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            prompt: "补充生成 AI 工具方向选题".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+            supplement_of_batch_id: Some(original_batch.id),
+        })
+        .await
+        .unwrap();
+    repository
+        .create_topic(CreateContentTopicInput {
+            batch_id: Some(supplement_batch.id),
+            source: ContentTopicSource::Agent,
+            ..manual_topic(project_id)
+        })
+        .await
+        .unwrap();
+
+    let resolved = repository
+        .resolve_supplement_root_batch(project_id, supplement_batch.id)
+        .await
+        .unwrap();
+    assert_eq!(resolved.id, original_batch.id);
+
+    let cross_project = repository
+        .resolve_supplement_root_batch(other_project_id, original_batch.id)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        cross_project,
+        novex_api::repositories::TopicRepositoryError::BatchNotFound(batch_id)
+            if batch_id == original_batch.id
+    ));
+
+    let failed_batch = repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            prompt: "失败批次".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Failed,
+            error_message: Some("LLM 输出非法".to_string()),
+            metadata: json!({}),
+            supplement_of_batch_id: None,
+        })
+        .await
+        .unwrap();
+    let failed_error = repository
+        .resolve_supplement_root_batch(project_id, failed_batch.id)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        failed_error,
+        novex_api::repositories::TopicRepositoryError::BatchCannotBeSupplemented(batch_id)
+            if batch_id == failed_batch.id
+    ));
+
+    let empty_batch = repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            prompt: "空批次".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+            supplement_of_batch_id: None,
+        })
+        .await
+        .unwrap();
+    let empty_error = repository
+        .resolve_supplement_root_batch(project_id, empty_batch.id)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        empty_error,
+        novex_api::repositories::TopicRepositoryError::BatchCannotBeSupplemented(batch_id)
+            if batch_id == empty_batch.id
     ));
 
     test_pool.close().await;

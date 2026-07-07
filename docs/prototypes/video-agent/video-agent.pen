@@ -6946,7 +6946,7 @@
               "type": "frame",
               "id": "NKpxr",
               "x": 14,
-              "y": 146,
+              "y": 244,
               "name": "脚本创作一级菜单",
               "width": 244,
               "height": 58,
@@ -6988,13 +6988,73 @@
               "type": "text",
               "id": "uCAFK",
               "x": 28,
-              "y": 230,
+              "y": 320,
               "name": "后续菜单占位",
               "fill": "#5D6878",
               "content": "素材管理\n作品生产\n发布运营\n数据分析\n工作流任务",
               "fontFamily": "Inter",
               "fontSize": 13,
               "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "XM6lV",
+              "x": 36,
+              "y": 146,
+              "name": "历史生成二级模块",
+              "width": 214,
+              "height": 36,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "o5qf3",
+                  "x": 14,
+                  "y": 10,
+                  "name": "历史生成二级文字",
+                  "fill": "#172033",
+                  "content": "历史生成",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "k5sHn2",
+              "x": 36,
+              "y": 190,
+              "name": "当前选题池二级模块 激活",
+              "width": 214,
+              "height": 36,
+              "fill": "#E8F6EE",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#9FD3B4"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "pOa3Z",
+                  "x": 14,
+                  "y": 10,
+                  "name": "当前选题池二级文字",
+                  "fill": "#17633A",
+                  "content": "当前选题池",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                }
+              ]
             }
           ]
         },
@@ -7124,6 +7184,37 @@
                   "name": "人工新增选题文字",
                   "fill": "#FFFFFF",
                   "content": "新增选题",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "RDYKO",
+              "x": 790,
+              "y": 26,
+              "name": "查看历史生成入口",
+              "width": 144,
+              "height": 36,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8C2D1"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Gky7v",
+                  "x": 18,
+                  "y": 10,
+                  "name": "查看历史生成文字",
+                  "fill": "#172033",
+                  "content": "查看历史生成",
                   "textAlign": "center",
                   "fontFamily": "Inter",
                   "fontSize": 13,
@@ -7302,6 +7393,37 @@
                   "fontFamily": "Inter",
                   "fontSize": 11,
                   "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "W1Ulf2",
+              "x": 920,
+              "y": 34,
+              "name": "历史生成提示",
+              "width": 160,
+              "height": 42,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "o2OYOO",
+                  "x": 12,
+                  "y": 8,
+                  "name": "历史生成提示文案",
+                  "fill": "#5D6878",
+                  "content": "历史批次独立管理\n主视图保留当前池",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "700"
                 }
               ]
             }
@@ -8079,6 +8201,3178 @@
                   "textAlign": "center",
                   "fontFamily": "Inter",
                   "fontSize": 13,
+                  "fontWeight": "800"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Z3LO77",
+      "x": 3040,
+      "y": 0,
+      "name": "桌面 - 内容策略历史生成列表 v1 待确认",
+      "clip": true,
+      "width": 1440,
+      "height": 980,
+      "fill": "#F4F7FB",
+      "layout": "none",
+      "children": [
+        {
+          "type": "frame",
+          "id": "P6roEN",
+          "x": 0,
+          "y": 0,
+          "name": "顶部工作台栏",
+          "width": 1440,
+          "height": 72,
+          "fill": "#FFFFFF",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "frame",
+              "id": "A6dZol",
+              "x": 24,
+              "y": 18,
+              "name": "品牌标识",
+              "width": 38,
+              "height": 38,
+              "fill": "#2860E8",
+              "cornerRadius": 8,
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "d3EhD",
+                  "x": 8,
+                  "y": 9,
+                  "name": "品牌字母",
+                  "fill": "#FFFFFF",
+                  "content": "VD",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "atOq5",
+              "x": 74,
+              "y": 16,
+              "name": "产品名",
+              "fill": "#172033",
+              "content": "VEDIO-AGENT",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "OICI6",
+              "x": 74,
+              "y": 42,
+              "name": "工作台名",
+              "fill": "#5D6878",
+              "content": "视频工作台",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "ZWmNQ",
+              "x": 1190,
+              "y": 24,
+              "name": "接口状态",
+              "width": 88,
+              "height": 26,
+              "fill": "#E8F6EE",
+              "cornerRadius": 999,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#9FD3B4"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Jkn5P",
+                  "x": 14,
+                  "y": 6,
+                  "name": "接口状态文案",
+                  "fill": "#17633A",
+                  "content": "API 正常",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "XNv70",
+              "x": 1300,
+              "y": 18,
+              "name": "项目选择",
+              "width": 116,
+              "height": 36,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "rUIHf",
+                  "x": 14,
+                  "y": 10,
+                  "name": "项目名",
+                  "fill": "#172033",
+                  "content": "科技博主",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "KvinT",
+          "x": 0,
+          "y": 72,
+          "name": "左侧业务流程导航",
+          "width": 272,
+          "height": 908,
+          "fill": "#FFFFFF",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "wZA0z",
+              "x": 18,
+              "y": 18,
+              "name": "菜单标题",
+              "fill": "#172033",
+              "content": "业务流程菜单",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "MtvAZ",
+              "x": 18,
+              "y": 43,
+              "name": "菜单副标题",
+              "fill": "#5D6878",
+              "content": "一级业务菜单 + 二级页面",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "oowKE",
+              "x": 14,
+              "y": 78,
+              "name": "内容策略一级菜单 激活",
+              "width": 244,
+              "height": 58,
+              "fill": "#EAF1FF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8CDFD"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "P0caI",
+                  "x": 14,
+                  "y": 10,
+                  "name": "内容策略文字",
+                  "fill": "#172033",
+                  "content": "内容策略",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "LSg4W",
+                  "x": 14,
+                  "y": 34,
+                  "name": "内容策略状态",
+                  "fill": "#5D6878",
+                  "content": "当前 · 历史生成",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "p0wiTF",
+              "x": 36,
+              "y": 190,
+              "name": "选题生成二级模块",
+              "width": 214,
+              "height": 36,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "LWvPu",
+                  "x": 14,
+                  "y": 10,
+                  "name": "选题生成文字",
+                  "fill": "#5D6878",
+                  "content": "当前选题池",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "K6B4C",
+              "x": 36,
+              "y": 146,
+              "name": "历史生成二级模块 激活",
+              "width": 214,
+              "height": 36,
+              "fill": "#E8F6EE",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#9FD3B4"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "HWMwR",
+                  "x": 14,
+                  "y": 10,
+                  "name": "历史生成文字",
+                  "fill": "#17633A",
+                  "content": "历史生成",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "IJ6k4",
+              "x": 28,
+              "y": 254,
+              "name": "后续菜单占位",
+              "fill": "#5D6878",
+              "content": "脚本创作\n素材管理\n作品生产\n发布运营\n数据分析\n工作流任务",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Lx3uz",
+          "x": 296,
+          "y": 96,
+          "name": "历史生成标题区",
+          "width": 1118,
+          "height": 92,
+          "fill": "#FFFFFF",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "VkeaD",
+              "x": 22,
+              "y": 18,
+              "name": "标题眉标",
+              "fill": "#5D6878",
+              "content": "内容策略 / 历史生成",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "RS9kK",
+              "x": 22,
+              "y": 42,
+              "name": "页面标题",
+              "fill": "#172033",
+              "content": "历史生成管理",
+              "fontFamily": "Inter",
+              "fontSize": 26,
+              "fontWeight": "800"
+            },
+            {
+              "type": "frame",
+              "id": "u2kJb",
+              "x": 804,
+              "y": 28,
+              "name": "返回当前选题池",
+              "width": 128,
+              "height": 36,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "TGFWJ",
+                  "x": 16,
+                  "y": 10,
+                  "name": "返回文案",
+                  "fill": "#172033",
+                  "content": "返回选题池",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "dbwRc",
+              "x": 952,
+              "y": 28,
+              "name": "人工新增选题按钮",
+              "width": 142,
+              "height": 36,
+              "fill": "#2860E8",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2860E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "F3qEyr",
+                  "x": 18,
+                  "y": 10,
+                  "name": "新增选题文案",
+                  "fill": "#FFFFFF",
+                  "content": "新增选题",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "800"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "F8p7g",
+          "x": 296,
+          "y": 212,
+          "name": "历史生成统计带",
+          "width": 1118,
+          "height": 92,
+          "fill": "#FFFFFF",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "frame",
+              "id": "WYSe2",
+              "x": 20,
+              "y": 18,
+              "name": "成功批次统计",
+              "width": 190,
+              "height": 56,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "biewz",
+                  "x": 16,
+                  "y": 10,
+                  "name": "成功批次数",
+                  "fill": "#172033",
+                  "content": "12",
+                  "fontFamily": "Inter",
+                  "fontSize": 22,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "Tyd3V",
+                  "x": 82,
+                  "y": 18,
+                  "name": "成功批次标签",
+                  "fill": "#5D6878",
+                  "content": "成功批次",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "r5Gpn",
+              "x": 230,
+              "y": 18,
+              "name": "可见选题统计",
+              "width": 190,
+              "height": 56,
+              "fill": "#E8F6EE",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#9FD3B4"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "n1Pw9D",
+                  "x": 16,
+                  "y": 10,
+                  "name": "可见选题数",
+                  "fill": "#17633A",
+                  "content": "48",
+                  "fontFamily": "Inter",
+                  "fontSize": 22,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "qOQc5",
+                  "x": 82,
+                  "y": 18,
+                  "name": "可见选题标签",
+                  "fill": "#17633A",
+                  "content": "可见选题",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "qdrRa",
+              "x": 440,
+              "y": 18,
+              "name": "已成稿统计",
+              "width": 190,
+              "height": 56,
+              "fill": "#EAF1FF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8CDFD"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "gOXBq",
+                  "x": 16,
+                  "y": 10,
+                  "name": "已成稿数",
+                  "fill": "#1D4ED8",
+                  "content": "9",
+                  "fontFamily": "Inter",
+                  "fontSize": 22,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "v0rTH",
+                  "x": 82,
+                  "y": 18,
+                  "name": "已成稿标签",
+                  "fill": "#1D4ED8",
+                  "content": "不可删除",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "z2GkDc",
+              "x": 668,
+              "y": 22,
+              "name": "软删除说明",
+              "fill": "#5D6878",
+              "content": "列表只展示成功且仍有可见选题的批次；移除选题为软删除，不改变归档状态。",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Z8tT66",
+          "x": 296,
+          "y": 328,
+          "name": "历史生成批次列表",
+          "width": 464,
+          "height": 548,
+          "fill": "#FFFFFF",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "CSIXh",
+              "x": 18,
+              "y": 18,
+              "name": "批次列表标题",
+              "fill": "#172033",
+              "content": "生成批次",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "kx3VC",
+              "x": 18,
+              "y": 44,
+              "name": "批次列表说明",
+              "fill": "#5D6878",
+              "content": "按生成时间倒序；空批次和失败批次不进入管理列表。",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "tvgzp",
+              "x": 330,
+              "y": 18,
+              "name": "筛选 全部批次",
+              "width": 92,
+              "height": 28,
+              "fill": "#EAF1FF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8CDFD"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "yHK3a",
+                  "x": 14,
+                  "y": 7,
+                  "name": "筛选文字",
+                  "fill": "#1D4ED8",
+                  "content": "全部批次",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "X2A3vw",
+              "x": 18,
+              "y": 82,
+              "name": "批次行 当前选中",
+              "width": 428,
+              "height": 112,
+              "fill": "#EAF1FF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8CDFD"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "u0OT94",
+                  "x": 16,
+                  "y": 14,
+                  "name": "批次1要求",
+                  "fill": "#172033",
+                  "content": "本周 AI 工具方向，生成 8 个选题",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "pJqvr",
+                  "x": 16,
+                  "y": 42,
+                  "name": "批次1元信息",
+                  "fill": "#5D6878",
+                  "content": "2026-07-07 10:18 · 请求 8 条 · 可见 5 条",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "PDnmI",
+                  "x": 328,
+                  "y": 14,
+                  "name": "批次1状态",
+                  "width": 76,
+                  "height": 26,
+                  "fill": "#E8F6EE",
+                  "cornerRadius": 999,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#9FD3B4"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "nlcqH",
+                      "x": 14,
+                      "y": 6,
+                      "name": "批次1状态文案",
+                      "fill": "#17633A",
+                      "content": "成功",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "xWAuq",
+                  "x": 16,
+                  "y": 72,
+                  "name": "批次1说明",
+                  "fill": "#1D4ED8",
+                  "content": "当前批次：3 条待评估，1 条已确认，1 条已成稿。",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "aUeHq",
+              "x": 18,
+              "y": 210,
+              "name": "批次行 普通",
+              "width": 428,
+              "height": 104,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "JX84J",
+                  "x": 16,
+                  "y": 14,
+                  "name": "批次2要求",
+                  "fill": "#172033",
+                  "content": "围绕小团队自动化，生成 5 个选题",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "Cv9sq",
+                  "x": 16,
+                  "y": 42,
+                  "name": "批次2元信息",
+                  "fill": "#5D6878",
+                  "content": "2026-07-06 21:40 · 请求 5 条 · 可见 4 条",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "UD5JH",
+                  "x": 328,
+                  "y": 14,
+                  "name": "批次2状态",
+                  "width": 76,
+                  "height": 26,
+                  "fill": "#E8F6EE",
+                  "cornerRadius": 999,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#9FD3B4"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "x6384t",
+                      "x": 14,
+                      "y": 6,
+                      "name": "批次2状态文案",
+                      "fill": "#17633A",
+                      "content": "成功",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "LuxQ0",
+                  "x": 16,
+                  "y": 70,
+                  "name": "批次2说明",
+                  "fill": "#5D6878",
+                  "content": "已移除 1 条未成稿选题；批次仍保留在列表。",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "bPij3",
+              "x": 18,
+              "y": 330,
+              "name": "批次行 普通 2",
+              "width": 428,
+              "height": 104,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "iBla9",
+                  "x": 16,
+                  "y": 14,
+                  "name": "批次3要求",
+                  "fill": "#172033",
+                  "content": "效率工具避坑清单，生成 6 个选题",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "g4aivT",
+                  "x": 16,
+                  "y": 42,
+                  "name": "批次3元信息",
+                  "fill": "#5D6878",
+                  "content": "2026-07-06 16:02 · 请求 6 条 · 可见 6 条",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "JmECf",
+          "x": 784,
+          "y": 328,
+          "name": "批次详情与选题管理",
+          "width": 630,
+          "height": 548,
+          "fill": "#FFFFFF",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "z9zkNj",
+              "x": 20,
+              "y": 18,
+              "name": "详情标题",
+              "fill": "#172033",
+              "content": "批次详情",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "aqcJF",
+              "x": 20,
+              "y": 44,
+              "name": "详情元信息",
+              "fill": "#5D6878",
+              "content": "本周 AI 工具方向，生成 8 个选题 · 当前可见 5 条",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "BKpPv",
+              "x": 458,
+              "y": 18,
+              "name": "软删除规则标签",
+              "width": 132,
+              "height": 28,
+              "fill": "#FFF4E0",
+              "cornerRadius": 999,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#EFD27A"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Wiyzt",
+                  "x": 14,
+                  "y": 7,
+                  "name": "软删除规则文案",
+                  "fill": "#7A5100",
+                  "content": "未成稿可移除",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "wllQm",
+              "x": 20,
+              "y": 82,
+              "name": "选题表头",
+              "width": 590,
+              "height": 34,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "w9R6gI",
+                  "x": 14,
+                  "y": 9,
+                  "name": "选题表头文字",
+                  "fill": "#5D6878",
+                  "content": "选题 / 状态 / 分数 / 操作",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "jt2iX",
+              "x": 20,
+              "y": 132,
+              "name": "选题行 未成稿可移除",
+              "width": 590,
+              "height": 88,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "lZI3y",
+                  "x": 14,
+                  "y": 12,
+                  "name": "选题1标题",
+                  "fill": "#172033",
+                  "content": "AI 工具如何重塑内容团队",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "HySQI",
+                  "x": 14,
+                  "y": 38,
+                  "name": "选题1元信息",
+                  "fill": "#5D6878",
+                  "content": "来源：Agent · 类型：知识科普 · 标签：AI工具 / 内容运营",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "w2ewh",
+                  "x": 340,
+                  "y": 18,
+                  "name": "选题1状态",
+                  "width": 70,
+                  "height": 26,
+                  "fill": "#FFF6DB",
+                  "cornerRadius": 999,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#EFD27A"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "C6c2TY",
+                      "x": 10,
+                      "y": 6,
+                      "name": "选题1状态文案",
+                      "fill": "#7A5100",
+                      "content": "待评估",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "koEts",
+                  "x": 428,
+                  "y": 22,
+                  "name": "选题1分数",
+                  "fill": "#172033",
+                  "content": "88",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "frame",
+                  "id": "fpHj8",
+                  "x": 494,
+                  "y": 18,
+                  "name": "选题1移除按钮",
+                  "width": 72,
+                  "height": 30,
+                  "fill": "#FFFFFF",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#F4B9B5"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "sjkYP",
+                      "x": 12,
+                      "y": 8,
+                      "name": "选题1移除文案",
+                      "fill": "#9F2F2A",
+                      "content": "移除",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "800"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "kwIXk",
+              "x": 20,
+              "y": 236,
+              "name": "选题行 已确认可移除",
+              "width": 590,
+              "height": 88,
+              "fill": "#E8F6EE",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#9FD3B4"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "p2aLFt",
+                  "x": 14,
+                  "y": 12,
+                  "name": "选题2标题",
+                  "fill": "#172033",
+                  "content": "5 个低成本自动化工作流",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "DoqU9",
+                  "x": 14,
+                  "y": 38,
+                  "name": "选题2元信息",
+                  "fill": "#5D6878",
+                  "content": "来源：Agent · 类型：教程讲解 · 标签：自动化 / SOP",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "zH2df",
+                  "x": 340,
+                  "y": 18,
+                  "name": "选题2状态",
+                  "width": 70,
+                  "height": 26,
+                  "fill": "#E8F6EE",
+                  "cornerRadius": 999,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#9FD3B4"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "bBZu8",
+                      "x": 10,
+                      "y": 6,
+                      "name": "选题2状态文案",
+                      "fill": "#17633A",
+                      "content": "已确认",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "U2rwe",
+                  "x": 428,
+                  "y": 22,
+                  "name": "选题2分数",
+                  "fill": "#172033",
+                  "content": "84",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "frame",
+                  "id": "NzPpA",
+                  "x": 494,
+                  "y": 18,
+                  "name": "选题2移除按钮",
+                  "width": 72,
+                  "height": 30,
+                  "fill": "#FFFFFF",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#F4B9B5"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "H9aK0",
+                      "x": 12,
+                      "y": 8,
+                      "name": "选题2移除文案",
+                      "fill": "#9F2F2A",
+                      "content": "移除",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "800"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "i1Jt5",
+              "x": 20,
+              "y": 340,
+              "name": "选题行 已成稿不可删除",
+              "width": 590,
+              "height": 104,
+              "fill": "#EAF1FF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8CDFD"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "bTzxd",
+                  "x": 14,
+                  "y": 12,
+                  "name": "选题3标题",
+                  "fill": "#172033",
+                  "content": "程序员如何用 AI 做内容复盘",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "hphad",
+                  "x": 14,
+                  "y": 38,
+                  "name": "选题3元信息",
+                  "fill": "#5D6878",
+                  "content": "来源：Agent · 类型：知识科普 · 已生成脚本：程序员 AI 复盘",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "b8VSU",
+                  "x": 340,
+                  "y": 18,
+                  "name": "选题3状态",
+                  "width": 70,
+                  "height": 26,
+                  "fill": "#EAF1FF",
+                  "cornerRadius": 999,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#B8CDFD"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "eehvR",
+                      "x": 10,
+                      "y": 6,
+                      "name": "选题3状态文案",
+                      "fill": "#1D4ED8",
+                      "content": "已成稿",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "DssXb",
+                  "x": 428,
+                  "y": 22,
+                  "name": "选题3分数",
+                  "fill": "#172033",
+                  "content": "91",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "frame",
+                  "id": "DsVlB",
+                  "x": 486,
+                  "y": 8,
+                  "name": "选题3不可删除提示",
+                  "width": 84,
+                  "height": 56,
+                  "fill": "#F2F4F7",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#CFD6DF"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "FMXpI",
+                      "x": 8,
+                      "y": 8,
+                      "name": "选题3不可删除文案",
+                      "fill": "#4F5867",
+                      "content": "已生成脚本\n不可删除",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "VYca1",
+          "x": 784,
+          "y": 860,
+          "name": "移除确认提示",
+          "width": 630,
+          "height": 56,
+          "fill": "#FDECEC",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#F4B9B5"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "JX0Rw",
+              "x": 16,
+              "y": 10,
+              "name": "移除确认说明",
+              "fill": "#9F2F2A",
+              "content": "确认移除后，该选题从默认管理视图和批次计数中隐藏；原记录保留。",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "700"
+            },
+            {
+              "type": "frame",
+              "id": "KrXsD",
+              "x": 420,
+              "y": 12,
+              "name": "取消移除",
+              "width": 72,
+              "height": 32,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "h5lqwp",
+                  "x": 12,
+                  "y": 9,
+                  "name": "取消移除文字",
+                  "fill": "#172033",
+                  "content": "取消",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "CsyAL",
+              "x": 506,
+              "y": 12,
+              "name": "确认移除",
+              "width": 88,
+              "height": 32,
+              "fill": "#C2413A",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#C2413A"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Fkugc",
+                  "x": 14,
+                  "y": 9,
+                  "name": "确认移除文字",
+                  "fill": "#FFFFFF",
+                  "content": "确认移除",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "uPoNK",
+      "x": 4600,
+      "y": 0,
+      "name": "桌面 - 内容策略历史生成补充批次 v2 待确认",
+      "clip": true,
+      "width": 1440,
+      "height": 980,
+      "fill": "#F4F7FB",
+      "layout": "none",
+      "children": [
+        {
+          "type": "frame",
+          "id": "N4UYTL",
+          "x": 0,
+          "y": 0,
+          "name": "顶部工作台栏",
+          "width": 1440,
+          "height": 72,
+          "fill": "#FFFFFF",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "frame",
+              "id": "fETBz",
+              "x": 24,
+              "y": 18,
+              "name": "品牌标识",
+              "width": 38,
+              "height": 38,
+              "fill": "#2860E8",
+              "cornerRadius": 8,
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "DgK3J",
+                  "x": 8,
+                  "y": 9,
+                  "name": "品牌字母",
+                  "fill": "#FFFFFF",
+                  "content": "VD",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "ctqnI",
+              "x": 74,
+              "y": 16,
+              "name": "产品名",
+              "fill": "#172033",
+              "content": "VEDIO-AGENT",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "YCOOH",
+              "x": 74,
+              "y": 42,
+              "name": "工作台名",
+              "fill": "#5D6878",
+              "content": "视频工作台",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "YX3mN",
+              "x": 1190,
+              "y": 24,
+              "name": "接口状态",
+              "width": 88,
+              "height": 26,
+              "fill": "#E8F6EE",
+              "cornerRadius": 999,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#9FD3B4"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "vt9yX",
+                  "x": 14,
+                  "y": 6,
+                  "name": "接口状态文案",
+                  "fill": "#17633A",
+                  "content": "API 正常",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "asnpC",
+              "x": 1300,
+              "y": 18,
+              "name": "项目选择",
+              "width": 116,
+              "height": 36,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "D9OCk",
+                  "x": 14,
+                  "y": 10,
+                  "name": "项目名",
+                  "fill": "#172033",
+                  "content": "科技博主",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "StfXu",
+          "x": 0,
+          "y": 72,
+          "name": "左侧业务流程导航",
+          "width": 272,
+          "height": 908,
+          "fill": "#FFFFFF",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "Ef65T",
+              "x": 18,
+              "y": 18,
+              "name": "菜单标题",
+              "fill": "#172033",
+              "content": "业务流程菜单",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "AiUnH",
+              "x": 18,
+              "y": 43,
+              "name": "菜单副标题",
+              "fill": "#5D6878",
+              "content": "一级业务菜单 + 二级页面",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "MpgD8",
+              "x": 14,
+              "y": 78,
+              "name": "内容策略一级菜单 激活",
+              "width": 244,
+              "height": 58,
+              "fill": "#EAF1FF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8CDFD"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "UyZ1z",
+                  "x": 14,
+                  "y": 10,
+                  "name": "内容策略文字",
+                  "fill": "#172033",
+                  "content": "内容策略",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "rbCKC",
+                  "x": 14,
+                  "y": 34,
+                  "name": "内容策略状态",
+                  "fill": "#5D6878",
+                  "content": "当前 · 历史生成",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "oFkSz",
+              "x": 36,
+              "y": 190,
+              "name": "选题生成二级模块",
+              "width": 214,
+              "height": 36,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "pY7SB",
+                  "x": 14,
+                  "y": 10,
+                  "name": "选题生成文字",
+                  "fill": "#5D6878",
+                  "content": "当前选题池",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "UuHkz",
+              "x": 36,
+              "y": 146,
+              "name": "历史生成二级模块 激活",
+              "width": 214,
+              "height": 36,
+              "fill": "#E8F6EE",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#9FD3B4"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "lju7w",
+                  "x": 14,
+                  "y": 10,
+                  "name": "历史生成文字",
+                  "fill": "#17633A",
+                  "content": "历史生成",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "JzOaQ",
+              "x": 28,
+              "y": 254,
+              "name": "后续菜单占位",
+              "fill": "#5D6878",
+              "content": "脚本创作\n素材管理\n作品生产\n发布运营\n数据分析\n工作流任务",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "si0RO",
+          "x": 296,
+          "y": 96,
+          "name": "历史生成标题区",
+          "width": 1118,
+          "height": 92,
+          "fill": "#FFFFFF",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "Lspzs",
+              "x": 22,
+              "y": 18,
+              "name": "标题眉标",
+              "fill": "#5D6878",
+              "content": "内容策略 / 历史生成",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "pSFRI",
+              "x": 22,
+              "y": 42,
+              "name": "页面标题",
+              "fill": "#172033",
+              "content": "历史生成与补充批次",
+              "fontFamily": "Inter",
+              "fontSize": 26,
+              "fontWeight": "800"
+            },
+            {
+              "type": "frame",
+              "id": "qlTRd",
+              "x": 804,
+              "y": 28,
+              "name": "返回当前选题池",
+              "width": 128,
+              "height": 36,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "O1Fav",
+                  "x": 16,
+                  "y": 10,
+                  "name": "返回文案",
+                  "fill": "#172033",
+                  "content": "返回选题池",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "N4XbR",
+              "x": 952,
+              "y": 28,
+              "name": "人工新增选题按钮",
+              "width": 142,
+              "height": 36,
+              "fill": "#2860E8",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2860E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Y3M2F",
+                  "x": 18,
+                  "y": 10,
+                  "name": "新增选题文案",
+                  "fill": "#FFFFFF",
+                  "content": "新增选题",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "800"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "it2Qe",
+          "x": 296,
+          "y": 212,
+          "name": "历史生成统计带",
+          "width": 1118,
+          "height": 92,
+          "fill": "#FFFFFF",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "frame",
+              "id": "gUCVy",
+              "x": 20,
+              "y": 18,
+              "name": "成功批次统计",
+              "width": 190,
+              "height": 56,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "rmnxE",
+                  "x": 16,
+                  "y": 10,
+                  "name": "成功批次数",
+                  "fill": "#172033",
+                  "content": "14",
+                  "fontFamily": "Inter",
+                  "fontSize": 22,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "ndOas",
+                  "x": 82,
+                  "y": 18,
+                  "name": "成功批次标签",
+                  "fill": "#5D6878",
+                  "content": "成功批次",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "MGBsA",
+              "x": 230,
+              "y": 18,
+              "name": "可见选题统计",
+              "width": 190,
+              "height": 56,
+              "fill": "#E8F6EE",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#9FD3B4"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "h7mQn",
+                  "x": 16,
+                  "y": 10,
+                  "name": "可见选题数",
+                  "fill": "#17633A",
+                  "content": "53",
+                  "fontFamily": "Inter",
+                  "fontSize": 22,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "e9NmC",
+                  "x": 82,
+                  "y": 18,
+                  "name": "可见选题标签",
+                  "fill": "#17633A",
+                  "content": "可见选题",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "IT0KQ",
+              "x": 440,
+              "y": 18,
+              "name": "已成稿统计",
+              "width": 190,
+              "height": 56,
+              "fill": "#EAF1FF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8CDFD"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "pN7cu",
+                  "x": 16,
+                  "y": 10,
+                  "name": "已成稿数",
+                  "fill": "#1D4ED8",
+                  "content": "2",
+                  "fontFamily": "Inter",
+                  "fontSize": 22,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "R57KvI",
+                  "x": 82,
+                  "y": 18,
+                  "name": "已成稿标签",
+                  "fill": "#1D4ED8",
+                  "content": "补充批次",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "Fd4YT",
+              "x": 668,
+              "y": 22,
+              "name": "软删除说明",
+              "fill": "#5D6878",
+              "content": "列表只展示成功且仍有可见选题的批次；补充批次单独计数并关联原始批次。",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "R088K",
+          "x": 296,
+          "y": 328,
+          "name": "历史生成批次列表",
+          "width": 360,
+          "height": 580,
+          "fill": "#FFFFFF",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "gdhGP",
+              "x": 18,
+              "y": 18,
+              "name": "批次列表标题",
+              "fill": "#172033",
+              "content": "生成批次与补充批次",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "T2VEA",
+              "x": 18,
+              "y": 44,
+              "name": "批次列表说明",
+              "fill": "#5D6878",
+              "content": "原始批次与补充批次同列展示。",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal",
+              "textGrowth": "fixed-width",
+              "width": 220
+            },
+            {
+              "type": "frame",
+              "id": "mIIHn",
+              "x": 248,
+              "y": 18,
+              "name": "筛选 全部批次",
+              "width": 92,
+              "height": 28,
+              "fill": "#EAF1FF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8CDFD"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "oIkN1",
+                  "x": 14,
+                  "y": 7,
+                  "name": "筛选文字",
+                  "fill": "#1D4ED8",
+                  "content": "全部批次",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "NNHIg",
+              "x": 16,
+              "y": 82,
+              "name": "批次行 当前选中",
+              "width": 328,
+              "height": 112,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "FCKrd",
+                  "x": 16,
+                  "y": 14,
+                  "name": "批次1要求",
+                  "fill": "#172033",
+                  "content": "原始：本周 AI 工具方向，生成 8 个选题",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800",
+                  "textGrowth": "fixed-width",
+                  "width": 214
+                },
+                {
+                  "type": "text",
+                  "id": "l66Hmy",
+                  "x": 16,
+                  "y": 42,
+                  "name": "批次1元信息",
+                  "fill": "#5D6878",
+                  "content": "2026-07-07 10:18 · 请求 8 条 · 可见 5 条",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 292
+                },
+                {
+                  "type": "frame",
+                  "id": "NARY9",
+                  "x": 236,
+                  "y": 14,
+                  "name": "批次1状态",
+                  "width": 68,
+                  "height": 26,
+                  "fill": "#F2F4F7",
+                  "cornerRadius": 999,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#CFD6DF"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "iiGML",
+                      "x": 14,
+                      "y": 6,
+                      "name": "批次1状态文案",
+                      "fill": "#4F5867",
+                      "content": "原始",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "UkHp0",
+                  "x": 16,
+                  "y": 72,
+                  "name": "批次1说明",
+                  "fill": "#5D6878",
+                  "content": "已产生 2 个补充批次；原始批次不变。",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700",
+                  "textGrowth": "fixed-width",
+                  "width": 292
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "S2ip9",
+              "x": 16,
+              "y": 210,
+              "name": "批次行 普通",
+              "width": 328,
+              "height": 112,
+              "fill": "#EAF1FF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8CDFD"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "RW2VG",
+                  "x": 16,
+                  "y": 14,
+                  "name": "批次2要求",
+                  "fill": "#172033",
+                  "content": "补充：小团队落地案例扩展",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800",
+                  "textGrowth": "fixed-width",
+                  "width": 214
+                },
+                {
+                  "type": "text",
+                  "id": "uavLS",
+                  "x": 16,
+                  "y": 42,
+                  "name": "批次2元信息",
+                  "fill": "#5D6878",
+                  "content": "补充自 10:18 原始批次 · 请求 5 条 · 可见 5 条",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 292
+                },
+                {
+                  "type": "frame",
+                  "id": "iDzaq",
+                  "x": 236,
+                  "y": 14,
+                  "name": "批次2状态",
+                  "width": 68,
+                  "height": 26,
+                  "fill": "#E8F6EE",
+                  "cornerRadius": 999,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#9FD3B4"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Pufe1",
+                      "x": 14,
+                      "y": 6,
+                      "name": "批次2状态文案",
+                      "fill": "#17633A",
+                      "content": "补充",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "I3vjx",
+                  "x": 16,
+                  "y": 70,
+                  "name": "批次2说明",
+                  "fill": "#1D4ED8",
+                  "content": "当前选中：补充批次，5 条待评估。",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "700",
+                  "textGrowth": "fixed-width",
+                  "width": 292
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Fs97Y",
+              "x": 16,
+              "y": 338,
+              "name": "批次行 普通 2",
+              "width": 328,
+              "height": 104,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Z4bDHT",
+                  "x": 16,
+                  "y": 14,
+                  "name": "批次3要求",
+                  "fill": "#172033",
+                  "content": "原始：效率工具避坑清单，生成 6 个选题",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800",
+                  "textGrowth": "fixed-width",
+                  "width": 214
+                },
+                {
+                  "type": "text",
+                  "id": "Dy3l9",
+                  "x": 16,
+                  "y": 42,
+                  "name": "批次3元信息",
+                  "fill": "#5D6878",
+                  "content": "2026-07-06 16:02 · 请求 6 条 · 可见 6 条",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 292
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "FAbgG",
+          "x": 676,
+          "y": 328,
+          "name": "当前主题选题列表",
+          "width": 430,
+          "height": 580,
+          "fill": "#FFFFFF",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "histTopicTitle",
+              "x": 18,
+              "y": 18,
+              "name": "选题列表标题",
+              "fill": "#172033",
+              "content": "当前主题选题",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "histTopicMeta",
+              "x": 18,
+              "y": 44,
+              "name": "选题列表元信息",
+              "fill": "#5D6878",
+              "content": "同主题组 · 原始 5 条 + 补充 2 条 · 按评分排序",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "histTopicBadge",
+              "x": 304,
+              "y": 18,
+              "name": "当前主题标签",
+              "width": 106,
+              "height": 28,
+              "fill": "#E8F6EE",
+              "cornerRadius": 999,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#9FD3B4"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "histTopicBadgeText",
+                  "x": 10,
+                  "y": 5,
+                  "name": "当前主题标签文案",
+                  "fill": "#17633A",
+                  "content": "主题组",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "histOriginSummary",
+              "x": 18,
+              "y": 74,
+              "name": "原始批次关系摘要",
+              "width": 394,
+              "height": 58,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "histOriginSummaryTitle",
+                  "x": 12,
+                  "y": 10,
+                  "name": "关系摘要标题",
+                  "fill": "#172033",
+                  "content": "主题原始批次：本周 AI 工具方向",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "histOriginSummaryText",
+                  "x": 12,
+                  "y": 33,
+                  "name": "关系摘要说明",
+                  "fill": "#5D6878",
+                  "content": "原始和补充选题同屏展示；批次只记录生成来源。",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "histTopicSectionTitle",
+              "x": 18,
+              "y": 154,
+              "name": "选题小节标题",
+              "fill": "#172033",
+              "content": "选题列表",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "800"
+            },
+            {
+              "type": "frame",
+              "id": "histTopicHeader",
+              "x": 18,
+              "y": 182,
+              "name": "选题列表表头",
+              "width": 394,
+              "height": 34,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "histTopicHeaderText",
+                  "x": 12,
+                  "y": 9,
+                  "name": "选题列表表头文字",
+                  "fill": "#5D6878",
+                  "content": "选题 / 生成来源 / 状态 / 分数 / 操作",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "topicRow1",
+              "x": 18,
+              "y": 232,
+              "name": "选题行 小团队工具栈",
+              "width": 394,
+              "height": 92,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "topicRow1Title",
+                  "x": 14,
+                  "y": 12,
+                  "name": "选题行 小团队工具栈标题",
+                  "fill": "#172033",
+                  "content": "小团队如何搭建低成本 AI 工具栈",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800",
+                  "textGrowth": "fixed-width",
+                  "width": 258
+                },
+                {
+                  "type": "text",
+                  "id": "topicRow1Meta",
+                  "x": 14,
+                  "y": 39,
+                  "name": "选题行 小团队工具栈元信息",
+                  "fill": "#5D6878",
+                  "content": "补充生成 · 来源：Agent · 类型：教程讲解",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 258
+                },
+                {
+                  "type": "frame",
+                  "id": "topicRow1Status",
+                  "x": 286,
+                  "y": 12,
+                  "name": "选题行 小团队工具栈状态",
+                  "width": 76,
+                  "height": 24,
+                  "fill": "#FFF6DB",
+                  "cornerRadius": 999,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#EFD27A"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "topicRow1StatusText",
+                      "x": 10,
+                      "y": 5,
+                      "name": "选题行 小团队工具栈状态文案",
+                      "fill": "#7A5100",
+                      "content": "待评估",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "topicRow1Score",
+                  "x": 292,
+                  "y": 42,
+                  "name": "选题行 小团队工具栈分数",
+                  "fill": "#172033",
+                  "content": "86 分",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "frame",
+                  "id": "topicRow1Remove",
+                  "x": 286,
+                  "y": 62,
+                  "name": "选题行 小团队工具栈移除按钮",
+                  "width": 76,
+                  "height": 24,
+                  "fill": "#FFFFFF",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#F4B9B5"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "topicRow1RemoveText",
+                      "x": 22,
+                      "y": 5,
+                      "name": "选题行 小团队工具栈移除文案",
+                      "fill": "#9F2F2A",
+                      "content": "移除",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "topicRow2",
+              "x": 18,
+              "y": 340,
+              "name": "选题行 自动化模板",
+              "width": 394,
+              "height": 86,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "topicRow2Title",
+                  "x": 14,
+                  "y": 12,
+                  "name": "选题行 自动化模板标题",
+                  "fill": "#172033",
+                  "content": "3 个可直接复用的自动化模板",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800",
+                  "textGrowth": "fixed-width",
+                  "width": 258
+                },
+                {
+                  "type": "text",
+                  "id": "topicRow2Meta",
+                  "x": 14,
+                  "y": 39,
+                  "name": "选题行 自动化模板元信息",
+                  "fill": "#5D6878",
+                  "content": "补充生成 · 来源：Agent · 类型：知识科普",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 258
+                },
+                {
+                  "type": "frame",
+                  "id": "topicRow2Status",
+                  "x": 286,
+                  "y": 12,
+                  "name": "选题行 自动化模板状态",
+                  "width": 76,
+                  "height": 24,
+                  "fill": "#E8F6EE",
+                  "cornerRadius": 999,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#9FD3B4"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "topicRow2StatusText",
+                      "x": 10,
+                      "y": 5,
+                      "name": "选题行 自动化模板状态文案",
+                      "fill": "#17633A",
+                      "content": "已确认",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "topicRow2Score",
+                  "x": 292,
+                  "y": 42,
+                  "name": "选题行 自动化模板分数",
+                  "fill": "#172033",
+                  "content": "82 分",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "frame",
+                  "id": "topicRow2Remove",
+                  "x": 286,
+                  "y": 56,
+                  "name": "选题行 自动化模板移除按钮",
+                  "width": 76,
+                  "height": 24,
+                  "fill": "#FFFFFF",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#F4B9B5"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "topicRow2RemoveText",
+                      "x": 22,
+                      "y": 5,
+                      "name": "选题行 自动化模板移除文案",
+                      "fill": "#9F2F2A",
+                      "content": "移除",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "topicRow3",
+              "x": 18,
+              "y": 442,
+              "name": "选题行 已成稿不可移除",
+              "width": 394,
+              "height": 86,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "topicRow3Title",
+                  "x": 14,
+                  "y": 12,
+                  "name": "选题行 已成稿不可移除标题",
+                  "fill": "#172033",
+                  "content": "AI 工具测评视频如何设计结尾转化",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800",
+                  "textGrowth": "fixed-width",
+                  "width": 258
+                },
+                {
+                  "type": "text",
+                  "id": "topicRow3Meta",
+                  "x": 14,
+                  "y": 39,
+                  "name": "选题行 已成稿不可移除元信息",
+                  "fill": "#5D6878",
+                  "content": "原始生成 · 来源：Agent · 已进入脚本创作",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 258
+                },
+                {
+                  "type": "frame",
+                  "id": "topicRow3Status",
+                  "x": 286,
+                  "y": 12,
+                  "name": "选题行 已成稿不可移除状态",
+                  "width": 76,
+                  "height": 24,
+                  "fill": "#EAF1FF",
+                  "cornerRadius": 999,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#B8CDFD"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "topicRow3StatusText",
+                      "x": 10,
+                      "y": 5,
+                      "name": "选题行 已成稿不可移除状态文案",
+                      "fill": "#1D4ED8",
+                      "content": "已成稿",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "topicRow3Score",
+                  "x": 292,
+                  "y": 42,
+                  "name": "选题行 已成稿不可移除分数",
+                  "fill": "#172033",
+                  "content": "79 分",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "topicRow3Lock",
+                  "x": 286,
+                  "y": 64,
+                  "name": "选题行 已成稿不可移除限制文案",
+                  "fill": "#7D8796",
+                  "content": "不可移除",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "histTopicRuleHint",
+              "x": 18,
+              "y": 544,
+              "name": "选题列表规则提示",
+              "width": 394,
+              "height": 28,
+              "fill": "#FFF6DB",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#EFD27A"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "histTopicRuleText",
+                  "x": 12,
+                  "y": 7,
+                  "name": "选题列表规则文案",
+                  "fill": "#7A5100",
+                  "content": "原始生成和补充生成同属一个主题；已成稿不可移除。",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "700"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "histSupplementSidePanel",
+          "x": 1126,
+          "y": 328,
+          "name": "补充操作侧栏",
+          "width": 288,
+          "height": 580,
+          "fill": "#FFFFFF",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0E8"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "suppSideTitle",
+              "x": 18,
+              "y": 18,
+              "name": "补充操作标题",
+              "fill": "#172033",
+              "content": "补充选题",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "suppSideMeta",
+              "x": 18,
+              "y": 44,
+              "name": "补充操作说明",
+              "fill": "#5D6878",
+              "content": "对原始批次继续生成新选题，新内容进入新的补充批次。",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal",
+              "textGrowth": "fixed-width",
+              "width": 252
+            },
+            {
+              "type": "frame",
+              "id": "suppOriginCard",
+              "x": 18,
+              "y": 86,
+              "name": "原始批次侧栏卡",
+              "width": 252,
+              "height": 86,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "suppOriginTitle",
+                  "x": 12,
+                  "y": 10,
+                  "name": "原始批次侧栏标题",
+                  "fill": "#172033",
+                  "content": "原始批次",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "suppOriginText",
+                  "x": 12,
+                  "y": 36,
+                  "name": "原始批次侧栏说明",
+                  "fill": "#5D6878",
+                  "content": "本周 AI 工具方向 · 8 条生成 · 2 个补充批次",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 228
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "suppForm",
+              "x": 18,
+              "y": 188,
+              "name": "补充选题表单侧栏",
+              "width": 252,
+              "height": 188,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B8CDFD"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "suppFormTitle",
+                  "x": 12,
+                  "y": 12,
+                  "name": "补充表单侧栏标题",
+                  "fill": "#172033",
+                  "content": "补充要求",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "frame",
+                  "id": "suppInput",
+                  "x": 12,
+                  "y": 42,
+                  "name": "补充要求输入框侧栏",
+                  "width": 228,
+                  "height": 76,
+                  "fill": "#F8FAFC",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#D8E0E8"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "suppInputText",
+                      "x": 10,
+                      "y": 10,
+                      "name": "补充要求内容侧栏",
+                      "fill": "#5D6878",
+                      "content": "增加小团队 AI 工具落地案例，避开重复角度。",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal",
+                      "textGrowth": "fixed-width",
+                      "width": 208
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "suppCount",
+                  "x": 12,
+                  "y": 132,
+                  "name": "补充数量选择",
+                  "width": 86,
+                  "height": 36,
+                  "fill": "#F8FAFC",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#D8E0E8"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "suppCountText",
+                      "x": 18,
+                      "y": 10,
+                      "name": "补充数量文案",
+                      "fill": "#172033",
+                      "content": "5 条",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "suppSubmit",
+                  "x": 112,
+                  "y": 132,
+                  "name": "补充生成按钮",
+                  "width": 128,
+                  "height": 36,
+                  "fill": "#2860E8",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2860E8"
+                  },
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "suppSubmitText",
+                      "x": 28,
+                      "y": 10,
+                      "name": "补充生成按钮文案",
+                      "fill": "#FFFFFF",
+                      "content": "生成补充",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "800"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "suppAssoc",
+              "x": 18,
+              "y": 394,
+              "name": "关联补充批次侧栏",
+              "width": 252,
+              "height": 112,
+              "fill": "#F8FAFC",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "suppAssocTitle",
+                  "x": 12,
+                  "y": 10,
+                  "name": "关联补充批次侧栏标题",
+                  "fill": "#172033",
+                  "content": "关联补充批次",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "800"
+                },
+                {
+                  "type": "text",
+                  "id": "suppAssocCurrent",
+                  "x": 12,
+                  "y": 38,
+                  "name": "关联补充批次当前",
+                  "fill": "#1D4ED8",
+                  "content": "当前 · 小团队落地案例扩展 · 可见 5 条",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800",
+                  "textGrowth": "fixed-width",
+                  "width": 228
+                },
+                {
+                  "type": "text",
+                  "id": "suppAssocHistory",
+                  "x": 12,
+                  "y": 66,
+                  "name": "关联补充批次历史",
+                  "fill": "#5D6878",
+                  "content": "历史补充 · AI 工具选型清单 · 可见 3 条",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 228
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "suppRuleHint",
+              "x": 18,
+              "y": 524,
+              "name": "补充规则侧栏提示",
+              "width": 252,
+              "height": 38,
+              "fill": "#E8F6EE",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#9FD3B4"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "suppRuleText",
+                  "x": 12,
+                  "y": 10,
+                  "name": "补充规则侧栏文案",
+                  "fill": "#17633A",
+                  "content": "再次补充会归一到最初原始批次。",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800",
+                  "textGrowth": "fixed-width",
+                  "width": 228
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Z3kpKz",
+          "x": 676,
+          "y": 920,
+          "name": "移除确认提示",
+          "width": 738,
+          "height": 44,
+          "fill": "#FFF4E0",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#EFD27A"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "Wk66P",
+              "x": 16,
+              "y": 13,
+              "name": "移除确认说明",
+              "fill": "#7A5100",
+              "content": "补充失败：目标批次已无可见选题，无法继续补充。",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "700",
+              "textGrowth": "fixed-width",
+              "width": 450
+            },
+            {
+              "type": "frame",
+              "id": "EF1Rx",
+              "x": 528,
+              "y": 6,
+              "name": "取消移除",
+              "width": 72,
+              "height": 32,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "SLFZm",
+                  "x": 12,
+                  "y": 9,
+                  "name": "取消移除文字",
+                  "fill": "#172033",
+                  "content": "关闭",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rGhkb",
+              "x": 614,
+              "y": 6,
+              "name": "确认移除",
+              "width": 88,
+              "height": 32,
+              "fill": "#2860E8",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2860E8"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "n61ab",
+                  "x": 14,
+                  "y": 9,
+                  "name": "确认移除文字",
+                  "fill": "#FFFFFF",
+                  "content": "重试",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
                   "fontWeight": "800"
                 }
               ]

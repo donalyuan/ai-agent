@@ -119,6 +119,31 @@ async fn insert_topic_batch(
     .expect("topic generation batch fixture should be inserted")
 }
 
+async fn insert_supplement_topic_batch(
+    pool: &PgPool,
+    project_id: Uuid,
+    supplement_of_batch_id: Uuid,
+    prompt: &str,
+    requested_count: i32,
+) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO topic_generation_batches (
+            project_id, supplement_of_batch_id, prompt, requested_count, status
+        )
+        VALUES ($1, $2, $3, $4, 'succeeded')
+        RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .bind(supplement_of_batch_id)
+    .bind(prompt)
+    .bind(requested_count)
+    .fetch_one(pool)
+    .await
+    .expect("supplement topic generation batch fixture should be inserted")
+}
+
 async fn insert_failed_topic_batch(
     pool: &PgPool,
     project_id: Uuid,
@@ -241,12 +266,21 @@ async fn topic_routes_list_generation_batches_with_topic_counts() {
     let previous_batch =
         insert_topic_batch(&test_pool, project_id, "上一批 AI 内容流水线选题", 5).await;
     let latest_batch = insert_topic_batch(&test_pool, project_id, "最新一批 AI 工具选题", 5).await;
+    let supplement_batch = insert_supplement_topic_batch(
+        &test_pool,
+        project_id,
+        previous_batch,
+        "补充上一批 AI 内容流水线选题",
+        2,
+    )
+    .await;
     let failed_batch =
         insert_failed_topic_batch(&test_pool, project_id, "失败的 AI 选题生成", 5).await;
     let other_batch = insert_topic_batch(&test_pool, other_project_id, "其他项目选题", 5).await;
     insert_agent_topic(&test_pool, project_id, previous_batch, "历史批次选题", 82).await;
     insert_agent_topic(&test_pool, project_id, latest_batch, "最新批次选题 1", 94).await;
     insert_agent_topic(&test_pool, project_id, latest_batch, "最新批次选题 2", 91).await;
+    insert_agent_topic(&test_pool, project_id, supplement_batch, "补充批次选题", 88).await;
     insert_agent_topic(
         &test_pool,
         other_project_id,
@@ -271,15 +305,34 @@ async fn topic_routes_list_generation_batches_with_topic_counts() {
     assert_eq!(response.status(), StatusCode::OK);
     let listed = response_json(response).await;
     let batches = listed["batches"].as_array().unwrap();
-    assert_eq!(batches.len(), 2);
+    assert_eq!(batches.len(), 3);
     assert!(!batches
         .iter()
         .any(|batch| batch["batch_id"] == failed_batch.to_string()));
-    assert_eq!(batches[0]["batch_id"], latest_batch.to_string());
-    assert_eq!(batches[0]["prompt"], "最新一批 AI 工具选题");
-    assert_eq!(batches[0]["topic_count"], 2);
-    assert_eq!(batches[1]["batch_id"], previous_batch.to_string());
-    assert_eq!(batches[1]["topic_count"], 1);
+    let latest = batches
+        .iter()
+        .find(|batch| batch["batch_id"] == latest_batch.to_string())
+        .expect("latest batch should be listed");
+    assert_eq!(latest["prompt"], "最新一批 AI 工具选题");
+    assert_eq!(latest["topic_count"], 2);
+    assert_eq!(latest["supplement_of_batch_id"], Value::Null);
+
+    let previous = batches
+        .iter()
+        .find(|batch| batch["batch_id"] == previous_batch.to_string())
+        .expect("previous batch should be listed");
+    assert_eq!(previous["topic_count"], 1);
+    assert_eq!(previous["supplement_of_batch_id"], Value::Null);
+
+    let supplement = batches
+        .iter()
+        .find(|batch| batch["batch_id"] == supplement_batch.to_string())
+        .expect("supplement batch should be listed");
+    assert_eq!(supplement["topic_count"], 1);
+    assert_eq!(
+        supplement["supplement_of_batch_id"],
+        previous_batch.to_string()
+    );
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

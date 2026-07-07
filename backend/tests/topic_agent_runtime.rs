@@ -1,11 +1,18 @@
 use async_trait::async_trait;
-use novex_api::agents::conversation::{AgentMessageRole, CreateAgentConversationInput};
-use novex_api::agents::conversational_runtime::{AgentRuntime, AgentTurnRequest};
-use novex_api::agents::models::{ContentTopicFilter, ContentTopicSource, ContentTopicStatus};
+use novex_api::agents::conversation::{
+    AgentMessageRole, CreateAgentConversationInput, CreateAgentMessageInput,
+};
+use novex_api::agents::conversational_runtime::{
+    AgentRuntime, AgentRuntimeError, AgentTurnRequest,
+};
+use novex_api::agents::models::{
+    ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatchStatus,
+};
 use novex_api::agents::{LLMClient, LLMError};
 use novex_api::repositories::{
-    ConversationRepository, PostgresConversationRepository, PostgresProjectRepository,
-    PostgresScriptRepository, PostgresTopicRepository, TopicRepository,
+    ConversationRepository, CreateContentTopicInput, CreateTopicGenerationBatchInput,
+    PostgresConversationRepository, PostgresProjectRepository, PostgresScriptRepository,
+    PostgresTopicRepository, TopicRepository,
 };
 use novex_model::LLMPrompt;
 use serde_json::json;
@@ -165,6 +172,23 @@ fn build_topic_runtime(
     (runtime, conversation_repository, topic_repository)
 }
 
+fn topic_input(project_id: Uuid, batch_id: Uuid, title: &str) -> CreateContentTopicInput {
+    CreateContentTopicInput {
+        project_id,
+        batch_id: Some(batch_id),
+        title: title.to_string(),
+        angle: "从内容生产流程角度解释 AI 工具落地".to_string(),
+        target_audience: "内容运营负责人".to_string(),
+        hook_points: vec!["低成本提效".to_string()],
+        content_type: "knowledge".to_string(),
+        score: Some(86.0),
+        score_reason: "选题贴近当前项目定位".to_string(),
+        tags: vec!["AI工具".to_string()],
+        source: ContentTopicSource::Agent,
+        metadata: json!({}),
+    }
+}
+
 #[tokio::test]
 async fn topic_agent_generates_topics_persists_batch_and_records_steps() {
     let (admin_pool, test_pool, database_name) = migrated_pool().await;
@@ -211,6 +235,7 @@ async fn topic_agent_generates_topics_persists_batch_and_records_steps() {
         .handle_turn(AgentTurnRequest {
             conversation_id: conversation.id,
             user_message: "本周 AI 工具方向，生成 2 个选题".to_string(),
+            supplement_of_batch_id: None,
         })
         .await
         .unwrap();
@@ -273,6 +298,399 @@ async fn topic_agent_generates_topics_persists_batch_and_records_steps() {
 }
 
 #[tokio::test]
+async fn topic_agent_generates_supplement_batch_without_mutating_original_batch() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let llm_client = Arc::new(ScriptedLLMClient::returning(json!({
+        "topics": [
+            {
+                "title": "补充选题：AI 工作流复盘",
+                "angle": "从复盘历史生成的遗漏角度补充",
+                "target_audience": "内容运营负责人",
+                "hook_points": ["补齐遗漏", "保持批次可追溯"],
+                "content_type": "knowledge",
+                "score": 90,
+                "score_reason": "适合作为历史批次补充",
+                "tags": ["AI工具", "补充选题"]
+            }
+        ]
+    })));
+    let (runtime, conversation_repository, topic_repository) =
+        build_topic_runtime(test_pool.clone(), llm_client);
+    let original_batch = topic_repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            supplement_of_batch_id: None,
+            prompt: "原始生成 AI 工具方向选题".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({ "original": true }),
+        })
+        .await
+        .unwrap();
+    topic_repository
+        .create_topic(topic_input(project_id, original_batch.id, "原始批次选题"))
+        .await
+        .unwrap();
+    let conversation = conversation_repository
+        .create_conversation(CreateAgentConversationInput {
+            project_id: Some(project_id),
+            agent_type: "topic".to_string(),
+            subject_type: None,
+            subject_id: None,
+            title: "选题补充".to_string(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+
+    let response = runtime
+        .handle_turn(AgentTurnRequest {
+            conversation_id: conversation.id,
+            user_message: "围绕遗漏的 AI 工作流角度补充 1 个选题".to_string(),
+            supplement_of_batch_id: Some(original_batch.id),
+        })
+        .await
+        .unwrap();
+
+    let supplement_batch_id: Uuid =
+        serde_json::from_value(response.agent_message.metadata["batch_id"].clone()).unwrap();
+    assert_ne!(supplement_batch_id, original_batch.id);
+    assert_eq!(
+        response.agent_message.metadata["supplement_of_batch_id"],
+        json!(original_batch.id)
+    );
+    assert_eq!(response.agent_message.metadata["topic_count"], 1);
+
+    let supplement_batch = topic_repository
+        .get_generation_batch(supplement_batch_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        supplement_batch.supplement_of_batch_id,
+        Some(original_batch.id)
+    );
+    let original_after = topic_repository
+        .get_generation_batch(original_batch.id)
+        .await
+        .unwrap();
+    assert_eq!(original_after.prompt, "原始生成 AI 工具方向选题");
+    assert_eq!(original_after.requested_count, 1);
+    assert_eq!(original_after.source_run_id, None);
+    assert_eq!(original_after.metadata, json!({ "original": true }));
+
+    let supplement_topics = topic_repository
+        .list_topics(
+            project_id,
+            ContentTopicFilter {
+                status: Some(ContentTopicStatus::Idea),
+                source: Some(ContentTopicSource::Agent),
+                batch_id: Some(supplement_batch_id),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(supplement_topics.len(), 1);
+    assert_eq!(supplement_topics[0].batch_id, Some(supplement_batch_id));
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn topic_agent_includes_topic_context_when_generating_supplement_batch() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let llm_client = Arc::new(ScriptedLLMClient::returning(json!({
+        "topics": [
+            {
+                "title": "补充选题：AI 工具落地复盘",
+                "angle": "基于已有主题继续补充实操复盘角度",
+                "target_audience": "内容运营负责人",
+                "hook_points": ["延续原主题", "避开重复角度"],
+                "content_type": "knowledge",
+                "score": 90,
+                "score_reason": "与原始主题相关且补充新角度",
+                "tags": ["AI工具", "复盘"]
+            }
+        ]
+    })));
+    let (runtime, conversation_repository, topic_repository) =
+        build_topic_runtime(test_pool.clone(), llm_client.clone());
+    let original_batch = topic_repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            supplement_of_batch_id: None,
+            prompt: "原始生成 AI 工具方向选题".to_string(),
+            requested_count: 2,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({ "original": true }),
+        })
+        .await
+        .unwrap();
+    topic_repository
+        .create_topic(topic_input(project_id, original_batch.id, "原始批次选题"))
+        .await
+        .unwrap();
+    let existing_supplement_batch = topic_repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            supplement_of_batch_id: Some(original_batch.id),
+            prompt: "第一次补充：加入工具清单方向".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    topic_repository
+        .create_topic(topic_input(
+            project_id,
+            existing_supplement_batch.id,
+            "既有补充批次选题",
+        ))
+        .await
+        .unwrap();
+    let unrelated_batch = topic_repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            supplement_of_batch_id: None,
+            prompt: "无关原始批次".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    topic_repository
+        .create_topic(topic_input(project_id, unrelated_batch.id, "无关批次选题"))
+        .await
+        .unwrap();
+
+    let conversation = conversation_repository
+        .create_conversation(CreateAgentConversationInput {
+            project_id: Some(project_id),
+            agent_type: "topic".to_string(),
+            subject_type: None,
+            subject_id: None,
+            title: "选题补充".to_string(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    conversation_repository
+        .save_message(CreateAgentMessageInput {
+            conversation_id: conversation.id,
+            role: AgentMessageRole::User,
+            content: "上一轮要求：更偏实操路线".to_string(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    conversation_repository
+        .save_message(CreateAgentMessageInput {
+            conversation_id: conversation.id,
+            role: AgentMessageRole::Assistant,
+            content: "上一轮已生成了基础方向".to_string(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+
+    runtime
+        .handle_turn(AgentTurnRequest {
+            conversation_id: conversation.id,
+            user_message: "继续补充 1 个复盘角度".to_string(),
+            supplement_of_batch_id: Some(existing_supplement_batch.id),
+        })
+        .await
+        .unwrap();
+
+    {
+        let prompts = llm_client.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        let prompt = &prompts[0].user;
+        assert!(prompt.contains("原始生成 AI 工具方向选题"));
+        assert!(prompt.contains("原始批次选题"));
+        assert!(prompt.contains("既有补充批次选题"));
+        assert!(prompt.contains("上一轮要求：更偏实操路线"));
+        assert!(prompt.contains("上一轮已生成了基础方向"));
+        assert!(prompt.contains("基于同一主题继续扩展"));
+        assert!(prompt.contains("避免重复已有选题"));
+        assert!(!prompt.contains("无关批次选题"));
+    }
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn topic_agent_rejects_unusable_supplement_targets_before_llm_call() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let other_project_id = insert_project(&test_pool).await;
+    let llm_client = Arc::new(ScriptedLLMClient::returning(json!({
+        "topics": [
+            {
+                "title": "不应生成的补充选题",
+                "angle": "目标不可用时不应调用 LLM",
+                "target_audience": "内容运营负责人",
+                "hook_points": ["拒绝生成"],
+                "content_type": "knowledge",
+                "score": 80,
+                "score_reason": "不应被使用",
+                "tags": ["AI工具"]
+            }
+        ]
+    })));
+    let (runtime, conversation_repository, topic_repository) =
+        build_topic_runtime(test_pool.clone(), llm_client.clone());
+    let conversation = conversation_repository
+        .create_conversation(CreateAgentConversationInput {
+            project_id: Some(project_id),
+            agent_type: "topic".to_string(),
+            subject_type: None,
+            subject_id: None,
+            title: "选题补充".to_string(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+
+    let other_project_batch = topic_repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id: other_project_id,
+            source_run_id: None,
+            supplement_of_batch_id: None,
+            prompt: "其他项目批次".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    topic_repository
+        .create_topic(topic_input(
+            other_project_id,
+            other_project_batch.id,
+            "其他项目选题",
+        ))
+        .await
+        .unwrap();
+    let failed_batch = topic_repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            supplement_of_batch_id: None,
+            prompt: "失败批次".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Failed,
+            error_message: Some("invalid topic JSON".to_string()),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    let empty_batch = topic_repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            supplement_of_batch_id: None,
+            prompt: "空批次".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    let cases = [
+        (
+            Uuid::new_v4(),
+            "missing",
+            "topic generation batch not found",
+        ),
+        (
+            other_project_batch.id,
+            "cross_project",
+            "topic generation batch not found",
+        ),
+        (
+            failed_batch.id,
+            "failed",
+            "topic generation batch cannot be supplemented",
+        ),
+        (
+            empty_batch.id,
+            "empty",
+            "topic generation batch cannot be supplemented",
+        ),
+    ];
+
+    let batch_count_before = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM topic_generation_batches WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    let topic_count_before =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM content_topics WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_one(&test_pool)
+            .await
+            .unwrap();
+
+    for (target_batch_id, label, expected_error) in cases {
+        let error = runtime
+            .handle_turn(AgentTurnRequest {
+                conversation_id: conversation.id,
+                user_message: format!("{label}: 补充 1 个选题"),
+                supplement_of_batch_id: Some(target_batch_id),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(expected_error),
+            "{label} should contain {expected_error}, got {error}"
+        );
+        assert!(matches!(error, AgentRuntimeError::TopicRepository(_)));
+    }
+
+    let batch_count_after = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM topic_generation_batches WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    let topic_count_after =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM content_topics WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_one(&test_pool)
+            .await
+            .unwrap();
+
+    assert_eq!(batch_count_after, batch_count_before);
+    assert_eq!(topic_count_after, topic_count_before);
+    assert!(llm_client.prompts.lock().unwrap().is_empty());
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
 async fn topic_agent_rejects_invalid_llm_output_without_partial_topics() {
     let (admin_pool, test_pool, database_name) = migrated_pool().await;
     let project_id = insert_project(&test_pool).await;
@@ -307,6 +725,7 @@ async fn topic_agent_rejects_invalid_llm_output_without_partial_topics() {
         .handle_turn(AgentTurnRequest {
             conversation_id: conversation.id,
             user_message: "生成 1 个 AI 工具方向选题".to_string(),
+            supplement_of_batch_id: None,
         })
         .await
         .unwrap_err();
@@ -417,6 +836,7 @@ async fn topic_agent_rejects_empty_invalid_out_of_range_and_llm_failure_outputs(
             .handle_turn(AgentTurnRequest {
                 conversation_id: conversation.id,
                 user_message: "生成 1 个 AI 工具方向选题".to_string(),
+                supplement_of_batch_id: None,
             })
             .await
             .unwrap_err();

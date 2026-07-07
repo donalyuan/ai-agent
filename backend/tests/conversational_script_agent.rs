@@ -246,6 +246,7 @@ async fn script_agent_dialogue_updates_target_scene_and_records_messages() {
         .handle_turn(AgentTurnRequest {
             conversation_id: conversation.id,
             user_message: "把第 3 镜改得更有冲突感，画面换成办公室深夜加班".to_string(),
+            supplement_of_batch_id: None,
         })
         .await
         .unwrap();
@@ -358,6 +359,7 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
         .handle_turn(AgentTurnRequest {
             conversation_id: conversation.id,
             user_message: "帮我生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本".to_string(),
+            supplement_of_batch_id: None,
         })
         .await
         .unwrap();
@@ -452,6 +454,7 @@ async fn script_agent_dialogue_asks_for_missing_generation_fields_without_creati
         .handle_turn(AgentTurnRequest {
             conversation_id: conversation.id,
             user_message: "帮我生成脚本".to_string(),
+            supplement_of_batch_id: None,
         })
         .await
         .unwrap();
@@ -522,6 +525,7 @@ async fn script_agent_dialogue_records_failed_run_when_generation_llm_fails() {
         .handle_turn(AgentTurnRequest {
             conversation_id: conversation.id,
             user_message: "帮我生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本".to_string(),
+            supplement_of_batch_id: None,
         })
         .await
         .unwrap_err();

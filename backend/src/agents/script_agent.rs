@@ -469,6 +469,7 @@ impl From<TopicRepositoryError> for ScriptAgentError {
                 Self::Validation(error.to_string())
             }
             TopicRepositoryError::BatchNotFound(_)
+            | TopicRepositoryError::BatchCannotBeSupplemented(_)
             | TopicRepositoryError::TopicCannotBeDeleted(_)
             | TopicRepositoryError::Storage(_) => Self::DatabaseError(error.to_string()),
         }

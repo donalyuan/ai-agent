@@ -740,6 +740,7 @@ async fn send_agent_message(
         .handle_turn(AgentTurnRequest {
             conversation_id,
             user_message: request.content,
+            supplement_of_batch_id: request.supplement_of_batch_id,
         })
         .await?;
 
@@ -920,6 +921,10 @@ fn topic_repository_error_response(
         TopicRepositoryError::BatchNotFound(batch_id) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "选题生成批次不存在", "batch_id": batch_id })),
+        ),
+        TopicRepositoryError::BatchCannotBeSupplemented(batch_id) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "该历史生成批次不可补充", "batch_id": batch_id })),
         ),
         TopicRepositoryError::TopicCannotBeDeleted(topic_id) => (
             StatusCode::BAD_REQUEST,

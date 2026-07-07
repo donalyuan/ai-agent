@@ -129,6 +129,7 @@ export type TopicGenerationBatchStatus = "running" | "succeeded" | "failed";
 export type TopicGenerationBatchSummary = {
   batch_id: string;
   project_id: string;
+  supplement_of_batch_id: string | null;
   prompt: string;
   requested_count: number;
   topic_count: number;
@@ -274,6 +275,7 @@ export type AgentMessageListResponse = {
 
 export type SendAgentMessagePayload = {
   content: string;
+  supplement_of_batch_id?: string | null;
 };
 
 export type AgentTurnResponse = {

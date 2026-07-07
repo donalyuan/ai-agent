@@ -63,6 +63,61 @@ function visibleTopicGenerationBatches(batches: TopicGenerationBatchSummary[]) {
   return batches.filter((batch) => batch.status === "succeeded" && batch.topic_count > 0);
 }
 
+function topicBatchRootEntries(batches: TopicGenerationBatchSummary[]) {
+  return batches.filter((batch) => !batch.supplement_of_batch_id);
+}
+
+function topicBatchGroupIds(batchId: string | null, batches: TopicGenerationBatchSummary[]) {
+  if (!batchId) {
+    return [];
+  }
+  const selectedBatch = batches.find((batch) => batch.batch_id === batchId);
+  if (!selectedBatch) {
+    return [batchId];
+  }
+  const rootBatchId = selectedBatch.supplement_of_batch_id || selectedBatch.batch_id;
+  const supplementIds = batches
+    .filter((batch) => batch.supplement_of_batch_id === rootBatchId)
+    .map((batch) => batch.batch_id);
+  return [rootBatchId, ...supplementIds];
+}
+
+function sumTopicStats(responses: { stats: ContentTopicStats }[]) {
+  return responses.reduce<ContentTopicStats>(
+    (totalStats, response) => ({
+      total: totalStats.total + response.stats.total,
+      idea: totalStats.idea + response.stats.idea,
+      approved: totalStats.approved + response.stats.approved,
+      scripted: totalStats.scripted + response.stats.scripted,
+      archived: totalStats.archived + response.stats.archived,
+    }),
+    emptyTopicStats,
+  );
+}
+
+async function listContentTopicsForBatchGroup(
+  client: ApiClient,
+  projectId: string,
+  filters: ReturnType<typeof topicListFilters>,
+  batchIds: string[],
+) {
+  if (batchIds.length <= 1) {
+    return listContentTopics(client, projectId, filters);
+  }
+
+  const responses = await Promise.all(
+    batchIds.map((batchId) => listContentTopics(client, projectId, { ...filters, batch_id: batchId })),
+  );
+  const topicsById = new Map<string, ContentTopic>();
+  for (const topic of responses.flatMap((response) => response.topics)) {
+    topicsById.set(topic.topic_id, topic);
+  }
+  return {
+    topics: Array.from(topicsById.values()),
+    stats: sumTopicStats(responses),
+  };
+}
+
 export default function Home() {
   const client = useMemo(() => createApiClient(), []);
   const [apiAvailable, setApiAvailable] = useState<boolean | null>(null);
@@ -134,7 +189,10 @@ export default function Home() {
         ? topicBatchFilter
         : topicBatches[0]?.batch_id || null;
   const selectedHistoryBatch =
-    topicBatches.find((batch) => batch.batch_id === historyTopicBatchId) || topicBatches[0] || null;
+    topicBatches.find((batch) => batch.batch_id === historyTopicBatchId) ||
+    topicBatchRootEntries(topicBatches)[0] ||
+    topicBatches[0] ||
+    null;
   const historyActiveTopicBatchId = selectedHistoryBatch?.batch_id || null;
   const activeTopicBatchId =
     contentStrategyView === "history" ? historyActiveTopicBatchId : poolActiveTopicBatchId;
@@ -348,10 +406,12 @@ export default function Home() {
       setTopicError("");
 
       try {
-        const response = await listContentTopics(
+        const filters = topicListFilters(topicStatusFilter, topicSourceFilter, activeTopicBatchId);
+        const response = await listContentTopicsForBatchGroup(
           client,
           selectedProjectId,
-          topicListFilters(topicStatusFilter, topicSourceFilter, activeTopicBatchId),
+          filters,
+          topicBatchGroupIds(activeTopicBatchId, topicBatches),
         );
         if (!active) {
           return;
@@ -387,6 +447,7 @@ export default function Home() {
     contentStrategyView,
     selectedProjectId,
     selectedMenuKey,
+    topicBatches,
     topicBatchesLoaded,
     topicSourceFilter,
     topicStatusFilter,
@@ -517,14 +578,19 @@ export default function Home() {
     }
   }
 
-  async function refreshContentTopics(batchId: string | null = activeTopicBatchId) {
+  async function refreshContentTopics(
+    batchId: string | null = activeTopicBatchId,
+    batches: TopicGenerationBatchSummary[] = topicBatches,
+  ) {
     if (!selectedProjectId) {
       return;
     }
-    const response = await listContentTopics(
+    const filters = topicListFilters(topicStatusFilter, topicSourceFilter, batchId);
+    const response = await listContentTopicsForBatchGroup(
       client,
       selectedProjectId,
-      topicListFilters(topicStatusFilter, topicSourceFilter, batchId),
+      filters,
+      topicBatchGroupIds(batchId, batches),
     );
     const sortedTopics = sortContentTopicsByScore(response.topics);
     setTopics(sortedTopics);
@@ -539,12 +605,14 @@ export default function Home() {
 
   async function refreshTopicBatches() {
     if (!selectedProjectId) {
-      return;
+      return [];
     }
     const response = await listTopicGenerationBatches(client, selectedProjectId);
-    setTopicBatches(visibleTopicGenerationBatches(response.batches));
+    const visibleBatches = visibleTopicGenerationBatches(response.batches);
+    setTopicBatches(visibleBatches);
     setTopicBatchesLoaded(true);
     setTopicBatchError("");
+    return visibleBatches;
   }
 
   async function refreshProjectScripts() {
@@ -653,13 +721,58 @@ export default function Home() {
 
     try {
       await deleteContentTopic(client, topic.topic_id);
-      await refreshTopicBatches();
-      await refreshContentTopics(activeTopicBatchId);
+      const refreshedBatches = await refreshTopicBatches();
+      await refreshContentTopics(activeTopicBatchId, refreshedBatches);
     } catch (error) {
       setTopicActionError(errorToMessage(error));
     } finally {
       setDeletingTopicId(null);
     }
+  }
+
+  async function handleSupplementTopicBatch(batchId: string, content: string) {
+    if (!selectedProjectId) {
+      throw new Error("请先选择项目");
+    }
+
+    const projectIdAtSend = selectedProjectId;
+    let conversationId = topicAgentConversationId;
+    if (!conversationId) {
+      const conversation = await createAgentConversation(client, {
+        project_id: selectedProjectId,
+        agent_type: "topic",
+        title: "选题 Agent 对话",
+      });
+      if (selectedProjectIdRef.current !== projectIdAtSend) {
+        return;
+      }
+      conversationId = conversation.conversation_id;
+      setTopicAgentConversationId(conversationId);
+    }
+
+    const response = await sendAgentMessage(client, conversationId, {
+      content,
+      supplement_of_batch_id: batchId,
+    });
+    if (selectedProjectIdRef.current !== projectIdAtSend) {
+      return;
+    }
+    setTopicAgentMessages((currentMessages) => [
+      ...currentMessages,
+      response.user_message,
+      response.assistant_message,
+    ]);
+
+    const newBatchId = getTopicAgentBatchId(response.assistant_message);
+    if (!newBatchId) {
+      throw new Error("补充生成未返回批次");
+    }
+
+    const refreshedBatches = await refreshTopicBatches();
+    setHistoryTopicBatchId(newBatchId);
+    setTopicBatchViewMode("batch");
+    setTopicBatchFilter(newBatchId);
+    await refreshContentTopics(newBatchId, refreshedBatches);
   }
 
   async function handleSendTopicAgentMessage(event: FormEvent<HTMLFormElement>) {
@@ -910,6 +1023,7 @@ export default function Home() {
           writesDisabled={writesDisabled}
           onDeleteTopic={handleDeleteTopic}
           onSelectTopicBatch={handleSelectHistoryTopicBatch}
+          onSupplementTopicBatch={handleSupplementTopicBatch}
         />
       ) : selectedMenuKey === contentStrategyMenuKey ? (
         <ContentStrategyPage

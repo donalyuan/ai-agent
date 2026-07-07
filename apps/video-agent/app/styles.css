@@ -953,13 +953,16 @@ button:focus-visible {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: minmax(300px, 360px) minmax(380px, 1fr) minmax(260px, 288px);
   gap: 16px;
 }
 
 .topicHistoryBatchPanel,
-.topicHistoryDetailPanel {
+.topicHistoryTopicPanel,
+.topicHistorySupplementPanel {
   min-width: 0;
+  min-height: 0;
+  max-height: calc(100vh - 306px);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   display: grid;
@@ -967,16 +970,15 @@ button:focus-visible {
   gap: 12px;
   background: var(--color-surface);
   padding: 14px;
-}
-
-.topicHistoryBatchPanel {
-  max-height: calc(100vh - 306px);
   overflow: hidden;
 }
 
-.topicHistoryDetailPanel {
-  max-height: calc(100vh - 306px);
-  overflow: hidden;
+.topicHistoryTopicPanel {
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+}
+
+.topicHistorySupplementPanel {
+  grid-template-rows: auto auto auto minmax(0, auto) auto;
 }
 
 .topicHistoryBatchList,
@@ -1023,12 +1025,22 @@ button:focus-visible {
   font-size: 12px;
 }
 
+.topicHistoryBatchItem em {
+  width: fit-content;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-primary);
+  font-size: 11px;
+  font-style: normal;
+  padding: 2px 8px;
+}
+
 .topicHistoryBatchSummary {
   min-height: 42px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
   gap: 8px;
   padding: 10px 12px;
   background: var(--color-surface-muted);
@@ -1043,14 +1055,125 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+.topicHistoryRootBatch {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  background: var(--color-surface-muted);
+}
+
+.topicHistoryRootBatch span,
+.topicHistoryRootBatch small {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.topicHistoryRootBatch strong,
+.topicHistoryRootBatch small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topicHistoryRootBatch strong {
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.topicHistorySupplementList,
+.topicHistorySupplementForm {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  background: var(--color-surface-muted);
+}
+
+.topicHistorySupplementList h3,
+.topicHistorySupplementForm h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.topicHistorySupplementItems {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.topicHistorySupplementItem {
+  min-width: 0;
+  min-height: 58px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--color-surface);
+  text-align: left;
+}
+
+.topicHistorySupplementItem.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.topicHistorySupplementItem strong,
+.topicHistorySupplementItem span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topicHistorySupplementItem strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.topicHistorySupplementItem span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.topicHistorySupplementForm .agentChatForm {
+  gap: 8px;
+}
+
+.topicHistorySupplementForm .agentChatForm textarea {
+  min-height: 96px;
+}
+
+.topicHistorySupplementForm .primaryButton {
+  width: 100%;
+}
+
+.topicHistorySupplementHint {
+  margin: 0;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  padding-top: 10px;
+}
+
 .topicHistoryTopicRow {
   min-height: 72px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) 88px 72px 160px;
+  grid-template-columns: minmax(0, 1fr) 72px 74px 56px minmax(86px, max-content);
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 11px 12px;
   background: var(--color-surface);
 }
@@ -1075,10 +1198,29 @@ button:focus-visible {
 }
 
 .topicHistoryTopicMain span,
+.topicHistoryOriginBadge,
 .topicHistoryScore,
 .topicHistoryLocked {
   color: var(--color-text-muted);
   font-size: 12px;
+}
+
+.topicHistoryOriginBadge {
+  min-height: 26px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.topicHistoryOriginBadge.supplement {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
 }
 
 .topicHistoryActions {
@@ -1093,7 +1235,7 @@ button:focus-visible {
 }
 
 .topicHistoryLocked {
-  width: 100%;
+  min-width: 86px;
   min-height: 32px;
   border: 1px solid var(--color-border);
   border-radius: 8px;

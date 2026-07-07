@@ -202,6 +202,7 @@ pub struct TopicGenerationBatch {
     pub id: Uuid,
     pub project_id: Uuid,
     pub source_run_id: Option<Uuid>,
+    pub supplement_of_batch_id: Option<Uuid>,
     pub prompt: String,
     pub requested_count: i32,
     pub status: TopicGenerationBatchStatus,

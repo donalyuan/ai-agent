@@ -9,7 +9,7 @@ use novex_api::repositories::{
     TopicRepositoryError, UpdateContentTopicInput, UpdateTopicGenerationBatchInput,
 };
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -128,6 +128,44 @@ impl TopicRepository for MemoryTopicRepository {
         Ok(topics)
     }
 
+    async fn list_topics_for_batch_group(
+        &self,
+        project_id: Uuid,
+        root_batch_id: Uuid,
+    ) -> Result<Vec<ContentTopic>, TopicRepositoryError> {
+        let batches = self.batches.lock().unwrap();
+        let group_batch_ids = batches
+            .values()
+            .filter(|batch| batch.project_id == project_id)
+            .filter(|batch| {
+                batch.id == root_batch_id || batch.supplement_of_batch_id == Some(root_batch_id)
+            })
+            .map(|batch| batch.id)
+            .collect::<HashSet<_>>();
+        drop(batches);
+
+        let mut topics = self
+            .topics
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|topic| topic.project_id == project_id)
+            .filter(|topic| topic.deleted_at.is_none())
+            .filter(|topic| {
+                topic
+                    .batch_id
+                    .is_some_and(|batch_id| group_batch_ids.contains(&batch_id))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        topics.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(topics)
+    }
+
     async fn count_topics_by_status(
         &self,
         project_id: Uuid,
@@ -171,6 +209,7 @@ impl TopicRepository for MemoryTopicRepository {
             id: Uuid::new_v4(),
             project_id: input.project_id,
             source_run_id: input.source_run_id,
+            supplement_of_batch_id: input.supplement_of_batch_id,
             prompt: input.prompt,
             requested_count: input.requested_count,
             status: input.status,
@@ -209,6 +248,48 @@ impl TopicRepository for MemoryTopicRepository {
             .get(&batch_id)
             .cloned()
             .ok_or(TopicRepositoryError::BatchNotFound(batch_id))
+    }
+
+    async fn resolve_supplement_root_batch(
+        &self,
+        project_id: Uuid,
+        target_batch_id: Uuid,
+    ) -> Result<TopicGenerationBatch, TopicRepositoryError> {
+        let batches = self.batches.lock().unwrap();
+        let target = batches
+            .get(&target_batch_id)
+            .filter(|batch| batch.project_id == project_id)
+            .cloned()
+            .ok_or(TopicRepositoryError::BatchNotFound(target_batch_id))?;
+        if target.status != TopicGenerationBatchStatus::Succeeded {
+            return Err(TopicRepositoryError::BatchCannotBeSupplemented(
+                target_batch_id,
+            ));
+        }
+        let visible_topic_count = self
+            .topics
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|topic| topic.project_id == project_id)
+            .filter(|topic| topic.batch_id == Some(target_batch_id))
+            .filter(|topic| topic.deleted_at.is_none())
+            .count();
+        if visible_topic_count == 0 {
+            return Err(TopicRepositoryError::BatchCannotBeSupplemented(
+                target_batch_id,
+            ));
+        }
+
+        let root_batch_id = target.supplement_of_batch_id.unwrap_or(target.id);
+        if root_batch_id == target.id {
+            return Ok(target);
+        }
+        batches
+            .get(&root_batch_id)
+            .filter(|batch| batch.project_id == project_id)
+            .cloned()
+            .ok_or(TopicRepositoryError::BatchNotFound(root_batch_id))
     }
 
     async fn list_generation_batches(
@@ -350,6 +431,7 @@ async fn topic_repository_trait_supports_generation_batches() {
         .create_generation_batch(CreateTopicGenerationBatchInput {
             project_id,
             source_run_id: Some(run_id),
+            supplement_of_batch_id: None,
             prompt: "本周 AI 工具方向，生成 3 个选题".to_string(),
             requested_count: 3,
             status: TopicGenerationBatchStatus::Running,
@@ -418,6 +500,7 @@ async fn topic_repository_trait_soft_deletes_visible_topics_only() {
         .create_generation_batch(CreateTopicGenerationBatchInput {
             project_id,
             source_run_id: None,
+            supplement_of_batch_id: None,
             prompt: "本周 AI 工具方向，生成 2 个选题".to_string(),
             requested_count: 2,
             status: TopicGenerationBatchStatus::Succeeded,

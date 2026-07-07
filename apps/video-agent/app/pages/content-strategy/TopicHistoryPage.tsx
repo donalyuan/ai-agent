@@ -1,3 +1,4 @@
+import { type FormEvent, useMemo, useState } from "react";
 import type {
   ContentTopic,
   ContentTopicStats,
@@ -27,6 +28,7 @@ type TopicHistoryPageProps = {
   writesDisabled: boolean;
   onDeleteTopic: (topic: ContentTopic) => void;
   onSelectTopicBatch: (batchId: string) => void;
+  onSupplementTopicBatch: (batchId: string, content: string) => Promise<void>;
 };
 
 export function TopicHistoryPage({
@@ -44,9 +46,52 @@ export function TopicHistoryPage({
   writesDisabled,
   onDeleteTopic,
   onSelectTopicBatch,
+  onSupplementTopicBatch,
 }: TopicHistoryPageProps) {
+  const [supplementDraft, setSupplementDraft] = useState("");
+  const [supplementError, setSupplementError] = useState("");
+  const [supplementing, setSupplementing] = useState(false);
+  const rootBatches = useMemo(
+    () => topicBatches.filter((batch) => !batch.supplement_of_batch_id),
+    [topicBatches],
+  );
   const selectedBatch =
-    topicBatches.find((batch) => batch.batch_id === activeTopicBatchId) || topicBatches[0] || null;
+    topicBatches.find((batch) => batch.batch_id === activeTopicBatchId) || rootBatches[0] || topicBatches[0] || null;
+  const rootBatchId = selectedBatch?.supplement_of_batch_id || selectedBatch?.batch_id || null;
+  const rootBatch = rootBatchId
+    ? topicBatches.find((batch) => batch.batch_id === rootBatchId) || selectedBatch
+    : null;
+  const relatedSupplementBatches = useMemo(
+    () =>
+      rootBatchId
+        ? topicBatches.filter((batch) => batch.supplement_of_batch_id === rootBatchId)
+        : [],
+    [rootBatchId, topicBatches],
+  );
+  const supplementDisabled = writesDisabled || supplementing || !selectedBatch;
+
+  async function handleSupplementSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedBatch) {
+      return;
+    }
+    const content = supplementDraft.trim();
+    if (!content) {
+      setSupplementError("请输入补充要求");
+      return;
+    }
+
+    setSupplementError("");
+    setSupplementing(true);
+    try {
+      await onSupplementTopicBatch(selectedBatch.batch_id, content);
+      setSupplementDraft("");
+    } catch (error) {
+      setSupplementError(errorToMessage(error));
+    } finally {
+      setSupplementing(false);
+    }
+  }
 
   return (
     <div className="contentStrategyWorkspace topicHistoryWorkspace">
@@ -56,8 +101,8 @@ export function TopicHistoryPage({
           <h2>历史生成</h2>
         </div>
         <div className="strategyStats" aria-label="历史选题统计">
-          <MetricCard label="历史批次" tone="neutral" value={topicBatches.length} />
-          <MetricCard label="当前批次选题" tone="success" value={topics.length} />
+          <MetricCard label="历史主题" tone="neutral" value={rootBatches.length} />
+          <MetricCard label="当前主题选题" tone="success" value={topics.length} />
           <MetricCard label="已成稿" tone="primary" value={stats.scripted} />
         </div>
       </section>
@@ -69,11 +114,11 @@ export function TopicHistoryPage({
               <p className="sectionKicker">Generation History</p>
               <h2>历史生成</h2>
             </div>
-            <span>{loadingTopicBatches ? "加载中" : `${topicBatches.length} 批`}</span>
+            <span>{loadingTopicBatches ? "加载中" : `${rootBatches.length} 组`}</span>
           </div>
 
           {topicBatchError ? <p className="errorText" role="alert">{topicBatchError}</p> : null}
-          {!loadingTopicBatches && !topicBatchError && !topicBatches.length ? (
+          {!loadingTopicBatches && !topicBatchError && !rootBatches.length ? (
             <div className="emptyState">
               <strong>还没有历史生成</strong>
               <span>通过选题 Agent 生成候选后，这里会按批次归档。</span>
@@ -81,11 +126,11 @@ export function TopicHistoryPage({
           ) : null}
 
           <div className="topicHistoryBatchList">
-            {topicBatches.map((batch) => (
+            {rootBatches.map((batch) => (
               <button
-                aria-pressed={selectedBatch?.batch_id === batch.batch_id}
+                aria-pressed={rootBatchId === batch.batch_id}
                 className={
-                  selectedBatch?.batch_id === batch.batch_id
+                  rootBatchId === batch.batch_id
                     ? "topicHistoryBatchItem selected"
                     : "topicHistoryBatchItem"
                 }
@@ -102,21 +147,24 @@ export function TopicHistoryPage({
           </div>
         </aside>
 
-        <section aria-label="历史生成批次详情" className="topicHistoryDetailPanel">
+        <section aria-label="当前主题选题" className="topicHistoryTopicPanel">
           <div className="panelHeader compactHeader">
             <div>
-              <p className="sectionKicker">Batch Detail</p>
-              <h2>{selectedBatch ? selectedBatch.prompt : "选择生成批次"}</h2>
+              <p className="sectionKicker">Topic Group</p>
+              <h2>当前主题选题</h2>
             </div>
-            {project ? <span>{project.name}</span> : null}
+            {rootBatch ? <span>{rootBatch.prompt}</span> : project ? <span>{project.name}</span> : null}
           </div>
 
           {selectedBatch ? (
             <div className="topicHistoryBatchSummary" aria-label="批次详情">
-              <span>{`生成时间：${formatTopicBatchTime(selectedBatch.created_at)}`}</span>
-              <span>{`请求数量：${selectedBatch.requested_count}`}</span>
-              <span>{`当前可见：${selectedBatch.topic_count}`}</span>
-              <span>{topicBatchStatusLabels[selectedBatch.status]}</span>
+              <span>{`原始生成：${rootBatch ? formatTopicBatchTime(rootBatch.created_at) : "-"}`}</span>
+              <span>{`生成批次：${1 + relatedSupplementBatches.length}`}</span>
+              <span>{`主题可见：${topics.length}`}</span>
+              <span>{selectedBatch.supplement_of_batch_id ? "当前选中：补充批次" : "当前选中：原始批次"}</span>
+              {selectedBatch.supplement_of_batch_id && rootBatch ? (
+                <span>{`补充自：${rootBatch.prompt}`}</span>
+              ) : null}
             </div>
           ) : null}
 
@@ -126,7 +174,7 @@ export function TopicHistoryPage({
 
           {!loading && selectedBatch && !topics.length ? (
             <div className="emptyState">
-              <strong>当前批次没有可见选题</strong>
+              <strong>当前主题没有可见选题</strong>
               <span>已移除的选题不会继续显示在管理视图中。</span>
             </div>
           ) : null}
@@ -145,6 +193,15 @@ export function TopicHistoryPage({
                   </span>
                 </div>
                 <TopicStatusBadge status={topic.status} />
+                <span
+                  className={
+                    topic.batch_id === rootBatchId
+                      ? "topicHistoryOriginBadge"
+                      : "topicHistoryOriginBadge supplement"
+                  }
+                >
+                  {topic.batch_id === rootBatchId ? "原始生成" : "补充生成"}
+                </span>
                 {topic.score !== null ? <span className="topicHistoryScore">{Math.round(topic.score)} 分</span> : null}
                 <div className="topicHistoryActions">
                   {topic.status === "scripted" ? (
@@ -164,9 +221,101 @@ export function TopicHistoryPage({
             ))}
           </div>
         </section>
+
+        <aside aria-label="补充操作" className="topicHistorySupplementPanel">
+          <div className="panelHeader compactHeader">
+            <div>
+              <p className="sectionKicker">Supplement</p>
+              <h2>补充操作</h2>
+            </div>
+            <span>{selectedBatch ? "批次上下文" : "待选择"}</span>
+          </div>
+
+          {rootBatch ? (
+            <div className="topicHistoryRootBatch" aria-label="原始批次">
+              <span>原始批次</span>
+              <strong>{rootBatch.prompt}</strong>
+              <small>{`${formatTopicBatchTime(rootBatch.created_at)} · ${rootBatch.topic_count} 条可见选题`}</small>
+            </div>
+          ) : (
+            <div className="emptyState">
+              <strong>请选择历史批次</strong>
+              <span>选择批次后可以查看补充关系并继续生成。</span>
+            </div>
+          )}
+
+          {selectedBatch ? (
+            <section aria-label="补充选题" className="topicHistorySupplementForm">
+              <div className="panelHeader compactHeader">
+                <div>
+                  <p className="sectionKicker">Prompt</p>
+                  <h3>补充选题</h3>
+                </div>
+                <span>{supplementing ? "生成中" : "可补充"}</span>
+              </div>
+              {supplementError ? <p className="errorText" role="alert">{supplementError}</p> : null}
+              <form className="agentChatForm" onSubmit={handleSupplementSubmit}>
+                <label>
+                  补充要求
+                  <textarea
+                    disabled={supplementDisabled}
+                    onChange={(event) => setSupplementDraft(event.target.value)}
+                    rows={4}
+                    value={supplementDraft}
+                  />
+                </label>
+                <button className="primaryButton" disabled={supplementDisabled} type="submit">
+                  {supplementing ? "补充生成中" : "补充生成"}
+                </button>
+              </form>
+            </section>
+          ) : null}
+
+          {selectedBatch && relatedSupplementBatches.length ? (
+            <section aria-label="关联补充批次" className="topicHistorySupplementList">
+              <div className="panelHeader compactHeader">
+                <div>
+                  <p className="sectionKicker">Related</p>
+                  <h3>关联补充批次</h3>
+                </div>
+                <span>{`${relatedSupplementBatches.length} 批`}</span>
+              </div>
+              <div className="topicHistorySupplementItems">
+                {relatedSupplementBatches.map((batch) => (
+                  <button
+                    className={
+                      selectedBatch.batch_id === batch.batch_id
+                        ? "topicHistorySupplementItem selected"
+                        : "topicHistorySupplementItem"
+                    }
+                    key={batch.batch_id}
+                    onClick={() => onSelectTopicBatch(batch.batch_id)}
+                    type="button"
+                  >
+                    <strong>{batch.prompt}</strong>
+                    <span>{`${formatTopicBatchTime(batch.created_at)} · ${batch.topic_count} 条`}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {selectedBatch ? (
+            <p className="topicHistorySupplementHint">
+              补充会创建新的生成批次，原始批次保持不变；再次补充时仍归入同一个原始批次。
+            </p>
+          ) : null}
+        </aside>
       </section>
     </div>
   );
+}
+
+function errorToMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "补充生成失败";
 }
 
 function MetricCard({

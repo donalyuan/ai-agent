@@ -255,6 +255,7 @@ const archivedTopic: ContentTopic = {
 const latestTopicBatch = {
   batch_id: "88888888-8888-4888-8888-888888888888",
   project_id: project.project_id,
+  supplement_of_batch_id: null,
   prompt: "最新一批 AI 工具选题",
   requested_count: 5,
   topic_count: 5,
@@ -267,6 +268,7 @@ const latestTopicBatch = {
 const previousTopicBatch = {
   batch_id: "77777777-7777-4777-8777-777777777777",
   project_id: project.project_id,
+  supplement_of_batch_id: null,
   prompt: "上一批 AI 内容流水线选题",
   requested_count: 5,
   topic_count: 5,
@@ -279,6 +281,7 @@ const previousTopicBatch = {
 const failedTopicBatch = {
   batch_id: "66666666-6666-4666-8666-666666666666",
   project_id: project.project_id,
+  supplement_of_batch_id: null,
   prompt: "失败的 AI 选题生成",
   requested_count: 5,
   topic_count: 0,
@@ -286,6 +289,19 @@ const failedTopicBatch = {
   error_message: "invalid topic JSON",
   created_at: "2026-07-02T00:20:00Z",
   updated_at: "2026-07-02T00:20:20Z",
+};
+
+const supplementTopicBatch = {
+  batch_id: "99999999-9999-4999-8999-999999999901",
+  project_id: project.project_id,
+  supplement_of_batch_id: previousTopicBatch.batch_id,
+  prompt: "补充上一批 AI 内容流水线选题",
+  requested_count: 2,
+  topic_count: 2,
+  status: "succeeded" as const,
+  error_message: null,
+  created_at: "2026-07-06T10:05:00Z",
+  updated_at: "2026-07-06T10:05:20Z",
 };
 
 const topicBatchListResponse: TopicGenerationBatchListResponse = {
@@ -1059,6 +1075,91 @@ describe("video-agent 视频工作台页面", () => {
     expect(screen.getByRole("region", { name: "选题池" })).toBeInTheDocument();
   });
 
+  it("历史生成页使用批次、选题和补充操作三列布局", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockTopicBatches(topicBatchListResponse);
+    mockTopics(topicListResponse);
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "历史生成" }));
+    const history = await screen.findByRole("region", { name: "历史生成列表页" });
+
+    const batchColumn = within(history).getByRole("complementary", { name: "历史生成批次" });
+    const topicColumn = within(history).getByRole("region", { name: "当前主题选题" });
+    const supplementColumn = within(history).getByRole("complementary", { name: "补充操作" });
+    expect(batchColumn).toHaveClass("topicHistoryBatchPanel");
+    expect(topicColumn).toHaveClass("topicHistoryTopicPanel");
+    expect(supplementColumn).toHaveClass("topicHistorySupplementPanel");
+    expect(within(topicColumn).getByRole("article", { name: `历史选题：${ideaTopic.title}` })).toBeInTheDocument();
+    expect(within(supplementColumn).getByRole("region", { name: "补充选题" })).toBeInTheDocument();
+  });
+
+  it("历史生成页按同一主题展示原始批次和补充批次选题", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockTopicBatches({ batches: [latestTopicBatch, supplementTopicBatch, previousTopicBatch] });
+    vi.mocked(api.listContentTopics).mockImplementation(async (_client, _projectId, filters = {}) => {
+      if (filters.batch_id === previousTopicBatch.batch_id) {
+        return {
+          topics: [
+            {
+              ...approvedTopic,
+              batch_id: previousTopicBatch.batch_id,
+              title: "原始批次主题选题",
+            },
+          ],
+          stats: { total: 1, idea: 0, approved: 1, scripted: 0, archived: 0 },
+        };
+      }
+      if (filters.batch_id === supplementTopicBatch.batch_id) {
+        return {
+          topics: [
+            {
+              ...ideaTopic,
+              batch_id: supplementTopicBatch.batch_id,
+              title: "补充批次主题选题",
+              source: "agent",
+            },
+          ],
+          stats: { total: 1, idea: 1, approved: 0, scripted: 0, archived: 0 },
+        };
+      }
+      return {
+        topics: [{ ...ideaTopic, batch_id: latestTopicBatch.batch_id, title: "最新批次选题" }],
+        stats: { total: 1, idea: 1, approved: 0, scripted: 0, archived: 0 },
+      };
+    });
+
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "历史生成" }));
+    const history = await screen.findByRole("region", { name: "历史生成列表页" });
+    const batchColumn = within(history).getByRole("complementary", { name: "历史生成批次" });
+    expect(within(batchColumn).queryByRole("button", { name: /补充上一批 AI 内容流水线选题/ })).not.toBeInTheDocument();
+    fireEvent.click(within(history).getByRole("button", { name: /^上一批 AI 内容流水线选题/ }));
+
+    const topicColumn = await screen.findByRole("region", { name: "当前主题选题" });
+    expect(await within(topicColumn).findByRole("article", { name: "历史选题：原始批次主题选题" })).toBeInTheDocument();
+    expect(await within(topicColumn).findByRole("article", { name: "历史选题：补充批次主题选题" })).toBeInTheDocument();
+    expect(within(topicColumn).getByText("原始生成")).toBeInTheDocument();
+    expect(within(topicColumn).getByText("补充生成")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(api.listContentTopics).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+        status: "all",
+        source: "all",
+        batch_id: previousTopicBatch.batch_id,
+      });
+      expect(api.listContentTopics).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+        status: "all",
+        source: "all",
+        batch_id: supplementTopicBatch.batch_id,
+      });
+    });
+  });
+
   it("内容策略页按生成批次展示历史选题，避免多个批次混在一起", async () => {
     vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
     mockProjects({ projects: [project] });
@@ -1208,6 +1309,145 @@ describe("video-agent 视频工作台页面", () => {
     });
     expect(screen.queryByRole("article", { name: `历史选题：${approvedTopic.title}` })).not.toBeInTheDocument();
     confirmSpy.mockRestore();
+  });
+
+  it("历史生成页补充选题后保持原始主题组选中并展示关联补充批次", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    vi.mocked(api.listTopicGenerationBatches)
+      .mockResolvedValueOnce({
+        batches: [latestTopicBatch, previousTopicBatch],
+      })
+      .mockResolvedValueOnce({
+        batches: [supplementTopicBatch, latestTopicBatch, previousTopicBatch],
+      });
+    vi.mocked(api.listContentTopics).mockImplementation(async (_client, _projectId, filters = {}) => {
+      if (filters.batch_id === previousTopicBatch.batch_id) {
+        return {
+          topics: [
+            {
+              ...approvedTopic,
+              batch_id: previousTopicBatch.batch_id,
+              title: "历史批次选题",
+            },
+          ],
+          stats: { total: 3, idea: 1, approved: 1, scripted: 1, archived: 0 },
+        };
+      }
+      if (filters.batch_id === supplementTopicBatch.batch_id) {
+        return {
+          topics: [
+            {
+              ...ideaTopic,
+              batch_id: supplementTopicBatch.batch_id,
+              title: "补充批次选题",
+              source: "agent",
+            },
+          ],
+          stats: { total: 4, idea: 2, approved: 1, scripted: 1, archived: 0 },
+        };
+      }
+      return {
+        topics: [
+          {
+            ...ideaTopic,
+            batch_id: latestTopicBatch.batch_id,
+            title: "最新批次选题",
+            source: "agent",
+          },
+        ],
+        stats: { total: 3, idea: 1, approved: 1, scripted: 1, archived: 0 },
+      };
+    });
+    vi.mocked(api.createAgentConversation).mockResolvedValue(topicConversation);
+    vi.mocked(api.sendAgentMessage).mockResolvedValue({
+      user_message: topicUserMessage,
+      assistant_message: {
+        ...topicAssistantMessage,
+        metadata: {
+          ...topicAssistantMessage.metadata,
+          batch_id: supplementTopicBatch.batch_id,
+          supplement_of_batch_id: previousTopicBatch.batch_id,
+          topic_count: 2,
+        },
+      },
+      run: topicAgentRun,
+    });
+
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "历史生成" }));
+    const history = await screen.findByRole("region", { name: "历史生成列表页" });
+    fireEvent.click(within(history).getByRole("button", { name: /上一批 AI 内容流水线选题/ }));
+
+    const supplementRegion = await screen.findByRole("region", { name: "补充选题" });
+    fireEvent.change(within(supplementRegion).getByLabelText("补充要求"), {
+      target: { value: "补充遗漏的 AI 工作流复盘角度" },
+    });
+    fireEvent.click(within(supplementRegion).getByRole("button", { name: "补充生成" }));
+
+    await waitFor(() => {
+      expect(api.createAgentConversation).toHaveBeenCalledWith(expect.anything(), {
+        project_id: project.project_id,
+        agent_type: "topic",
+        title: "选题 Agent 对话",
+      });
+    });
+    expect(api.sendAgentMessage).toHaveBeenCalledWith(expect.anything(), topicConversation.conversation_id, {
+      content: "补充遗漏的 AI 工作流复盘角度",
+      supplement_of_batch_id: previousTopicBatch.batch_id,
+    });
+    await waitFor(() => {
+      expect(api.listTopicGenerationBatches).toHaveBeenCalledTimes(2);
+      expect(api.listContentTopics).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+        status: "all",
+        source: "all",
+        batch_id: previousTopicBatch.batch_id,
+      });
+      expect(api.listContentTopics).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+        status: "all",
+        source: "all",
+        batch_id: supplementTopicBatch.batch_id,
+      });
+    });
+    const batchColumn = within(history).getByRole("complementary", { name: "历史生成批次" });
+    expect(within(batchColumn).queryByRole("button", { name: /补充上一批 AI 内容流水线选题/ })).not.toBeInTheDocument();
+    expect(within(batchColumn).getByRole("button", { name: /^上一批 AI 内容流水线选题/ })).toHaveClass("selected");
+    const supplementList = await screen.findByRole("region", { name: "关联补充批次" });
+    expect(within(supplementList).getByRole("button", { name: /补充上一批 AI 内容流水线选题/ })).toHaveClass(
+      "selected",
+    );
+    expect(await screen.findByRole("article", { name: "历史选题：补充批次选题" })).toBeInTheDocument();
+  });
+
+  it("历史生成页补充失败时保留当前批次并展示原因", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockTopicBatches({ batches: [latestTopicBatch, previousTopicBatch] });
+    mockTopics({
+      topics: [{ ...approvedTopic, batch_id: previousTopicBatch.batch_id, title: "历史批次选题" }],
+      stats: { total: 1, idea: 0, approved: 1, scripted: 0, archived: 0 },
+    });
+    vi.mocked(api.createAgentConversation).mockResolvedValue(topicConversation);
+    vi.mocked(api.sendAgentMessage).mockRejectedValue(new Error("该历史生成批次不可补充"));
+
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "历史生成" }));
+    const history = await screen.findByRole("region", { name: "历史生成列表页" });
+    fireEvent.click(within(history).getByRole("button", { name: /上一批 AI 内容流水线选题/ }));
+
+    const supplementRegion = await screen.findByRole("region", { name: "补充选题" });
+    fireEvent.change(within(supplementRegion).getByLabelText("补充要求"), {
+      target: { value: "补充 1 个新角度" },
+    });
+    fireEvent.click(within(supplementRegion).getByRole("button", { name: "补充生成" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("该历史生成批次不可补充");
+    expect(within(history).getByRole("button", { name: /上一批 AI 内容流水线选题/ })).toHaveClass("selected");
+    expect(api.listTopicGenerationBatches).toHaveBeenCalledTimes(1);
   });
 
   it("内容策略页通过选题 Agent 生成候选后刷新选题池", async () => {

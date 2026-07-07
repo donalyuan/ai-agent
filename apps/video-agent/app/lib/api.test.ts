@@ -91,6 +91,7 @@ const contentTopicPayload = {
 const topicGenerationBatch = {
   batch_id: "77777777-7777-4777-8777-777777777777",
   project_id: project.project_id,
+  supplement_of_batch_id: null,
   prompt: "本周 AI 工具方向，生成 5 个选题",
   requested_count: 5,
   topic_count: 5,
@@ -653,6 +654,29 @@ describe("video-agent api client", () => {
     );
     expect(result.assistant_message.content).toContain("已更新第 2 镜");
     expect(result.run.status).toBe("completed");
+  });
+
+  it("发送补充选题 Agent 消息时携带目标批次", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ user_message: userMessage, assistant_message: assistantMessage, run: agentRun }),
+    );
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await sendAgentMessage(client, conversation.conversation_id, {
+      content: "补充 2 个 AI 内容流水线选题",
+      supplement_of_batch_id: "77777777-7777-4777-8777-777777777777",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://api.test/api/agent/conversations/${conversation.conversation_id}/messages`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          content: "补充 2 个 AI 内容流水线选题",
+          supplement_of_batch_id: "77777777-7777-4777-8777-777777777777",
+        }),
+      }),
+    );
   });
 
   it("读取对话生成脚本返回的稳定 metadata", async () => {

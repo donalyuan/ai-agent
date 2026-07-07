@@ -58,6 +58,25 @@ async fn index_exists(pool: &PgPool, index_name: &str) -> bool {
     .expect("index existence query should run")
 }
 
+async fn column_exists(pool: &PgPool, table_name: &str, column_name: &str) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = $1
+              AND column_name = $2
+        )
+        "#,
+    )
+    .bind(table_name)
+    .bind(column_name)
+    .fetch_one(pool)
+    .await
+    .expect("column existence query should run")
+}
+
 async fn constraint_exists(pool: &PgPool, table_name: &str, constraint_name: &str) -> bool {
     sqlx::query_scalar::<_, bool>(
         r#"
@@ -177,6 +196,7 @@ async fn migrations_create_video_agent_core_schema() {
         "idx_content_topics_batch",
         "idx_content_topics_created",
         "idx_topic_generation_batches_project",
+        "idx_topic_generation_batches_supplement_of",
         "idx_scripts_topic",
         "idx_video_workspace_menus_parent_sort",
     ] {
@@ -223,6 +243,15 @@ async fn migrations_create_video_agent_core_schema() {
         )
         .await,
         "topic generation batch status should be constrained"
+    );
+    assert!(
+        column_exists(
+            &test_pool,
+            "topic_generation_batches",
+            "supplement_of_batch_id"
+        )
+        .await,
+        "topic generation batches should expose supplement_of_batch_id"
     );
     assert!(
         constraint_exists(
