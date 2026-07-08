@@ -33,6 +33,7 @@
 - `admin/` 已收敛为 Novex 平台管理后台入口，承载用户、权限、模型、工具、MCP、任务、日志、运行状态、成本、限额和健康检查等控制面能力，不再承载日常视频内容生产流程
 - `apps/video-agent/` 前端工作台的对外可见产品品牌名为 `VEDIO-AGENT`，展示名为“视频工作台”；原型、UI 和当前工作台设计文档不得使用 `Novex Admin` 作为展示品牌
 - 视频工作台 Pencil 原型源文件统一保存在 `docs/prototypes/video-agent/video-agent.pen`；后续有关视频工作台的原型修改都以该文件为准，不再使用 `docs/prototypes/script-agent-workspace/` 截图目录
+- 视频工作台 `.pen` 原型修改必须通过 Pencil MCP 写入并用 `batch_get` 或编辑器顶层状态验证；不得直接手改 JSON 后视为原型已更新
 - 用户已确认视频工作台业务流程走向：内容策略 -> 脚本创作 -> 素材管理 -> 作品生产 -> 发布运营 -> 数据分析 -> 工作流任务；前端一级菜单和开发阶段规划详见 `docs/memory/video-agent-workspace-flow.md`
 - 视频工作台导航应以数据库持久化菜单配置作为单一来源，一级菜单固定围绕业务流程组织；`apps/video-agent` 不得继续用 6 个 Agent 硬编码数组作为一级导航，Agent 状态只能作为二级菜单、模块状态或执行状态展示
 - 视频工作台不是单一脚本 Agent 页面；选题、脚本、素材、视频、发布、优化六类 Agent 能力应映射到业务菜单下的二级入口、模块状态或执行状态，不再作为前端一级导航；当前 `script-agent-workspace` 只实现脚本创作下的脚本生成模块闭环
@@ -40,6 +41,7 @@
 - 用户已确认内容策略与选题池第一版走“选题池优先”：内容策略页展示项目策略摘要和选题池闭环，支持人工创建选题和选题 Agent 批量生成候选；选题状态为 `idea -> approved -> scripted -> archived`，Agent 生成候选自动入库为 `idea` 并记录批次。选题 Agent 第一版接入通用 Agent Runtime 的 `topic` adapter，输入只依赖项目定位和用户补充要求；脚本生成关联 `topic_id` 并保存 `scripts.content.topic_snapshot`，成功后选题状态更新为 `scripted`
 - 用户已确认历史生成批次补充选题采用“同主题上下文 + 补充批次”语义：补充生成必须创建新的 `topic_generation_batches`，新批次 `supplement_of_batch_id` 指向原始批次，新选题 `content_topics.batch_id` 指向补充批次本身；对补充批次再次补充时归一到最初原始批次。前端查看选题时按主题组聚合展示原始批次和补充批次的选题，批次只作为生成来源和审计记录。
 - 用户已确认账号/项目管理暂列为后续功能，不纳入当前内容策略完善范围；后续应将前端展示语义从“项目”统一调整为“账号”，并补充账号管理入口，支持新建、编辑账号定位、切换当前账号。当前阶段先继续完善“内容策略”
+- 用户已确认内容策略下一轮优化聚焦“选题太多不好筛”，采用“主题组评审快照 + 双页面同步分层展示 + 第一版手动触发、自动预留”的设计：AI 评审按原始批次主题组聚合原始/补充批次选题，输出优先/备选/淘汰、疑似重复、风险点和推荐理由；评审结果在“历史生成”和“当前选题池”同一主题组上下文同步展示；AI 评审只作为决策辅助，不得自动修改 `ContentTopic.status`
 - 已建立第一版通用对话 Agent Runtime 后端基座：`agent_conversations` / `agent_messages` 承载连续对话，单轮消息继续写入 `agent_runs` / `agent_steps`，脚本 Agent 已接入对话式分镜修改能力；后续选题、素材、视频、发布、优化 Agent 应接入同一 Runtime/adapter 接口，不得各自实现孤立聊天逻辑。当前未实现前端聊天面板，`apps/video-agent` UI 接入仍需先走 Pencil 原型确认
 - 用户已确认新的脚本创作产品约定：脚本生成也应走脚本 Agent 对话入口；后续 `apps/video-agent` 不应在右侧并列保留独立“生成脚本”大表单和“脚本 Agent 对话”输入框，而应使用单一脚本 Agent 对话承载无脚本时生成脚本、有脚本时修改脚本。该改造通过 OpenSpec change `conversational-script-generation` 推进，前端实现前仍需更新 `docs/prototypes/video-agent/video-agent.pen` 并获得确认
 - 脚本智能体详情展示已选定“时间轴对照视图”：左侧表达分镜顺序和节奏节点，右侧并排展示旁白与画面指令；后续实现不要回退成纯卡片流或纯表格

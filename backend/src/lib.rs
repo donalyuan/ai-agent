@@ -15,7 +15,7 @@ use repositories::{
     ProjectRepository, ProjectRepositoryError, ScriptRepositoryError, TopicRepository,
     TopicRepositoryError, UpdateContentTopicInput, WorkspaceMenuRepositoryError,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::Arc;
@@ -32,9 +32,9 @@ use crate::agents::models::{
     PrepareScriptFromTopicRequest, PrepareScriptFromTopicResponse, ProjectListResponse,
     ProjectResponse, ScriptListFilter, ScriptListResponse, ScriptResponse, SendAgentMessageRequest,
     TopicGenerationBatchListResponse, TopicGenerationBatchSummaryResponse,
-    TopicScriptRequestPreview, UpdateContentTopicRequest, UpdateContentTopicStatusRequest,
-    UpdateScriptStatusRequest, UpdateScriptStatusResponse, WorkspaceMenuListResponse,
-    WorkspaceMenuNodeResponse,
+    TopicReviewSnapshotResponse, TopicScriptRequestPreview, UpdateContentTopicRequest,
+    UpdateContentTopicStatusRequest, UpdateScriptStatusRequest, UpdateScriptStatusResponse,
+    WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
 };
 
 pub mod agents;
@@ -270,6 +270,12 @@ struct DeletedContentTopicResponse {
     deleted_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct TopicGroupProjectQuery {
+    #[serde(default)]
+    project_id: Option<Uuid>,
+}
+
 pub fn build_app() -> Router {
     build_app_with_state(AppState::test())
 }
@@ -298,6 +304,14 @@ pub fn build_app_with_state(state: AppState) -> Router {
         .route(
             "/api/projects/:project_id/topic-generation-batches",
             get(list_topic_generation_batches),
+        )
+        .route(
+            "/api/topic-groups/:root_batch_id/reviews",
+            post(create_topic_group_review),
+        )
+        .route(
+            "/api/topic-groups/:root_batch_id/reviews/latest",
+            get(get_latest_topic_group_review),
         )
         .route(
             "/api/topics/:topic_id",
@@ -524,6 +538,60 @@ async fn list_topic_generation_batches(
             .map(TopicGenerationBatchSummaryResponse::from)
             .collect(),
     }))
+}
+
+async fn create_topic_group_review(
+    State(state): State<AppState>,
+    Path(root_batch_id): Path<Uuid>,
+    Query(query): Query<TopicGroupProjectQuery>,
+) -> Result<(StatusCode, Json<TopicReviewSnapshotResponse>), ScriptApiError> {
+    let repository = state.topic_repository()?;
+    let project_id =
+        resolve_topic_group_project_id(&repository, root_batch_id, query.project_id).await?;
+    let snapshot = state
+        .agent_runtime()?
+        .review_topic_group(project_id, root_batch_id)
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(TopicReviewSnapshotResponse::from(snapshot)),
+    ))
+}
+
+async fn get_latest_topic_group_review(
+    State(state): State<AppState>,
+    Path(root_batch_id): Path<Uuid>,
+    Query(query): Query<TopicGroupProjectQuery>,
+) -> Result<Json<Option<TopicReviewSnapshotResponse>>, ScriptApiError> {
+    let repository = state.topic_repository()?;
+    let project_id =
+        resolve_topic_group_project_id(&repository, root_batch_id, query.project_id).await?;
+    let snapshot = repository
+        .get_latest_topic_review_snapshot(project_id, root_batch_id)
+        .await?;
+
+    Ok(Json(snapshot.map(TopicReviewSnapshotResponse::from)))
+}
+
+async fn resolve_topic_group_project_id(
+    repository: &PostgresTopicRepository,
+    root_batch_id: Uuid,
+    requested_project_id: Option<Uuid>,
+) -> Result<Uuid, ScriptApiError> {
+    let batch = repository.get_generation_batch(root_batch_id).await?;
+    if batch.supplement_of_batch_id.is_some() {
+        return Err(ScriptApiError::TopicRepository(
+            TopicRepositoryError::BatchNotFound(root_batch_id),
+        ));
+    }
+    if requested_project_id.is_some_and(|project_id| project_id != batch.project_id) {
+        return Err(ScriptApiError::TopicRepository(
+            TopicRepositoryError::BatchNotFound(root_batch_id),
+        ));
+    }
+
+    Ok(batch.project_id)
 }
 
 async fn update_topic(

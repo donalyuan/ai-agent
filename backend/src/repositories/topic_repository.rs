@@ -1,6 +1,7 @@
 use crate::agents::models::{
     ContentTopic, ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatch,
-    TopicGenerationBatchStatus, TopicGenerationBatchSummary,
+    TopicGenerationBatchStatus, TopicGenerationBatchSummary, TopicReviewResult,
+    TopicReviewSnapshot, TopicReviewSnapshotStatus,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -63,6 +64,18 @@ pub struct CreateTopicGenerationBatchInput {
 #[derive(Clone, Debug, PartialEq)]
 pub struct UpdateTopicGenerationBatchInput {
     pub status: TopicGenerationBatchStatus,
+    pub error_message: Option<String>,
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CreateTopicReviewSnapshotInput {
+    pub project_id: Uuid,
+    pub root_batch_id: Uuid,
+    pub source_run_id: Option<Uuid>,
+    pub status: TopicReviewSnapshotStatus,
+    pub review_summary: String,
+    pub result: TopicReviewResult,
     pub error_message: Option<String>,
     pub metadata: Value,
 }
@@ -135,6 +148,17 @@ pub trait TopicRepository: Send + Sync {
         project_id: Uuid,
         limit: i64,
     ) -> Result<Vec<TopicGenerationBatchSummary>, TopicRepositoryError>;
+
+    async fn create_topic_review_snapshot(
+        &self,
+        input: CreateTopicReviewSnapshotInput,
+    ) -> Result<TopicReviewSnapshot, TopicRepositoryError>;
+
+    async fn get_latest_topic_review_snapshot(
+        &self,
+        project_id: Uuid,
+        root_batch_id: Uuid,
+    ) -> Result<Option<TopicReviewSnapshot>, TopicRepositoryError>;
 }
 
 #[async_trait]
@@ -572,6 +596,66 @@ impl TopicRepository for PostgresTopicRepository {
 
         rows.into_iter().map(batch_summary_from_row).collect()
     }
+
+    async fn create_topic_review_snapshot(
+        &self,
+        input: CreateTopicReviewSnapshotInput,
+    ) -> Result<TopicReviewSnapshot, TopicRepositoryError> {
+        let result = serde_json::to_value(input.result)
+            .map_err(|error| TopicRepositoryError::Storage(error.to_string()))?;
+        let row = sqlx::query(
+            r#"
+            INSERT INTO topic_review_snapshots (
+                project_id, root_batch_id, source_run_id, status, review_summary,
+                result, error_message, metadata
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id, project_id, root_batch_id, source_run_id, status,
+                      review_summary, result, error_message, metadata,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(input.project_id)
+        .bind(input.root_batch_id)
+        .bind(input.source_run_id)
+        .bind(input.status.as_str())
+        .bind(input.review_summary)
+        .bind(result)
+        .bind(input.error_message)
+        .bind(input.metadata)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(TopicRepositoryError::from)?;
+
+        topic_review_snapshot_from_row(row)
+    }
+
+    async fn get_latest_topic_review_snapshot(
+        &self,
+        project_id: Uuid,
+        root_batch_id: Uuid,
+    ) -> Result<Option<TopicReviewSnapshot>, TopicRepositoryError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, project_id, root_batch_id, source_run_id, status,
+                   review_summary, result, error_message, metadata,
+                   created_at, updated_at
+            FROM topic_review_snapshots
+            WHERE project_id = $1
+              AND root_batch_id = $2
+              AND status = 'succeeded'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(project_id)
+        .bind(root_batch_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(TopicRepositoryError::from)?;
+
+        row.map(topic_review_snapshot_from_row).transpose()
+    }
 }
 
 impl PostgresTopicRepository {
@@ -706,5 +790,28 @@ fn batch_summary_from_row(row: PgRow) -> Result<TopicGenerationBatchSummary, Top
     Ok(TopicGenerationBatchSummary {
         batch: batch_from_row(row)?,
         topic_count,
+    })
+}
+
+fn topic_review_snapshot_from_row(row: PgRow) -> Result<TopicReviewSnapshot, TopicRepositoryError> {
+    let status_value: String = row.get("status");
+    let status = TopicReviewSnapshotStatus::try_from(status_value.as_str())
+        .map_err(|error| TopicRepositoryError::Storage(error.to_string()))?;
+    let result_value: Value = row.get("result");
+    let result = serde_json::from_value(result_value)
+        .map_err(|error| TopicRepositoryError::Storage(error.to_string()))?;
+
+    Ok(TopicReviewSnapshot {
+        id: row.get("id"),
+        project_id: row.get("project_id"),
+        root_batch_id: row.get("root_batch_id"),
+        source_run_id: row.get("source_run_id"),
+        status,
+        review_summary: row.get("review_summary"),
+        result,
+        error_message: row.get("error_message"),
+        metadata: row.get("metadata"),
+        created_at: row.get::<DateTime<Utc>, _>("created_at"),
+        updated_at: row.get::<DateTime<Utc>, _>("updated_at"),
     })
 }

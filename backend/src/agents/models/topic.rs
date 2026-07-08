@@ -218,6 +218,183 @@ pub struct TopicGenerationBatchSummary {
     pub topic_count: i64,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicReviewSnapshotStatus {
+    Succeeded,
+    Failed,
+}
+
+impl TopicReviewSnapshotStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopicReviewSnapshotStatusParseError {
+    value: String,
+}
+
+impl fmt::Display for TopicReviewSnapshotStatusParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "unknown topic review snapshot status: {}",
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for TopicReviewSnapshotStatusParseError {}
+
+impl TryFrom<&str> for TopicReviewSnapshotStatus {
+    type Error = TopicReviewSnapshotStatusParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "succeeded" => Ok(Self::Succeeded),
+            "failed" => Ok(Self::Failed),
+            _ => Err(TopicReviewSnapshotStatusParseError {
+                value: value.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicReviewPriority {
+    Priority,
+    Backup,
+    Reject,
+}
+
+impl TopicReviewPriority {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Priority => "priority",
+            Self::Backup => "backup",
+            Self::Reject => "reject",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopicReviewPriorityParseError {
+    value: String,
+}
+
+impl fmt::Display for TopicReviewPriorityParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown topic review priority: {}", self.value)
+    }
+}
+
+impl std::error::Error for TopicReviewPriorityParseError {}
+
+impl TryFrom<&str> for TopicReviewPriority {
+    type Error = TopicReviewPriorityParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "priority" => Ok(Self::Priority),
+            "backup" => Ok(Self::Backup),
+            "reject" => Ok(Self::Reject),
+            _ => Err(TopicReviewPriorityParseError {
+                value: value.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicReviewRiskFlag {
+    TooGeneric,
+    Duplicate,
+    HardToScript,
+    OffPositioning,
+    ComplianceRisk,
+}
+
+impl TopicReviewRiskFlag {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::TooGeneric => "too_generic",
+            Self::Duplicate => "duplicate",
+            Self::HardToScript => "hard_to_script",
+            Self::OffPositioning => "off_positioning",
+            Self::ComplianceRisk => "compliance_risk",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopicReviewRiskFlagParseError {
+    value: String,
+}
+
+impl fmt::Display for TopicReviewRiskFlagParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown topic review risk flag: {}", self.value)
+    }
+}
+
+impl std::error::Error for TopicReviewRiskFlagParseError {}
+
+impl TryFrom<&str> for TopicReviewRiskFlag {
+    type Error = TopicReviewRiskFlagParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "too_generic" => Ok(Self::TooGeneric),
+            "duplicate" => Ok(Self::Duplicate),
+            "hard_to_script" => Ok(Self::HardToScript),
+            "off_positioning" => Ok(Self::OffPositioning),
+            "compliance_risk" => Ok(Self::ComplianceRisk),
+            _ => Err(TopicReviewRiskFlagParseError {
+                value: value.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct TopicReviewResult {
+    #[serde(default)]
+    pub topic_reviews: Vec<TopicReviewItem>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TopicReviewItem {
+    pub topic_id: Uuid,
+    pub priority: TopicReviewPriority,
+    pub reason: String,
+    #[serde(default)]
+    pub risk_flags: Vec<TopicReviewRiskFlag>,
+    #[serde(default)]
+    pub similar_topic_ids: Vec<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TopicReviewSnapshot {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub root_batch_id: Uuid,
+    pub source_run_id: Option<Uuid>,
+    pub status: TopicReviewSnapshotStatus,
+    pub review_summary: String,
+    pub result: TopicReviewResult,
+    pub error_message: Option<String>,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct ContentTopicFilter {
     #[serde(default)]

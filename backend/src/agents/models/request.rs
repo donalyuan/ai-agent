@@ -1,6 +1,7 @@
 use super::{
     ContentTopic, ContentTopicSource, ContentTopicStatus, Scene, Script, ScriptStatus,
-    ScriptSummary, TopicGenerationBatchStatus, TopicGenerationBatchSummary,
+    ScriptSummary, TopicGenerationBatchStatus, TopicGenerationBatchSummary, TopicReviewResult,
+    TopicReviewSnapshot, TopicReviewSnapshotStatus,
 };
 use crate::agents::conversation::{
     AgentConversation, AgentConversationStatus, AgentMessage, AgentMessageRole, AgentRunRecord,
@@ -273,6 +274,39 @@ impl From<TopicGenerationBatchSummary> for TopicGenerationBatchSummaryResponse {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TopicGenerationBatchListResponse {
     pub batches: Vec<TopicGenerationBatchSummaryResponse>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TopicReviewSnapshotResponse {
+    pub snapshot_id: Uuid,
+    pub project_id: Uuid,
+    pub root_batch_id: Uuid,
+    pub source_run_id: Option<Uuid>,
+    pub status: TopicReviewSnapshotStatus,
+    pub review_summary: String,
+    pub result: TopicReviewResult,
+    pub error_message: Option<String>,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<TopicReviewSnapshot> for TopicReviewSnapshotResponse {
+    fn from(snapshot: TopicReviewSnapshot) -> Self {
+        Self {
+            snapshot_id: snapshot.id,
+            project_id: snapshot.project_id,
+            root_batch_id: snapshot.root_batch_id,
+            source_run_id: snapshot.source_run_id,
+            status: snapshot.status,
+            review_summary: snapshot.review_summary,
+            result: snapshot.result,
+            error_message: snapshot.error_message,
+            metadata: snapshot.metadata,
+            created_at: snapshot.created_at,
+            updated_at: snapshot.updated_at,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

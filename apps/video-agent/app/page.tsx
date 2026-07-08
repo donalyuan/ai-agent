@@ -17,13 +17,16 @@ import {
   ScriptSummary,
   ScriptStyle,
   TopicGenerationBatchSummary,
+  TopicReviewSnapshot,
   WorkspaceMenuNode,
   checkHealth,
   createAgentConversation,
   createApiClient,
   createContentTopic,
+  createTopicGroupReview,
   deleteContentTopic,
   generateScript,
+  getLatestTopicGroupReview,
   getScript,
   getScriptAgentTurnMetadata,
   listProjects,
@@ -82,6 +85,14 @@ function topicBatchGroupIds(batchId: string | null, batches: TopicGenerationBatc
   return [rootBatchId, ...supplementIds];
 }
 
+function topicBatchRootId(batchId: string | null, batches: TopicGenerationBatchSummary[]) {
+  if (!batchId) {
+    return null;
+  }
+  const selectedBatch = batches.find((batch) => batch.batch_id === batchId);
+  return selectedBatch?.supplement_of_batch_id || selectedBatch?.batch_id || batchId;
+}
+
 function sumTopicStats(responses: { stats: ContentTopicStats }[]) {
   return responses.reduce<ContentTopicStats>(
     (totalStats, response) => ({
@@ -133,6 +144,9 @@ export default function Home() {
   const [topicBatchViewMode, setTopicBatchViewMode] = useState<"latest" | "batch" | "all">("latest");
   const [contentStrategyView, setContentStrategyView] = useState<ContentStrategyView>("pool");
   const [historyTopicBatchId, setHistoryTopicBatchId] = useState<string | null>(null);
+  const [topicReviewSnapshot, setTopicReviewSnapshot] = useState<TopicReviewSnapshot | null>(null);
+  const [topicReviewLoading, setTopicReviewLoading] = useState(false);
+  const [topicReviewError, setTopicReviewError] = useState("");
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [topicStatusFilter, setTopicStatusFilter] = useState<"all" | ContentTopicStatus>("all");
   const [topicSourceFilter] = useState<"all" | ContentTopicSource>("all");
@@ -196,6 +210,11 @@ export default function Home() {
   const historyActiveTopicBatchId = selectedHistoryBatch?.batch_id || null;
   const activeTopicBatchId =
     contentStrategyView === "history" ? historyActiveTopicBatchId : poolActiveTopicBatchId;
+  const activeTopicReviewRootBatchId =
+    selectedMenuKey === contentStrategyMenuKey &&
+    !(contentStrategyView === "pool" && topicBatchViewMode === "all")
+      ? topicBatchRootId(activeTopicBatchId, topicBatches)
+      : null;
   const selectedTopic = topics.find((topic) => topic.topic_id === selectedTopicId) || null;
   const writesDisabled = apiAvailable === false;
   const selectedSubMenuKey =
@@ -454,6 +473,55 @@ export default function Home() {
   ]);
 
   useEffect(() => {
+    if (
+      !selectedProjectId ||
+      selectedMenuKey !== contentStrategyMenuKey ||
+      !topicBatchesLoaded ||
+      !activeTopicReviewRootBatchId
+    ) {
+      setTopicReviewSnapshot(null);
+      setTopicReviewLoading(false);
+      setTopicReviewError("");
+      return;
+    }
+
+    let active = true;
+
+    async function loadLatestTopicReview() {
+      setTopicReviewLoading(true);
+      setTopicReviewError("");
+
+      try {
+        const snapshot = await getLatestTopicGroupReview(client, activeTopicReviewRootBatchId);
+        if (active) {
+          setTopicReviewSnapshot(snapshot);
+        }
+      } catch (error) {
+        if (active) {
+          setTopicReviewSnapshot(null);
+          setTopicReviewError(errorToMessage(error));
+        }
+      } finally {
+        if (active) {
+          setTopicReviewLoading(false);
+        }
+      }
+    }
+
+    loadLatestTopicReview();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    activeTopicReviewRootBatchId,
+    client,
+    selectedMenuKey,
+    selectedProjectId,
+    topicBatchesLoaded,
+  ]);
+
+  useEffect(() => {
     selectedProjectIdRef.current = selectedProjectId;
     setAgentConversationId(null);
     setAgentMessages([]);
@@ -477,6 +545,9 @@ export default function Home() {
     setTopicBatchesLoaded(false);
     setTopicBatchError("");
     setDeletingTopicId(null);
+    setTopicReviewSnapshot(null);
+    setTopicReviewLoading(false);
+    setTopicReviewError("");
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -775,6 +846,27 @@ export default function Home() {
     await refreshContentTopics(newBatchId, refreshedBatches);
   }
 
+  async function handleReviewTopicGroup() {
+    if (!activeTopicReviewRootBatchId) {
+      setTopicReviewError("请先选择历史主题组");
+      return;
+    }
+
+    const rootBatchId = activeTopicReviewRootBatchId;
+    setTopicReviewLoading(true);
+    setTopicReviewError("");
+
+    try {
+      const createdSnapshot = await createTopicGroupReview(client, rootBatchId);
+      const latestSnapshot = await getLatestTopicGroupReview(client, rootBatchId);
+      setTopicReviewSnapshot(latestSnapshot || createdSnapshot);
+    } catch (error) {
+      setTopicReviewError(errorToMessage(error));
+    } finally {
+      setTopicReviewLoading(false);
+    }
+  }
+
   async function handleSendTopicAgentMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const content = topicAgentDraft.trim();
@@ -1017,13 +1109,20 @@ export default function Home() {
           loadingTopicBatches={!topicBatchesLoaded}
           topicBatchError={topicBatchError}
           loading={loadingTopics}
+          preparingScript={preparingScript}
           error={topicError}
           actionError={topicActionError}
+          reviewError={topicReviewError}
+          reviewLoading={topicReviewLoading}
+          reviewSnapshot={topicReviewSnapshot}
           deletingTopicId={deletingTopicId}
           writesDisabled={writesDisabled}
           onDeleteTopic={handleDeleteTopic}
+          onPrepareScript={handlePrepareScriptFromTopic}
+          onReviewTopicGroup={handleReviewTopicGroup}
           onSelectTopicBatch={handleSelectHistoryTopicBatch}
           onSupplementTopicBatch={handleSupplementTopicBatch}
+          onUpdateTopicStatus={handleUpdateTopicStatus}
         />
       ) : selectedMenuKey === contentStrategyMenuKey ? (
         <ContentStrategyPage
@@ -1033,10 +1132,15 @@ export default function Home() {
           selectedTopic={selectedTopic}
           statusFilter={topicStatusFilter}
           activeTopicBatchId={poolActiveTopicBatchId}
+          activeTopicReviewRootBatchId={activeTopicReviewRootBatchId}
+          reviewError={topicReviewError}
+          reviewLoading={topicReviewLoading}
+          reviewSnapshot={topicReviewSnapshot}
           showingAllTopicBatches={topicBatchViewMode === "all"}
           loading={loadingTopics}
           error={topicError}
           actionError={topicActionError}
+          deletingTopicId={deletingTopicId}
           writesDisabled={writesDisabled}
           showTopicForm={showTopicForm}
           editingTopicId={editingTopicId}
@@ -1052,6 +1156,7 @@ export default function Home() {
             setTopicBatchViewMode("all");
             setTopicBatchFilter(null);
           }}
+          onDeleteTopic={handleDeleteTopic}
           onStatusFilterChange={setTopicStatusFilter}
           onNewTopic={handleNewTopic}
           onEditTopic={handleEditTopic}

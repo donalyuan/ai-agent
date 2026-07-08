@@ -3,9 +3,11 @@ import {
   createAgentConversation,
   createApiClient,
   createContentTopic,
+  createTopicGroupReview,
   deleteContentTopic,
   generateScript,
   getApiBaseUrl,
+  getLatestTopicGroupReview,
   getScript,
   getScriptAgentTurnMetadata,
   listAgentMessages,
@@ -99,6 +101,30 @@ const topicGenerationBatch = {
   error_message: null,
   created_at: "2026-07-02T00:22:00Z",
   updated_at: "2026-07-02T00:22:20Z",
+};
+
+const topicReviewSnapshot = {
+  snapshot_id: "99999999-9999-4999-8999-999999999999",
+  project_id: project.project_id,
+  root_batch_id: topicGenerationBatch.batch_id,
+  source_run_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  status: "succeeded",
+  review_summary: "优先推进 1 个选题，保留 1 个备选，淘汰 1 个泛化选题。",
+  result: {
+    topic_reviews: [
+      {
+        topic_id: contentTopic.topic_id,
+        priority: "priority",
+        reason: "与账号定位强相关，角度清晰。",
+        risk_flags: [],
+        similar_topic_ids: [],
+      },
+    ],
+  },
+  error_message: null,
+  metadata: {},
+  created_at: "2026-07-02T00:30:00Z",
+  updated_at: "2026-07-02T00:30:10Z",
 };
 
 const preparedTopicResponse = {
@@ -398,6 +424,39 @@ describe("video-agent api client", () => {
     );
     expect(result.batches[0].batch_id).toBe(topicGenerationBatch.batch_id);
     expect(result.batches[0].topic_count).toBe(5);
+  });
+
+  it("创建主题组评审快照", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(topicReviewSnapshot, { status: 201 }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await createTopicGroupReview(client, topicGenerationBatch.batch_id);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://api.test/api/topic-groups/${topicGenerationBatch.batch_id}/reviews`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+        },
+      },
+    );
+    expect(result.snapshot_id).toBe(topicReviewSnapshot.snapshot_id);
+    expect(result.result.topic_reviews[0].priority).toBe("priority");
+  });
+
+  it("读取主题组最新评审快照", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(topicReviewSnapshot));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await getLatestTopicGroupReview(client, topicGenerationBatch.batch_id);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://api.test/api/topic-groups/${topicGenerationBatch.batch_id}/reviews/latest`,
+      { headers: { accept: "application/json" } },
+    );
+    expect(result?.root_batch_id).toBe(topicGenerationBatch.batch_id);
+    expect(result?.review_summary).toContain("优先推进");
   });
 
   it("创建、编辑并更新选题状态", async () => {

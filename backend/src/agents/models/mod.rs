@@ -10,13 +10,16 @@ pub use request::{
     PrepareScriptFromTopicResponse, ProjectListResponse, ProjectResponse, SceneResponse,
     ScriptListFilter, ScriptListResponse, ScriptResponse, ScriptStyle, ScriptSummaryResponse,
     SendAgentMessageRequest, TopicGenerationBatchListResponse, TopicGenerationBatchSummaryResponse,
-    TopicScriptRequestPreview, UpdateContentTopicRequest, UpdateContentTopicStatusRequest,
-    UpdateScriptStatusRequest, UpdateScriptStatusResponse, WorkspaceMenuListResponse,
-    WorkspaceMenuNodeResponse,
+    TopicReviewSnapshotResponse, TopicScriptRequestPreview, UpdateContentTopicRequest,
+    UpdateContentTopicStatusRequest, UpdateScriptStatusRequest, UpdateScriptStatusResponse,
+    WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
 };
 pub use script::{Scene, Script, ScriptStatus, ScriptStatusParseError, ScriptSummary};
 pub use topic::{
     ContentTopic, ContentTopicFilter, ContentTopicSource, ContentTopicSourceParseError,
     ContentTopicStatus, ContentTopicStatusParseError, TopicGenerationBatch,
     TopicGenerationBatchStatus, TopicGenerationBatchStatusParseError, TopicGenerationBatchSummary,
+    TopicReviewItem, TopicReviewPriority, TopicReviewPriorityParseError, TopicReviewResult,
+    TopicReviewRiskFlag, TopicReviewRiskFlagParseError, TopicReviewSnapshot,
+    TopicReviewSnapshotStatus, TopicReviewSnapshotStatusParseError,
 };

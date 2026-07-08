@@ -125,6 +125,14 @@ export type ContentTopicStats = {
 };
 
 export type TopicGenerationBatchStatus = "running" | "succeeded" | "failed";
+export type TopicReviewSnapshotStatus = "succeeded" | "failed";
+export type TopicReviewPriority = "priority" | "backup" | "reject";
+export type TopicReviewRiskFlag =
+  | "too_generic"
+  | "duplicate"
+  | "hard_to_script"
+  | "off_positioning"
+  | "compliance_risk";
 
 export type TopicGenerationBatchSummary = {
   batch_id: string;
@@ -146,6 +154,32 @@ export type ContentTopicListResponse = {
 
 export type TopicGenerationBatchListResponse = {
   batches: TopicGenerationBatchSummary[];
+};
+
+export type TopicReviewItem = {
+  topic_id: string;
+  priority: TopicReviewPriority;
+  reason: string;
+  risk_flags: TopicReviewRiskFlag[];
+  similar_topic_ids: string[];
+};
+
+export type TopicReviewResult = {
+  topic_reviews: TopicReviewItem[];
+};
+
+export type TopicReviewSnapshot = {
+  snapshot_id: string;
+  project_id: string;
+  root_batch_id: string;
+  source_run_id: string | null;
+  status: TopicReviewSnapshotStatus;
+  review_summary: string;
+  result: TopicReviewResult;
+  error_message: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 };
 
 export type DeletedContentTopicResponse = {
@@ -380,6 +414,19 @@ export function listTopicGenerationBatches(client: ApiClient, projectId: string)
   return request<TopicGenerationBatchListResponse>(
     client,
     `/api/projects/${projectId}/topic-generation-batches`,
+  );
+}
+
+export function createTopicGroupReview(client: ApiClient, rootBatchId: string) {
+  return request<TopicReviewSnapshot>(client, `/api/topic-groups/${rootBatchId}/reviews`, {
+    method: "POST",
+  });
+}
+
+export function getLatestTopicGroupReview(client: ApiClient, rootBatchId: string) {
+  return request<TopicReviewSnapshot | null>(
+    client,
+    `/api/topic-groups/${rootBatchId}/reviews/latest`,
   );
 }
 

@@ -7,7 +7,9 @@ import type {
   PrepareScriptFromTopicResponse,
   Project,
   ScriptStyle,
+  TopicReviewSnapshot,
 } from "../../lib/api";
+import { TopicReviewList } from "./TopicReviewList";
 import {
   getTopicContentTypeLabel,
   scriptStyleLabels,
@@ -23,6 +25,7 @@ type ContentStrategyPageProps = {
   agentDraft: string;
   agentError: string;
   agentMessages: AgentMessage[];
+  deletingTopicId: string | null;
   editingTopicId: string | null;
   error: string;
   loading: boolean;
@@ -35,12 +38,17 @@ type ContentStrategyPageProps = {
   stats: ContentTopicStats;
   statusFilter: "all" | ContentTopicStatus;
   activeTopicBatchId: string | null;
+  activeTopicReviewRootBatchId: string | null;
+  reviewError: string;
+  reviewLoading: boolean;
+  reviewSnapshot: TopicReviewSnapshot | null;
   showingAllTopicBatches: boolean;
   topicForm: TopicFormState;
   topics: ContentTopic[];
   writesDisabled: boolean;
   onCancelTopicForm: () => void;
   onClearTopicBatchFilter: () => void;
+  onDeleteTopic: (topic: ContentTopic) => void;
   onEditTopic: (topic: ContentTopic) => void;
   onNewTopic: () => void;
   onPrepareScript: (topic: ContentTopic) => void;
@@ -60,6 +68,10 @@ export function ContentStrategyPage({
   selectedTopic,
   statusFilter,
   activeTopicBatchId,
+  activeTopicReviewRootBatchId,
+  reviewError,
+  reviewLoading,
+  reviewSnapshot,
   showingAllTopicBatches,
   loading,
   error,
@@ -72,10 +84,12 @@ export function ContentStrategyPage({
   agentDraft,
   agentError,
   agentMessages,
+  deletingTopicId,
   sendingAgentMessage,
   preparingScript,
   onSelectTopic,
   onClearTopicBatchFilter,
+  onDeleteTopic,
   onStatusFilterChange,
   onNewTopic,
   onEditTopic,
@@ -141,6 +155,9 @@ export function ContentStrategyPage({
                 </button>
               </div>
             ) : null}
+            {showingAllTopicBatches ? (
+              <p className="topicReviewModeNote">查看全部选题时不展示主题组评审</p>
+            ) : null}
 
             <div aria-label="选题状态筛选" className="topicFilters">
               {topicPoolStatusFilters.map((option) => (
@@ -156,7 +173,9 @@ export function ContentStrategyPage({
             </div>
 
             {loading ? <p className="stateText">正在加载选题</p> : null}
+            {reviewLoading && !showingAllTopicBatches ? <p className="stateText">正在加载主题组评审</p> : null}
             {error ? <p className="errorText" role="alert">{error}</p> : null}
+            {reviewError ? <p className="errorText" role="alert">{reviewError}</p> : null}
             {!loading && !topics.length ? (
               <div className="emptyState">
                 <strong>还没有选题</strong>
@@ -164,23 +183,20 @@ export function ContentStrategyPage({
               </div>
             ) : null}
 
-            <div className="topicList">
-              {topics.map((topic) => (
-                <button
-                  className={selectedTopic?.topic_id === topic.topic_id ? "topicItem selected" : "topicItem"}
-                  key={topic.topic_id}
-                  onClick={() => onSelectTopic(topic.topic_id)}
-                  type="button"
-                >
-                  <span className="topicTitle">{topic.title}</span>
-                  <span className="topicMeta">
-                    {`来源：${topicSourceLabels[topic.source]} · 类型：${getTopicContentTypeLabel(topic.content_type)}`}
-                  </span>
-                  <TopicStatusBadge status={topic.status} />
-                  {topic.score !== null ? <strong>{Math.round(topic.score)}</strong> : null}
-                </button>
-              ))}
-            </div>
+            <TopicReviewList
+              activeRootBatchId={activeTopicReviewRootBatchId}
+              deletingTopicId={deletingTopicId}
+              mode="pool"
+              preparingScript={preparingScript}
+              reviewSnapshot={showingAllTopicBatches ? null : reviewSnapshot}
+              selectedTopicId={selectedTopic?.topic_id || null}
+              topics={topics}
+              writesDisabled={writesDisabled}
+              onDeleteTopic={onDeleteTopic}
+              onPrepareScript={onPrepareScript}
+              onSelectTopic={onSelectTopic}
+              onUpdateTopicStatus={onUpdateTopicStatus}
+            />
           </section>
         </div>
 

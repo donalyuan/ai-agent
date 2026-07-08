@@ -2,15 +2,15 @@ import { type FormEvent, useMemo, useState } from "react";
 import type {
   ContentTopic,
   ContentTopicStats,
+  ContentTopicStatus,
   Project,
   TopicGenerationBatchSummary,
+  TopicReviewSnapshot,
 } from "../../lib/api";
-import { TopicStatusBadge } from "./ContentStrategyPage";
+import { TopicReviewList } from "./TopicReviewList";
 import {
   formatTopicBatchTime,
-  getTopicContentTypeLabel,
   topicBatchStatusLabels,
-  topicSourceLabels,
 } from "./topicModel";
 
 type TopicHistoryPageProps = {
@@ -20,15 +20,22 @@ type TopicHistoryPageProps = {
   error: string;
   loading: boolean;
   loadingTopicBatches: boolean;
+  preparingScript: boolean;
   project?: Project;
+  reviewError: string;
+  reviewLoading: boolean;
+  reviewSnapshot: TopicReviewSnapshot | null;
   stats: ContentTopicStats;
   topicBatchError: string;
   topicBatches: TopicGenerationBatchSummary[];
   topics: ContentTopic[];
   writesDisabled: boolean;
   onDeleteTopic: (topic: ContentTopic) => void;
+  onPrepareScript: (topic: ContentTopic) => void;
+  onReviewTopicGroup: () => Promise<void>;
   onSelectTopicBatch: (batchId: string) => void;
   onSupplementTopicBatch: (batchId: string, content: string) => Promise<void>;
+  onUpdateTopicStatus: (topic: ContentTopic, status: ContentTopicStatus) => void;
 };
 
 export function TopicHistoryPage({
@@ -38,15 +45,22 @@ export function TopicHistoryPage({
   error,
   loading,
   loadingTopicBatches,
+  preparingScript,
   project,
+  reviewError,
+  reviewLoading,
+  reviewSnapshot,
   stats,
   topicBatchError,
   topicBatches,
   topics,
   writesDisabled,
   onDeleteTopic,
+  onPrepareScript,
+  onReviewTopicGroup,
   onSelectTopicBatch,
   onSupplementTopicBatch,
+  onUpdateTopicStatus,
 }: TopicHistoryPageProps) {
   const [supplementDraft, setSupplementDraft] = useState("");
   const [supplementError, setSupplementError] = useState("");
@@ -111,7 +125,7 @@ export function TopicHistoryPage({
         <aside aria-label="历史生成批次" className="topicHistoryBatchPanel">
           <div className="panelHeader compactHeader">
             <div>
-              <p className="sectionKicker">Generation History</p>
+              <p className="sectionKicker">生成记录</p>
               <h2>历史生成</h2>
             </div>
             <span>{loadingTopicBatches ? "加载中" : `${rootBatches.length} 组`}</span>
@@ -150,7 +164,7 @@ export function TopicHistoryPage({
         <section aria-label="当前主题选题" className="topicHistoryTopicPanel">
           <div className="panelHeader compactHeader">
             <div>
-              <p className="sectionKicker">Topic Group</p>
+              <p className="sectionKicker">主题组</p>
               <h2>当前主题选题</h2>
             </div>
             {rootBatch ? <span>{rootBatch.prompt}</span> : project ? <span>{project.name}</span> : null}
@@ -170,7 +184,9 @@ export function TopicHistoryPage({
 
           {actionError ? <p className="errorText" role="alert">{actionError}</p> : null}
           {error ? <p className="errorText" role="alert">{error}</p> : null}
+          {reviewError ? <p className="errorText" role="alert">{reviewError}</p> : null}
           {loading ? <p className="stateText">正在加载批次选题</p> : null}
+          {reviewLoading ? <p className="stateText">正在加载主题组评审</p> : null}
 
           {!loading && selectedBatch && !topics.length ? (
             <div className="emptyState">
@@ -179,53 +195,23 @@ export function TopicHistoryPage({
             </div>
           ) : null}
 
-          <div className="topicHistoryTopicList">
-            {topics.map((topic) => (
-              <article
-                aria-label={`历史选题：${topic.title}`}
-                className="topicHistoryTopicRow"
-                key={topic.topic_id}
-              >
-                <div className="topicHistoryTopicMain">
-                  <strong>{topic.title}</strong>
-                  <span>
-                    {`来源：${topicSourceLabels[topic.source]} · 类型：${getTopicContentTypeLabel(topic.content_type)}`}
-                  </span>
-                </div>
-                <TopicStatusBadge status={topic.status} />
-                <span
-                  className={
-                    topic.batch_id === rootBatchId
-                      ? "topicHistoryOriginBadge"
-                      : "topicHistoryOriginBadge supplement"
-                  }
-                >
-                  {topic.batch_id === rootBatchId ? "原始生成" : "补充生成"}
-                </span>
-                {topic.score !== null ? <span className="topicHistoryScore">{Math.round(topic.score)} 分</span> : null}
-                <div className="topicHistoryActions">
-                  {topic.status === "scripted" ? (
-                    <span className="topicHistoryLocked">已生成脚本，不可删除</span>
-                  ) : (
-                    <button
-                      className="secondaryButton dangerButton"
-                      disabled={writesDisabled || deletingTopicId === topic.topic_id}
-                      onClick={() => onDeleteTopic(topic)}
-                      type="button"
-                    >
-                      {deletingTopicId === topic.topic_id ? "移除中" : "移除"}
-                    </button>
-                  )}
-                </div>
-              </article>
-            ))}
-          </div>
+          <TopicReviewList
+            activeRootBatchId={rootBatchId}
+            deletingTopicId={deletingTopicId}
+            mode="history"
+            preparingScript={preparingScript}
+            reviewSnapshot={reviewSnapshot}
+            topics={topics}
+            writesDisabled={writesDisabled}
+            onDeleteTopic={onDeleteTopic}
+            onPrepareScript={onPrepareScript}
+            onUpdateTopicStatus={onUpdateTopicStatus}
+          />
         </section>
 
         <aside aria-label="补充操作" className="topicHistorySupplementPanel">
-          <div className="panelHeader compactHeader">
+          <div className="panelHeader compactHeader topicHistorySupplementMainHeader">
             <div>
-              <p className="sectionKicker">Supplement</p>
               <h2>补充操作</h2>
             </div>
             <span>{selectedBatch ? "批次上下文" : "待选择"}</span>
@@ -245,10 +231,29 @@ export function TopicHistoryPage({
           )}
 
           {selectedBatch ? (
-            <section aria-label="补充选题" className="topicHistorySupplementForm">
-              <div className="panelHeader compactHeader">
+            <section aria-label="主题组评审" className="topicHistoryReviewPanel">
+              <div className="panelHeader compactHeader topicHistorySupplementSectionHeader">
                 <div>
-                  <p className="sectionKicker">Prompt</p>
+                  <h3>主题组评审</h3>
+                </div>
+                <span>{reviewSnapshot ? "已同步" : "待评审"}</span>
+              </div>
+              <button
+                className="primaryButton"
+                disabled={writesDisabled || reviewLoading || !rootBatchId}
+                onClick={() => void onReviewTopicGroup()}
+                type="button"
+              >
+                {reviewLoading ? "评审中" : "评审当前主题组"}
+              </button>
+              <p>评审只生成辅助分层，不会自动确认、归档或移除选题。</p>
+            </section>
+          ) : null}
+
+          {selectedBatch ? (
+            <section aria-label="补充选题" className="topicHistorySupplementForm">
+              <div className="panelHeader compactHeader topicHistorySupplementSectionHeader">
+                <div>
                   <h3>补充选题</h3>
                 </div>
                 <span>{supplementing ? "生成中" : "可补充"}</span>
@@ -273,9 +278,8 @@ export function TopicHistoryPage({
 
           {selectedBatch && relatedSupplementBatches.length ? (
             <section aria-label="关联补充批次" className="topicHistorySupplementList">
-              <div className="panelHeader compactHeader">
+              <div className="panelHeader compactHeader topicHistorySupplementSectionHeader">
                 <div>
-                  <p className="sectionKicker">Related</p>
                   <h3>关联补充批次</h3>
                 </div>
                 <span>{`${relatedSupplementBatches.length} 批`}</span>

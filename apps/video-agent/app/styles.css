@@ -953,7 +953,7 @@ button:focus-visible {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(300px, 360px) minmax(380px, 1fr) minmax(260px, 288px);
+  grid-template-columns: minmax(300px, 360px) minmax(360px, 1fr) minmax(300px, 320px);
   gap: 16px;
 }
 
@@ -978,7 +978,10 @@ button:focus-visible {
 }
 
 .topicHistorySupplementPanel {
-  grid-template-rows: auto auto auto minmax(0, auto) auto;
+  grid-template-rows: auto;
+  gap: 14px;
+  padding: 16px;
+  overflow-y: auto;
 }
 
 .topicHistoryBatchList,
@@ -1085,18 +1088,45 @@ button:focus-visible {
 }
 
 .topicHistorySupplementList,
-.topicHistorySupplementForm {
+.topicHistorySupplementForm,
+.topicHistoryReviewPanel {
   min-width: 0;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   display: grid;
-  gap: 10px;
-  padding: 10px;
+  gap: 12px;
+  padding: 12px;
   background: var(--color-surface-muted);
 }
 
+.topicHistorySupplementMainHeader,
+.topicHistorySupplementSectionHeader {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.topicHistorySupplementMainHeader > div,
+.topicHistorySupplementSectionHeader > div {
+  min-width: 0;
+}
+
+.topicHistorySupplementMainHeader h2,
+.topicHistorySupplementSectionHeader h3 {
+  overflow-wrap: anywhere;
+}
+
+.topicHistorySupplementMainHeader > span,
+.topicHistorySupplementSectionHeader > span {
+  justify-self: end;
+  line-height: 1.3;
+}
+
 .topicHistorySupplementList h3,
-.topicHistorySupplementForm h3 {
+.topicHistorySupplementForm h3,
+.topicHistoryReviewPanel h3 {
   margin: 0;
   color: var(--color-text);
   font-size: 14px;
@@ -1155,6 +1185,17 @@ button:focus-visible {
 
 .topicHistorySupplementForm .primaryButton {
   width: 100%;
+}
+
+.topicHistoryReviewPanel .primaryButton {
+  width: 100%;
+}
+
+.topicHistoryReviewPanel p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .topicHistorySupplementHint {
@@ -1245,6 +1286,257 @@ button:focus-visible {
   padding: 0 10px;
   background: var(--color-surface-muted);
   text-align: center;
+}
+
+.topicReviewModeNote {
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.topicReviewList {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.topicPoolPanel .topicReviewList {
+  flex: 1;
+}
+
+.topicReviewSummary {
+  border: 1px solid var(--color-primary-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  background: var(--color-primary-soft);
+}
+
+.topicReviewSummary span {
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.topicReviewSummary p {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.topicReviewSection {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+}
+
+.topicReviewSectionHeader {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.topicReviewSectionHeader h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.topicReviewSectionHeader span,
+.topicReviewEmpty {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.topicReviewEmpty {
+  margin: 0;
+}
+
+.topicReviewCards,
+.topicDuplicateList {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.topicReviewCard {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 9px;
+  padding: 11px 12px;
+  background: var(--color-surface);
+}
+
+.topicReviewCard.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.topicReviewCardMain {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.topicReviewCardMain strong,
+.topicReviewTitleButton {
+  min-width: 0;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.topicReviewTitleButton {
+  width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.topicReviewCardMain span,
+.topicReviewReason p,
+.topicDuplicateItem span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.topicReviewMeta,
+.topicReviewRiskTags,
+.topicReviewDuplicateRefs,
+.topicReviewActions {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.topicReviewMeta .topicHistoryOriginBadge {
+  min-height: auto;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.topicReviewMeta .topicHistoryOriginBadge.supplement {
+  border: 0;
+  background: transparent;
+  color: var(--color-primary);
+}
+
+.topicReviewMeta > span:not(.statusBadge):not(.topicHistoryOriginBadge),
+.topicReviewRiskTags span {
+  min-height: 24px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.topicReviewDuplicateRefs {
+  gap: 6px;
+}
+
+.topicReviewRiskTags span {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+}
+
+.topicReviewDuplicateLabel {
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.topicReviewDuplicateTitle {
+  max-width: 100%;
+  border: 1px solid var(--color-primary-border);
+  border-radius: 6px;
+  padding: 3px 7px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+button.topicReviewDuplicateTitle {
+  cursor: pointer;
+}
+
+button.topicReviewDuplicateTitle:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.topicReviewReason {
+  display: grid;
+  gap: 7px;
+}
+
+.topicReviewReason p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.topicReviewActions {
+  justify-content: flex-start;
+}
+
+.topicReviewActions .primaryButton,
+.topicReviewActions .secondaryButton {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.topicDuplicateItem {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 9px 11px;
+  background: var(--color-surface-muted);
+}
+
+.topicDuplicateItem strong {
+  min-width: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .strategyMainColumn {
@@ -1422,10 +1714,11 @@ button:focus-visible {
   border: 1px solid var(--color-border);
   border-radius: 8px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
-    "title badge score"
-    "meta badge score";
+    "title score"
+    "meta actions"
+    "badges actions";
   align-items: center;
   gap: 6px 10px;
   padding: 12px;
@@ -1439,12 +1732,20 @@ button:focus-visible {
 }
 
 .topicTitle {
-  grid-area: title;
   color: var(--color-text);
   font-size: 14px;
   font-weight: 800;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.topicPoolTitleButton {
+  grid-area: title;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  text-align: left;
 }
 
 .topicMeta {
@@ -1453,11 +1754,15 @@ button:focus-visible {
   font-size: 12px;
 }
 
-.topicItem .statusBadge {
-  grid-area: badge;
+.topicPoolBadges {
+  grid-area: badges;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
 }
 
-.topicItem > strong {
+.topicScore {
   grid-area: score;
   min-width: 42px;
   height: 42px;
@@ -1468,6 +1773,20 @@ button:focus-visible {
   background: var(--color-surface);
   color: var(--color-primary);
   font-size: 16px;
+}
+
+.topicPoolActions {
+  grid-area: actions;
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.topicPoolActions .secondaryButton {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 .topicDetailColumn {

@@ -427,6 +427,30 @@ const supplementTopicBatch = {
   updated_at: "2026-07-06T10:05:20Z",
 };
 
+const topicReviewSnapshot = {
+  snapshot_id: "18181818-1818-4818-8818-181818181818",
+  project_id: projectId,
+  root_batch_id: previousTopicBatchId,
+  source_run_id: "19191919-1919-4919-8919-191919191919",
+  status: "succeeded",
+  review_summary: "主题组中优先推进历史批次选题，补充选题需要再次评审。",
+  result: {
+    topic_reviews: [
+      {
+        topic_id: approvedTopic.topic_id,
+        priority: "priority",
+        reason: "账号定位匹配度高，适合直接进入脚本创作。",
+        risk_flags: [],
+        similar_topic_ids: [],
+      },
+    ],
+  },
+  error_message: null,
+  metadata: {},
+  created_at: "2026-07-07T09:00:00Z",
+  updated_at: "2026-07-07T09:00:15Z",
+};
+
 const overflowTopics = Array.from({ length: 12 }, (_, index) => ({
   ...ideaTopic,
   topic_id: `77777777-7777-4777-8777-${String(index + 1).padStart(12, "0")}`,
@@ -661,6 +685,7 @@ async function mockContentStrategyWorkflow(page: Page) {
 
 async function mockContentStrategyHistoryWorkflow(page: Page) {
   let supplementGenerated = false;
+  let reviewCreated = false;
 
   await page.unroute(/\/api\/video-workspace\/menus$/);
   await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
@@ -721,6 +746,24 @@ async function mockContentStrategyHistoryWorkflow(page: Page) {
     await route.fulfill({
       contentType: "application/json",
       json: { scripts: [], total: 0, limit: 20, offset: 0 },
+    });
+  });
+  await page.route(/\/api\/topic-groups\/[^/]+\/reviews\/latest$/, async (route) => {
+    const rootBatchId = route.request().url().split("/topic-groups/")[1]?.split("/")[0];
+    await route.fulfill({
+      contentType: "application/json",
+      json: reviewCreated && rootBatchId === previousTopicBatchId ? topicReviewSnapshot : null,
+    });
+  });
+  await page.route(/\/api\/topic-groups\/[^/]+\/reviews$/, async (route) => {
+    const rootBatchId = route.request().url().split("/topic-groups/")[1]?.split("/")[0];
+    expect(route.request().method()).toBe("POST");
+    expect(rootBatchId).toBe(previousTopicBatchId);
+    reviewCreated = true;
+    await route.fulfill({
+      contentType: "application/json",
+      status: 201,
+      json: topicReviewSnapshot,
     });
   });
   await page.route(/\/api\/agent\/conversations$/, async (route) => {
@@ -972,11 +1015,17 @@ test("内容策略历史生成列表页展示批次并限制已成稿选题删�
 
   await historyPage.getByRole("button", { name: /上一批 AI 内容流水线选题/ }).click();
   await expect(historyPage.getByRole("article", { name: "历史选题：历史批次选题" })).toBeVisible();
+  const topicGroupPanel = historyPage.getByRole("region", { name: "当前主题选题" });
+  await expect(topicGroupPanel.getByRole("region", { name: "优先推荐" })).toHaveCount(0);
+  await page.getByRole("button", { name: "评审当前主题组" }).click();
+  await expect(topicGroupPanel.getByRole("region", { name: "优先推荐" })).toBeVisible();
+  await expect(topicGroupPanel.getByText(topicReviewSnapshot.review_summary)).toBeVisible();
+  await expect(topicGroupPanel.getByText("账号定位匹配度高，适合直接进入脚本创作。")).toBeVisible();
+
   const supplementPanel = page.getByRole("region", { name: "补充选题" });
   await supplementPanel.getByLabel("补充要求").fill(supplementUserMessage.content);
   await supplementPanel.getByRole("button", { name: "补充生成" }).click();
   await expect(historyPage.getByRole("button", { name: /补充上一批 AI 内容流水线选题/ }).first()).toHaveClass(/selected/);
-  const topicGroupPanel = historyPage.getByRole("region", { name: "当前主题选题" });
   await expect(topicGroupPanel.getByRole("article", { name: "历史选题：历史批次选题" })).toBeVisible();
   await expect(topicGroupPanel.getByRole("article", { name: "历史选题：补充批次选题" })).toBeVisible();
   await expect(topicGroupPanel.getByText("原始生成", { exact: true })).toBeVisible();
@@ -985,8 +1034,12 @@ test("内容策略历史生成列表页展示批次并限制已成稿选题删�
 
   await contentStrategySubMenu.getByRole("button", { name: "当前选题池" }).click();
   const topicPool = page.getByRole("region", { name: "选题池" });
+  await expect(topicPool.getByRole("region", { name: "优先推荐" })).toBeVisible();
   await expect(topicPool.getByRole("button", { name: /补充批次选题/ })).toBeVisible();
   await expect(topicPool.getByRole("button", { name: /最新批次选题/ })).toHaveCount(0);
+  await topicPool.getByRole("button", { name: "查看全部选题" }).click();
+  await expect(topicPool.getByText("查看全部选题时不展示主题组评审")).toBeVisible();
+  await expect(topicPool.getByRole("region", { name: "优先推荐" })).toHaveCount(0);
 });
 
 test("内容策略空选题池布局贴近原型顶部", async ({ page }) => {

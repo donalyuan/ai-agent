@@ -2,11 +2,13 @@ use async_trait::async_trait;
 use chrono::Utc;
 use novex_api::agents::models::{
     ContentTopic, ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatch,
-    TopicGenerationBatchStatus, TopicGenerationBatchSummary,
+    TopicGenerationBatchStatus, TopicGenerationBatchSummary, TopicReviewSnapshot,
+    TopicReviewSnapshotStatus,
 };
 use novex_api::repositories::{
-    CreateContentTopicInput, CreateTopicGenerationBatchInput, TopicRepository,
-    TopicRepositoryError, UpdateContentTopicInput, UpdateTopicGenerationBatchInput,
+    CreateContentTopicInput, CreateTopicGenerationBatchInput, CreateTopicReviewSnapshotInput,
+    TopicRepository, TopicRepositoryError, UpdateContentTopicInput,
+    UpdateTopicGenerationBatchInput,
 };
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -17,6 +19,7 @@ use uuid::Uuid;
 struct MemoryTopicRepository {
     topics: Mutex<HashMap<Uuid, ContentTopic>>,
     batches: Mutex<HashMap<Uuid, TopicGenerationBatch>>,
+    review_snapshots: Mutex<HashMap<Uuid, TopicReviewSnapshot>>,
 }
 
 #[async_trait]
@@ -326,6 +329,53 @@ impl TopicRepository for MemoryTopicRepository {
         });
         batches.truncate(limit.clamp(1, 100) as usize);
         Ok(batches)
+    }
+
+    async fn create_topic_review_snapshot(
+        &self,
+        input: CreateTopicReviewSnapshotInput,
+    ) -> Result<TopicReviewSnapshot, TopicRepositoryError> {
+        let now = Utc::now();
+        let snapshot = TopicReviewSnapshot {
+            id: Uuid::new_v4(),
+            project_id: input.project_id,
+            root_batch_id: input.root_batch_id,
+            source_run_id: input.source_run_id,
+            status: input.status,
+            review_summary: input.review_summary,
+            result: input.result,
+            error_message: input.error_message,
+            metadata: input.metadata,
+            created_at: now,
+            updated_at: now,
+        };
+        self.review_snapshots
+            .lock()
+            .unwrap()
+            .insert(snapshot.id, snapshot.clone());
+        Ok(snapshot)
+    }
+
+    async fn get_latest_topic_review_snapshot(
+        &self,
+        project_id: Uuid,
+        root_batch_id: Uuid,
+    ) -> Result<Option<TopicReviewSnapshot>, TopicRepositoryError> {
+        let latest = self
+            .review_snapshots
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|snapshot| snapshot.project_id == project_id)
+            .filter(|snapshot| snapshot.root_batch_id == root_batch_id)
+            .filter(|snapshot| snapshot.status == TopicReviewSnapshotStatus::Succeeded)
+            .max_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            })
+            .cloned();
+        Ok(latest)
     }
 }
 

@@ -7,6 +7,7 @@ use novex_api::agents::conversational_runtime::{
 };
 use novex_api::agents::models::{
     ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatchStatus,
+    TopicReviewPriority, TopicReviewRiskFlag,
 };
 use novex_api::agents::{LLMClient, LLMError};
 use novex_api::repositories::{
@@ -186,6 +187,371 @@ fn topic_input(project_id: Uuid, batch_id: Uuid, title: &str) -> CreateContentTo
         tags: vec!["AI工具".to_string()],
         source: ContentTopicSource::Agent,
         metadata: json!({}),
+    }
+}
+
+#[tokio::test]
+async fn topic_group_review_persists_snapshot_records_steps_and_preserves_topic_status() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let (_runtime, _conversation_repository, topic_repository) = build_topic_runtime(
+        test_pool.clone(),
+        Arc::new(ScriptedLLMClient::returning_raw("{}")),
+    );
+    let original_batch = topic_repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            supplement_of_batch_id: None,
+            prompt: "原始生成 AI 工具方向选题".to_string(),
+            requested_count: 2,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    let original_topic = topic_repository
+        .create_topic(topic_input(project_id, original_batch.id, "原始批次选题"))
+        .await
+        .unwrap();
+    topic_repository
+        .update_topic_status(original_topic.id, ContentTopicStatus::Approved)
+        .await
+        .unwrap();
+    let supplement_batch = topic_repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            supplement_of_batch_id: Some(original_batch.id),
+            prompt: "补充生成小团队案例".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    let supplement_topic = topic_repository
+        .create_topic(topic_input(project_id, supplement_batch.id, "补充批次选题"))
+        .await
+        .unwrap();
+    let llm_client = Arc::new(ScriptedLLMClient::returning(json!({
+        "review_summary": "优先推进能直接脚本化的工具落地选题。",
+        "topic_reviews": [
+            {
+                "topic_id": original_topic.id,
+                "priority": "priority",
+                "reason": "账号匹配度高，脚本化路径清晰。",
+                "risk_flags": ["duplicate"],
+                "similar_topic_ids": [supplement_topic.id]
+            },
+            {
+                "topic_id": supplement_topic.id,
+                "priority": "backup",
+                "reason": "可作为同主题后续补充。",
+                "risk_flags": ["hard_to_script"],
+                "similar_topic_ids": [original_topic.id]
+            }
+        ]
+    })));
+    let (runtime, _conversation_repository, topic_repository) =
+        build_topic_runtime(test_pool.clone(), llm_client.clone());
+
+    let snapshot = runtime
+        .review_topic_group(project_id, original_batch.id)
+        .await
+        .unwrap();
+
+    assert_eq!(snapshot.project_id, project_id);
+    assert_eq!(snapshot.root_batch_id, original_batch.id);
+    assert!(snapshot.source_run_id.is_some());
+    assert_eq!(
+        snapshot.review_summary,
+        "优先推进能直接脚本化的工具落地选题。"
+    );
+    assert_eq!(snapshot.result.topic_reviews.len(), 2);
+    assert_eq!(
+        snapshot.result.topic_reviews[0].priority,
+        TopicReviewPriority::Priority
+    );
+    assert_eq!(
+        snapshot.result.topic_reviews[0].risk_flags,
+        vec![TopicReviewRiskFlag::Duplicate]
+    );
+
+    let latest = topic_repository
+        .get_latest_topic_review_snapshot(project_id, original_batch.id)
+        .await
+        .unwrap()
+        .expect("latest topic review snapshot should be saved");
+    assert_eq!(latest.id, snapshot.id);
+
+    let original_after = topic_repository.get_topic(original_topic.id).await.unwrap();
+    let supplement_after = topic_repository
+        .get_topic(supplement_topic.id)
+        .await
+        .unwrap();
+    assert_eq!(original_after.status, ContentTopicStatus::Approved);
+    assert_eq!(supplement_after.status, ContentTopicStatus::Idea);
+
+    let step_types = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT step_type
+        FROM agent_steps
+        WHERE agent_run_id = $1
+        ORDER BY step_order ASC
+        "#,
+    )
+    .bind(snapshot.source_run_id.unwrap())
+    .fetch_all(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        step_types,
+        vec![
+            "read_topic_group",
+            "review_topic_group",
+            "persist_topic_review_snapshot"
+        ]
+    );
+
+    {
+        let prompts = llm_client.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        let prompt = &prompts[0].user;
+        assert!(prompt.contains("AI 工具和内容生产效率"));
+        assert!(prompt.contains("原始生成 AI 工具方向选题"));
+        assert!(prompt.contains("原始批次选题"));
+        assert!(prompt.contains("补充批次选题"));
+        assert!(prompt.contains("原始生成"));
+        assert!(prompt.contains("补充生成"));
+        assert!(prompt.contains("只作为决策辅助"));
+        let schema = prompts[0]
+            .output_schema
+            .as_ref()
+            .expect("topic review should request structured output");
+        assert_eq!(schema.name, "topic_group_review");
+    }
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn topic_group_review_rejects_invalid_output_without_changing_topic_status() {
+    let cases = vec![
+        (
+            "external_topic",
+            json!({
+                "review_summary": "包含组外选题",
+                "topic_reviews": [
+                    {
+                        "topic_id": Uuid::new_v4(),
+                        "priority": "priority",
+                        "reason": "错误引用",
+                        "risk_flags": [],
+                        "similar_topic_ids": []
+                    }
+                ]
+            }),
+            "topic_id must belong to current topic group",
+        ),
+        (
+            "invalid_priority",
+            json!({
+                "review_summary": "非法优先级",
+                "topic_reviews": [
+                    {
+                        "topic_id": Uuid::nil(),
+                        "priority": "must_do",
+                        "reason": "非法 priority",
+                        "risk_flags": [],
+                        "similar_topic_ids": []
+                    }
+                ]
+            }),
+            "unknown variant",
+        ),
+        (
+            "invalid_risk_flag",
+            json!({
+                "review_summary": "非法风险",
+                "topic_reviews": [
+                    {
+                        "topic_id": Uuid::nil(),
+                        "priority": "backup",
+                        "reason": "非法 risk flag",
+                        "risk_flags": ["not_a_risk"],
+                        "similar_topic_ids": []
+                    }
+                ]
+            }),
+            "unknown variant",
+        ),
+    ];
+
+    for (label, mut payload, expected_error) in cases {
+        let (admin_pool, test_pool, database_name) = migrated_pool().await;
+        let project_id = insert_project(&test_pool).await;
+        let original_batch = {
+            let repository = PostgresTopicRepository::new(test_pool.clone());
+            repository
+                .create_generation_batch(CreateTopicGenerationBatchInput {
+                    project_id,
+                    source_run_id: None,
+                    supplement_of_batch_id: None,
+                    prompt: format!("{label}: 原始生成 AI 工具方向选题"),
+                    requested_count: 1,
+                    status: TopicGenerationBatchStatus::Succeeded,
+                    error_message: None,
+                    metadata: json!({}),
+                })
+                .await
+                .unwrap()
+        };
+        let topic_repository = Arc::new(PostgresTopicRepository::new(test_pool.clone()));
+        let topic = topic_repository
+            .create_topic(topic_input(project_id, original_batch.id, "待评审选题"))
+            .await
+            .unwrap();
+        topic_repository
+            .update_topic_status(topic.id, ContentTopicStatus::Approved)
+            .await
+            .unwrap();
+
+        if label != "external_topic" {
+            payload["topic_reviews"][0]["topic_id"] = json!(topic.id);
+        }
+        let llm_client = Arc::new(ScriptedLLMClient::returning(payload));
+        let (runtime, _conversation_repository, topic_repository) =
+            build_topic_runtime(test_pool.clone(), llm_client);
+
+        let error = runtime
+            .review_topic_group(project_id, original_batch.id)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(expected_error),
+            "{label} should contain {expected_error}, got {error}"
+        );
+        assert!(matches!(error, AgentRuntimeError::InvalidLlmOutput(_)));
+
+        let latest = topic_repository
+            .get_latest_topic_review_snapshot(project_id, original_batch.id)
+            .await
+            .unwrap();
+        assert!(latest.is_none(), "{label} should not save succeeded review");
+        let topic_after = topic_repository.get_topic(topic.id).await.unwrap();
+        assert_eq!(topic_after.status, ContentTopicStatus::Approved);
+
+        test_pool.close().await;
+        drop_database(&admin_pool, &database_name).await;
+        admin_pool.close().await;
+    }
+}
+
+#[tokio::test]
+async fn topic_group_review_rejects_invalid_json_missing_fields_and_llm_failure() {
+    enum FailureKind {
+        Raw(&'static str),
+        EmptyReviews,
+        MissingReason,
+        LlmTimeout,
+    }
+
+    let cases = vec![
+        (
+            "invalid_json",
+            FailureKind::Raw("not json"),
+            "missing JSON object start",
+        ),
+        (
+            "empty_reviews",
+            FailureKind::EmptyReviews,
+            "topic_reviews must not be empty",
+        ),
+        (
+            "missing_reason",
+            FailureKind::MissingReason,
+            "missing field `reason`",
+        ),
+        (
+            "llm_timeout",
+            FailureKind::LlmTimeout,
+            "llm request timeout",
+        ),
+    ];
+
+    for (label, kind, expected_error) in cases {
+        let (admin_pool, test_pool, database_name) = migrated_pool().await;
+        let project_id = insert_project(&test_pool).await;
+        let topic_repository = Arc::new(PostgresTopicRepository::new(test_pool.clone()));
+        let original_batch = topic_repository
+            .create_generation_batch(CreateTopicGenerationBatchInput {
+                project_id,
+                source_run_id: None,
+                supplement_of_batch_id: None,
+                prompt: format!("{label}: 原始生成 AI 工具方向选题"),
+                requested_count: 1,
+                status: TopicGenerationBatchStatus::Succeeded,
+                error_message: None,
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+        let topic = topic_repository
+            .create_topic(topic_input(project_id, original_batch.id, "待评审选题"))
+            .await
+            .unwrap();
+        topic_repository
+            .update_topic_status(topic.id, ContentTopicStatus::Approved)
+            .await
+            .unwrap();
+
+        let llm_client = match kind {
+            FailureKind::Raw(raw) => ScriptedLLMClient::returning_raw(raw),
+            FailureKind::EmptyReviews => ScriptedLLMClient::returning(json!({
+                "review_summary": "无结果",
+                "topic_reviews": []
+            })),
+            FailureKind::MissingReason => ScriptedLLMClient::returning(json!({
+                "review_summary": "缺字段",
+                "topic_reviews": [
+                    {
+                        "topic_id": topic.id,
+                        "priority": "backup",
+                        "risk_flags": [],
+                        "similar_topic_ids": []
+                    }
+                ]
+            })),
+            FailureKind::LlmTimeout => ScriptedLLMClient::failing(LLMError::Timeout),
+        };
+        let (runtime, _conversation_repository, topic_repository) =
+            build_topic_runtime(test_pool.clone(), Arc::new(llm_client));
+
+        let error = runtime
+            .review_topic_group(project_id, original_batch.id)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(expected_error),
+            "{label} should contain {expected_error}, got {error}"
+        );
+
+        let latest = topic_repository
+            .get_latest_topic_review_snapshot(project_id, original_batch.id)
+            .await
+            .unwrap();
+        assert!(latest.is_none(), "{label} should not save succeeded review");
+        let topic_after = topic_repository.get_topic(topic.id).await.unwrap();
+        assert_eq!(topic_after.status, ContentTopicStatus::Approved);
+
+        test_pool.close().await;
+        drop_database(&admin_pool, &database_name).await;
+        admin_pool.close().await;
     }
 }
 
