@@ -267,6 +267,30 @@ async fn migrations_create_video_agent_core_schema() {
         "topic generation batches should expose supplement_of_batch_id"
     );
     assert!(
+        column_exists(&test_pool, "projects", "strategy_profile").await,
+        "projects should expose strategy_profile for account strategy context"
+    );
+    let strategy_profile_column = sqlx::query_as::<_, (String, String, String)>(
+        r#"
+        SELECT data_type, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'projects'
+          AND column_name = 'strategy_profile'
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .expect("projects.strategy_profile column metadata should be readable");
+    assert_eq!(
+        strategy_profile_column,
+        (
+            "jsonb".to_string(),
+            "NO".to_string(),
+            "'{}'::jsonb".to_string()
+        )
+    );
+    assert!(
         constraint_exists(
             &test_pool,
             "video_workspace_menus",
@@ -339,7 +363,7 @@ async fn migrations_create_video_agent_core_schema() {
         FROM video_workspace_menus child
         JOIN video_workspace_menus parent ON parent.id = child.parent_id
         WHERE parent.menu_key = 'content-strategy'
-          AND child.menu_key IN ('topic-history', 'topic-generator')
+          AND child.menu_key IN ('account-strategy', 'topic-history', 'topic-generator')
         ORDER BY child.sort_order ASC
         "#,
     )
@@ -349,6 +373,12 @@ async fn migrations_create_video_agent_core_schema() {
     assert_eq!(
         content_strategy_children,
         vec![
+            (
+                "account-strategy".to_string(),
+                "账号策略".to_string(),
+                true,
+                "active".to_string()
+            ),
             (
                 "topic-history".to_string(),
                 "历史生成".to_string(),
@@ -430,7 +460,7 @@ async fn runtime_postgres_connection_syncs_content_strategy_menu_state() {
         UPDATE video_workspace_menus
         SET is_enabled = false,
             status = 'planned'
-        WHERE menu_key IN ('content-strategy', 'topic-history', 'topic-generator')
+        WHERE menu_key IN ('content-strategy', 'account-strategy', 'topic-history', 'topic-generator')
         "#,
     )
     .execute(&setup_pool)
@@ -446,11 +476,12 @@ async fn runtime_postgres_connection_syncs_content_strategy_menu_state() {
         r#"
         SELECT menu_key, is_enabled, status
         FROM video_workspace_menus
-        WHERE menu_key IN ('content-strategy', 'topic-history', 'topic-generator')
+        WHERE menu_key IN ('content-strategy', 'account-strategy', 'topic-history', 'topic-generator')
         ORDER BY CASE menu_key
             WHEN 'content-strategy' THEN 1
-            WHEN 'topic-history' THEN 2
-            WHEN 'topic-generator' THEN 3
+            WHEN 'account-strategy' THEN 2
+            WHEN 'topic-history' THEN 3
+            WHEN 'topic-generator' THEN 4
             ELSE 4
         END
         "#,
@@ -462,6 +493,7 @@ async fn runtime_postgres_connection_syncs_content_strategy_menu_state() {
         menu_states,
         vec![
             ("content-strategy".to_string(), true, "active".to_string()),
+            ("account-strategy".to_string(), true, "active".to_string()),
             ("topic-history".to_string(), true, "active".to_string()),
             ("topic-generator".to_string(), true, "active".to_string()),
         ]

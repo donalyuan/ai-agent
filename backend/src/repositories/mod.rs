@@ -8,8 +8,8 @@ pub use conversation_repository::{
     ConversationRepository, ConversationRepositoryError, PostgresConversationRepository,
 };
 pub use project_repository::{
-    CreateProjectInput, PostgresProjectRepository, Project, ProjectRepository,
-    ProjectRepositoryError,
+    AccountStrategyProfile, CreateProjectInput, PostgresProjectRepository, Project,
+    ProjectRepository, ProjectRepositoryError, UpdateProjectStrategyProfileInput,
 };
 pub use script_repository::{PostgresScriptRepository, ScriptRepository, ScriptRepositoryError};
 pub use topic_repository::{

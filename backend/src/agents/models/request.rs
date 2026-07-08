@@ -8,8 +8,8 @@ use super::{
 use crate::agents::conversation::{
     AgentConversation, AgentConversationStatus, AgentMessage, AgentMessageRole, AgentRunRecord,
 };
-use crate::repositories::Project;
 use crate::repositories::WorkspaceMenuTreeNode;
+use crate::repositories::{AccountStrategyProfile, Project};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,6 +26,8 @@ pub struct CreateProjectRequest {
     #[serde(default)]
     #[validate(length(max = 2000))]
     pub description: String,
+    #[serde(default)]
+    pub strategy_profile: Option<AccountStrategyProfileRequest>,
 }
 
 impl CreateProjectRequest {
@@ -35,7 +37,118 @@ impl CreateProjectRequest {
         }
 
         self.validate()
-            .map_err(|error| format!("项目参数无效: {error}"))
+            .map_err(|error| format!("项目参数无效: {error}"))?;
+        if let Some(strategy_profile) = &self.strategy_profile {
+            strategy_profile.normalize()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct UpdateProjectStrategyProfileRequest {
+    pub name: String,
+    #[serde(default)]
+    pub positioning: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub strategy_profile: AccountStrategyProfileRequest,
+}
+
+impl UpdateProjectStrategyProfileRequest {
+    pub fn validate_for_api(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("账号名称不能为空".to_string());
+        }
+        if self.name.trim().chars().count() > 120 {
+            return Err("账号名称不能超过 120 个字符".to_string());
+        }
+        if self.positioning.trim().chars().count() > 500 {
+            return Err("定位摘要不能超过 500 个字符".to_string());
+        }
+        if self.description.trim().chars().count() > 2_000 {
+            return Err("账号描述不能超过 2000 个字符".to_string());
+        }
+        self.strategy_profile.normalize()?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct StrategyProfileDraftRequest {
+    #[serde(default)]
+    pub direction_notes: String,
+}
+
+impl StrategyProfileDraftRequest {
+    pub fn validate_for_api(&self) -> Result<(), String> {
+        if self.direction_notes.trim().chars().count() > ACCOUNT_STRATEGY_TEXT_LIMIT {
+            return Err("补充方向不能超过 1000 个字符".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StrategyProfileDraftResponse {
+    pub draft: AccountStrategyProfile,
+    pub draft_summary: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct AccountStrategyProfileRequest {
+    #[serde(default)]
+    pub target_audience: String,
+    #[serde(default)]
+    pub content_pillars: Vec<String>,
+    #[serde(default)]
+    pub tone_style: String,
+    #[serde(default)]
+    pub forbidden_topics: Vec<String>,
+    #[serde(default)]
+    pub reference_accounts: Vec<String>,
+    #[serde(default)]
+    pub topic_preferences: String,
+}
+
+impl AccountStrategyProfileRequest {
+    pub fn normalize(&self) -> Result<AccountStrategyProfile, String> {
+        Ok(AccountStrategyProfile {
+            target_audience: normalize_text_field(
+                "目标受众",
+                &self.target_audience,
+                ACCOUNT_STRATEGY_TEXT_LIMIT,
+            )?,
+            content_pillars: normalize_string_list(
+                "内容支柱",
+                &self.content_pillars,
+                ACCOUNT_STRATEGY_LIST_LIMIT,
+                ACCOUNT_STRATEGY_LIST_ITEM_LIMIT,
+            )?,
+            tone_style: normalize_text_field(
+                "表达风格",
+                &self.tone_style,
+                ACCOUNT_STRATEGY_TEXT_LIMIT,
+            )?,
+            forbidden_topics: normalize_string_list(
+                "禁区方向",
+                &self.forbidden_topics,
+                ACCOUNT_STRATEGY_LIST_LIMIT,
+                ACCOUNT_STRATEGY_LIST_ITEM_LIMIT,
+            )?,
+            reference_accounts: normalize_string_list(
+                "参考账号",
+                &self.reference_accounts,
+                ACCOUNT_STRATEGY_LIST_LIMIT,
+                ACCOUNT_STRATEGY_LIST_ITEM_LIMIT,
+            )?,
+            topic_preferences: normalize_text_field(
+                "选题偏好",
+                &self.topic_preferences,
+                ACCOUNT_STRATEGY_TEXT_LIMIT,
+            )?,
+        })
     }
 }
 
@@ -45,6 +158,7 @@ pub struct ProjectResponse {
     pub name: String,
     pub positioning: String,
     pub description: String,
+    pub strategy_profile: AccountStrategyProfile,
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -57,11 +171,50 @@ impl From<Project> for ProjectResponse {
             name: project.name,
             positioning: project.positioning,
             description: project.description,
+            strategy_profile: project.strategy_profile,
             status: project.status,
             created_at: project.created_at,
             updated_at: project.updated_at,
         }
     }
+}
+
+const ACCOUNT_STRATEGY_TEXT_LIMIT: usize = 1_000;
+const ACCOUNT_STRATEGY_LIST_LIMIT: usize = 20;
+const ACCOUNT_STRATEGY_LIST_ITEM_LIMIT: usize = 120;
+
+fn normalize_text_field(label: &str, value: &str, max_chars: usize) -> Result<String, String> {
+    let normalized = value.trim().to_string();
+    if normalized.chars().count() > max_chars {
+        return Err(format!("{label}不能超过 {max_chars} 个字符"));
+    }
+    Ok(normalized)
+}
+
+fn normalize_string_list(
+    label: &str,
+    values: &[String],
+    max_items: usize,
+    max_item_chars: usize,
+) -> Result<Vec<String>, String> {
+    if values.len() > max_items {
+        return Err(format!("{label}最多填写 {max_items} 项"));
+    }
+
+    let mut normalized = Vec::new();
+    for value in values {
+        let item = value.trim();
+        if item.is_empty() {
+            continue;
+        }
+        if item.chars().count() > max_item_chars {
+            return Err(format!("{label}单项不能超过 {max_item_chars} 个字符"));
+        }
+        if !normalized.iter().any(|existing| existing == item) {
+            normalized.push(item.to_string());
+        }
+    }
+    Ok(normalized)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

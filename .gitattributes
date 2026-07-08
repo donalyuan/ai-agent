@@ -1,0 +1,4 @@
+backend/migrations/20260707040000_topic_review_snapshots.sql text eol=lf
+backend/migrations/20260708010000_topic_quality_evaluations.sql text eol=lf
+backend/migrations/20260708020000_account_strategy_profile.sql text eol=lf
+backend/migrations/20260708030000_account_strategy_menu.sql text eol=lf

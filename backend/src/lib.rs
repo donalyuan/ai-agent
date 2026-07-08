@@ -7,13 +7,14 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use novex_model::{LLMError, LLMPrompt, OpenAIClient, OpenAIConfig};
+use novex_model::{LLMError, LLMJsonSchema, LLMPrompt, OpenAIClient, OpenAIConfig};
 use repositories::{
     ConversationRepository, ConversationRepositoryError, CreateContentTopicInput,
     CreateProjectInput, PostgresConversationRepository, PostgresProjectRepository,
     PostgresScriptRepository, PostgresTopicRepository, PostgresWorkspaceMenuRepository,
     ProjectRepository, ProjectRepositoryError, ScriptRepositoryError, TopicRepository,
-    TopicRepositoryError, UpdateContentTopicInput, WorkspaceMenuRepositoryError,
+    TopicRepositoryError, UpdateContentTopicInput, UpdateProjectStrategyProfileInput,
+    WorkspaceMenuRepositoryError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -25,17 +26,19 @@ use uuid::Uuid;
 use crate::agents::conversation::CreateAgentConversationInput;
 use crate::agents::conversational_runtime::{AgentRuntime, AgentRuntimeError, AgentTurnRequest};
 use crate::agents::models::{
-    AgentConversationResponse, AgentMessageListResponse, AgentMessageResponse, AgentRunResponse,
-    AgentTurnResponseBody, ContentTopicFilter, ContentTopicListResponse, ContentTopicResponse,
-    ContentTopicStatsResponse, ContentTopicStatus, CreateAgentConversationRequest,
-    CreateContentTopicRequest, CreateProjectRequest, GenerateScriptRequest,
-    PrepareScriptFromTopicRequest, PrepareScriptFromTopicResponse, ProjectListResponse,
-    ProjectResponse, ScriptListFilter, ScriptListResponse, ScriptResponse, SendAgentMessageRequest,
+    AccountStrategyProfileRequest, AgentConversationResponse, AgentMessageListResponse,
+    AgentMessageResponse, AgentRunResponse, AgentTurnResponseBody, ContentTopicFilter,
+    ContentTopicListResponse, ContentTopicResponse, ContentTopicStatsResponse, ContentTopicStatus,
+    CreateAgentConversationRequest, CreateContentTopicRequest, CreateProjectRequest,
+    GenerateScriptRequest, PrepareScriptFromTopicRequest, PrepareScriptFromTopicResponse,
+    ProjectListResponse, ProjectResponse, ScriptListFilter, ScriptListResponse, ScriptResponse,
+    SendAgentMessageRequest, StrategyProfileDraftRequest, StrategyProfileDraftResponse,
     TopicGenerationBatchListResponse, TopicGenerationBatchSummaryResponse, TopicGroupListQuery,
     TopicGroupListResponse, TopicGroupSummaryResponse, TopicQualityEvaluationResponse,
     TopicReviewSnapshotResponse, TopicScriptRequestPreview, UpdateContentTopicRequest,
-    UpdateContentTopicStatusRequest, UpdateScriptStatusRequest, UpdateScriptStatusResponse,
-    WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
+    UpdateContentTopicStatusRequest, UpdateProjectStrategyProfileRequest,
+    UpdateScriptStatusRequest, UpdateScriptStatusResponse, WorkspaceMenuListResponse,
+    WorkspaceMenuNodeResponse,
 };
 
 pub mod agents;
@@ -93,6 +96,7 @@ pub struct AppState {
     config: AppConfig,
     pg_pool: Option<PgPool>,
     redis_client: Option<redis::Client>,
+    llm_client: Option<Arc<dyn LLMClient>>,
 }
 
 impl AppState {
@@ -101,6 +105,7 @@ impl AppState {
             config: AppConfig::from_env(),
             pg_pool: None,
             redis_client: None,
+            llm_client: None,
         }
     }
 
@@ -113,7 +118,13 @@ impl AppState {
             config,
             pg_pool: Some(pg_pool),
             redis_client,
+            llm_client: None,
         })
+    }
+
+    pub fn with_llm_client(mut self, llm_client: Arc<dyn LLMClient>) -> Self {
+        self.llm_client = Some(llm_client);
+        self
     }
 
     fn script_agent_service(&self) -> Result<ScriptAgentService, ScriptApiError> {
@@ -205,6 +216,9 @@ impl AppState {
     }
 
     fn openai_client(&self) -> Result<Arc<dyn LLMClient>, ScriptApiError> {
+        if let Some(llm_client) = &self.llm_client {
+            return Ok(llm_client.clone());
+        }
         Ok(Arc::new(LazyOpenAIClient {
             config: OpenAIConfig {
                 api_key: self.config.openai_api_key.clone(),
@@ -299,6 +313,14 @@ pub fn build_app_with_state(state: AppState) -> Router {
         .route("/api/video-workspace/menus", get(list_workspace_menus))
         .route("/api/projects", get(list_projects).post(create_project))
         .route(
+            "/api/projects/:project_id/strategy-profile",
+            put(update_project_strategy_profile),
+        )
+        .route(
+            "/api/projects/:project_id/strategy-profile/draft",
+            post(generate_project_strategy_profile_draft),
+        )
+        .route(
             "/api/projects/:project_id/topics",
             get(list_topics).post(create_topic),
         )
@@ -384,7 +406,7 @@ async fn sync_content_strategy_menu_state(pool: &PgPool) -> Result<(), sqlx::Err
             status = 'active',
             metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{phase}', '2'::jsonb, true),
             updated_at = NOW()
-        WHERE menu_key IN ('content-strategy', 'topic-history', 'topic-generator')
+        WHERE menu_key IN ('content-strategy', 'account-strategy', 'topic-history', 'topic-generator')
         "#,
     )
     .execute(pool)
@@ -455,6 +477,13 @@ async fn create_project(
             name: request.name.trim().to_string(),
             positioning: request.positioning.trim().to_string(),
             description: request.description.trim().to_string(),
+            strategy_profile: request
+                .strategy_profile
+                .as_ref()
+                .map(|profile| profile.normalize())
+                .transpose()
+                .map_err(ScriptApiError::ProjectValidation)?
+                .unwrap_or_default(),
         })
         .await?;
 
@@ -470,6 +499,237 @@ async fn list_projects(
     Ok(Json(ProjectListResponse {
         projects: projects.into_iter().map(ProjectResponse::from).collect(),
     }))
+}
+
+async fn update_project_strategy_profile(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    ValidJson(request): ValidJson<UpdateProjectStrategyProfileRequest>,
+) -> Result<Json<ProjectResponse>, ScriptApiError> {
+    request
+        .validate_for_api()
+        .map_err(ScriptApiError::ProjectValidation)?;
+    let strategy_profile = request
+        .strategy_profile
+        .normalize()
+        .map_err(ScriptApiError::ProjectValidation)?;
+    let repository = state.project_repository()?;
+    let project = repository
+        .update_strategy_profile(
+            project_id,
+            UpdateProjectStrategyProfileInput {
+                name: request.name.trim().to_string(),
+                positioning: request.positioning.trim().to_string(),
+                description: request.description.trim().to_string(),
+                strategy_profile,
+            },
+        )
+        .await?;
+
+    Ok(Json(ProjectResponse::from(project)))
+}
+
+async fn generate_project_strategy_profile_draft(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    ValidJson(request): ValidJson<StrategyProfileDraftRequest>,
+) -> Result<Json<StrategyProfileDraftResponse>, ScriptApiError> {
+    request
+        .validate_for_api()
+        .map_err(ScriptApiError::ProjectValidation)?;
+    let repository = state.project_repository()?;
+    let project = repository.get_project(project_id).await?;
+    let llm_client = state.openai_client()?;
+    let raw = generate_strategy_profile_draft_with_retry(
+        llm_client.as_ref(),
+        build_strategy_profile_draft_prompt(&project, &request.direction_notes),
+    )
+    .await
+    .map_err(ScriptApiError::StrategyDraftLlm)?;
+    let output = StrategyProfileDraftLlmOutput::parse_and_validate(&raw)
+        .map_err(ScriptApiError::StrategyDraftOutput)?;
+
+    Ok(Json(StrategyProfileDraftResponse {
+        draft: output.draft,
+        draft_summary: output.draft_summary,
+    }))
+}
+
+async fn generate_strategy_profile_draft_with_retry(
+    llm_client: &dyn LLMClient,
+    prompt: LLMPrompt,
+) -> Result<String, LLMError> {
+    let first_result = llm_client.generate_script(prompt.clone()).await;
+    match first_result {
+        Ok(raw) => Ok(raw),
+        Err(error) if is_retryable_strategy_draft_error(&error) => {
+            llm_client.generate_script(prompt).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn is_retryable_strategy_draft_error(error: &LLMError) -> bool {
+    match error {
+        LLMError::Provider(message) => {
+            let normalized = message.to_ascii_lowercase();
+            normalized.contains("502")
+                || normalized.contains("503")
+                || normalized.contains("504")
+                || normalized.contains("429")
+                || normalized.contains("upstream_error")
+                || normalized.contains("temporarily unavailable")
+                || normalized.contains("decoding response body")
+                || normalized.contains("rate limit")
+        }
+        LLMError::Transport(_) => true,
+        LLMError::Config(_) | LLMError::Timeout => false,
+    }
+}
+
+fn build_strategy_profile_draft_prompt(
+    project: &repositories::Project,
+    direction_notes: &str,
+) -> LLMPrompt {
+    LLMPrompt {
+        system: "你是短视频内容账号策略顾问。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。"
+            .to_string(),
+        user: format!(
+            r#"请基于当前内容账号资料和补充方向，生成结构化账号策略草稿。
+
+当前账号名称：{name}
+定位摘要：{positioning}
+账号描述：{description}
+当前目标受众：{target_audience}
+当前内容支柱：{content_pillars}
+当前表达风格：{tone_style}
+当前禁区方向：{forbidden_topics}
+当前参考账号：{reference_accounts}
+当前选题偏好：{topic_preferences}
+
+补充方向：{direction_notes}
+
+输出要求：
+1. 只生成草稿，不要表达已保存或已生效。
+2. draft 必须包含 target_audience、content_pillars、tone_style、forbidden_topics、reference_accounts、topic_preferences。
+3. content_pillars、forbidden_topics、reference_accounts 每组最多 20 项。
+4. 不得生成夸大收益、灰产引流或虚假承诺方向。
+5. draft_summary 用一句中文总结草稿策略取向。"#,
+            name = project.name,
+            positioning = project.positioning,
+            description = project.description,
+            target_audience = project.strategy_profile.target_audience,
+            content_pillars = format_prompt_list(&project.strategy_profile.content_pillars),
+            tone_style = project.strategy_profile.tone_style,
+            forbidden_topics = format_prompt_list(&project.strategy_profile.forbidden_topics),
+            reference_accounts = format_prompt_list(&project.strategy_profile.reference_accounts),
+            topic_preferences = project.strategy_profile.topic_preferences,
+            direction_notes = direction_notes.trim()
+        ),
+        max_output_tokens: Some(1_200),
+        output_schema: Some(strategy_profile_draft_output_schema()),
+    }
+}
+
+fn format_prompt_list(values: &[String]) -> String {
+    if values.is_empty() {
+        return "无".to_string();
+    }
+    values.join("、")
+}
+
+fn strategy_profile_draft_output_schema() -> LLMJsonSchema {
+    LLMJsonSchema {
+        name: "account_strategy_profile_draft".to_string(),
+        strict: true,
+        schema: json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["draft", "draft_summary"],
+            "properties": {
+                "draft": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "target_audience",
+                        "content_pillars",
+                        "tone_style",
+                        "forbidden_topics",
+                        "reference_accounts",
+                        "topic_preferences"
+                    ],
+                    "properties": {
+                        "target_audience": { "type": "string" },
+                        "content_pillars": {
+                            "type": "array",
+                            "maxItems": 20,
+                            "items": { "type": "string" }
+                        },
+                        "tone_style": { "type": "string" },
+                        "forbidden_topics": {
+                            "type": "array",
+                            "maxItems": 20,
+                            "items": { "type": "string" }
+                        },
+                        "reference_accounts": {
+                            "type": "array",
+                            "maxItems": 20,
+                            "items": { "type": "string" }
+                        },
+                        "topic_preferences": { "type": "string" }
+                    }
+                },
+                "draft_summary": { "type": "string" }
+            }
+        }),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct StrategyProfileDraftLlmOutput {
+    draft: AccountStrategyProfileRequest,
+    draft_summary: String,
+}
+
+impl StrategyProfileDraftLlmOutput {
+    fn parse_and_validate(raw: &str) -> Result<StrategyProfileDraftResponse, String> {
+        let json_text = extract_json_object(raw)?;
+        let output: Self = serde_json::from_str(json_text).map_err(|error| error.to_string())?;
+        let draft = output.draft.normalize()?;
+        if account_strategy_profile_is_empty(&draft) {
+            return Err("draft must not be empty".to_string());
+        }
+        let draft_summary = output.draft_summary.trim().to_string();
+        if draft_summary.is_empty() {
+            return Err("draft_summary must not be empty".to_string());
+        }
+        Ok(StrategyProfileDraftResponse {
+            draft,
+            draft_summary,
+        })
+    }
+}
+
+fn account_strategy_profile_is_empty(profile: &repositories::AccountStrategyProfile) -> bool {
+    profile.target_audience.is_empty()
+        && profile.content_pillars.is_empty()
+        && profile.tone_style.is_empty()
+        && profile.forbidden_topics.is_empty()
+        && profile.reference_accounts.is_empty()
+        && profile.topic_preferences.is_empty()
+}
+
+fn extract_json_object(raw: &str) -> Result<&str, String> {
+    let start = raw
+        .find('{')
+        .ok_or_else(|| "missing JSON object start".to_string())?;
+    let end = raw
+        .rfind('}')
+        .ok_or_else(|| "missing JSON object end".to_string())?;
+    if start > end {
+        return Err("invalid JSON object bounds".to_string());
+    }
+    Ok(&raw[start..=end])
 }
 
 async fn list_workspace_menus(
@@ -951,6 +1211,8 @@ enum ScriptApiError {
     ProjectValidation(String),
     ConversationValidation(String),
     TopicValidation(String),
+    StrategyDraftLlm(LLMError),
+    StrategyDraftOutput(String),
     JsonRejection(JsonRejection),
 }
 
@@ -998,11 +1260,9 @@ impl IntoResponse for ScriptApiError {
                 Json(json!({ "error": message })),
             )
                 .into_response(),
-            Self::ProjectRepository(error) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "项目存储失败", "details": error.to_string() })),
-            )
-                .into_response(),
+            Self::ProjectRepository(error) => {
+                project_repository_error_response(error).into_response()
+            }
             Self::ConversationRepository(error) => {
                 conversation_repository_error_response(error).into_response()
             }
@@ -1021,6 +1281,16 @@ impl IntoResponse for ScriptApiError {
             Self::TopicValidation(message) => {
                 (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
             }
+            Self::StrategyDraftLlm(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "AI 策略草稿生成失败", "details": error.to_string() })),
+            )
+                .into_response(),
+            Self::StrategyDraftOutput(message) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "AI 策略草稿输出无效", "details": message })),
+            )
+                .into_response(),
             Self::JsonRejection(error) => invalid_json_response(error).into_response(),
             Self::Agent(error) => script_agent_error_response(error).into_response(),
             Self::AgentRuntime(error) => agent_runtime_error_response(error).into_response(),
@@ -1062,6 +1332,21 @@ fn topic_repository_error_response(
         TopicRepositoryError::Storage(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "选题存储失败", "details": message })),
+        ),
+    }
+}
+
+fn project_repository_error_response(
+    error: ProjectRepositoryError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match error {
+        ProjectRepositoryError::NotFound(project_id) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "项目不存在", "project_id": project_id })),
+        ),
+        ProjectRepositoryError::Storage(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "项目存储失败", "details": message })),
         ),
     }
 }

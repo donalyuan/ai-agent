@@ -1,9 +1,9 @@
 use chrono::Utc;
 use novex_api::agents::models::{
-    CreateProjectRequest, GenerateScriptRequest, ProjectResponse, Scene, Script, ScriptListFilter,
-    ScriptResponse, ScriptStatus, ScriptStyle,
+    AccountStrategyProfileRequest, CreateProjectRequest, GenerateScriptRequest, ProjectResponse,
+    Scene, Script, ScriptListFilter, ScriptResponse, ScriptStatus, ScriptStyle,
 };
-use novex_api::repositories::Project;
+use novex_api::repositories::{AccountStrategyProfile, Project};
 use serde_json::{json, Value};
 use uuid::Uuid;
 use validator::Validate;
@@ -47,11 +47,22 @@ fn create_project_request_validates_required_name_and_optional_context() {
     let request: CreateProjectRequest = serde_json::from_value(json!({
         "name": "科技博主",
         "positioning": "科技知识账号",
-        "description": "面向程序员的知识短视频"
+        "description": "面向程序员的知识短视频",
+        "strategy_profile": {
+            "target_audience": "内容运营负责人",
+            "content_pillars": ["AI 工具", "内容生产"],
+            "tone_style": "直接清晰",
+            "forbidden_topics": ["夸大收益"],
+            "reference_accounts": ["参考账号A"],
+            "topic_preferences": "优先教程和案例"
+        }
     }))
     .unwrap();
 
     request.validate_for_api().unwrap();
+    let profile = request.strategy_profile.unwrap();
+    assert_eq!(profile.target_audience, "内容运营负责人");
+    assert_eq!(profile.content_pillars, vec!["AI 工具", "内容生产"]);
 
     let invalid: CreateProjectRequest = serde_json::from_value(json!({
         "name": "",
@@ -64,6 +75,35 @@ fn create_project_request_validates_required_name_and_optional_context() {
 }
 
 #[test]
+fn account_strategy_profile_request_normalizes_lists_and_rejects_invalid_fields() {
+    let profile = AccountStrategyProfileRequest {
+        target_audience: " 内容运营负责人 ".to_string(),
+        content_pillars: vec![
+            "AI 工具".to_string(),
+            "".to_string(),
+            "AI 工具".to_string(),
+            "内容生产".to_string(),
+        ],
+        tone_style: " 直接清晰 ".to_string(),
+        forbidden_topics: vec!["夸大收益".to_string(), "夸大收益".to_string()],
+        reference_accounts: vec!["参考账号A".to_string()],
+        topic_preferences: "优先教程和案例".to_string(),
+    };
+
+    let normalized = profile.normalize().unwrap();
+    assert_eq!(normalized.target_audience, "内容运营负责人");
+    assert_eq!(normalized.content_pillars, vec!["AI 工具", "内容生产"]);
+    assert_eq!(normalized.tone_style, "直接清晰");
+    assert_eq!(normalized.forbidden_topics, vec!["夸大收益"]);
+
+    let invalid = AccountStrategyProfileRequest {
+        content_pillars: (0..21).map(|index| format!("支柱{index}")).collect(),
+        ..AccountStrategyProfileRequest::default()
+    };
+    assert_eq!(invalid.normalize().unwrap_err(), "内容支柱最多填写 20 项");
+}
+
+#[test]
 fn project_response_maps_repository_project_to_api_shape() {
     let now = Utc::now();
     let project_id = Uuid::new_v4();
@@ -72,6 +112,14 @@ fn project_response_maps_repository_project_to_api_shape() {
         name: "科技博主".to_string(),
         positioning: "科技知识账号".to_string(),
         description: "面向程序员的知识短视频".to_string(),
+        strategy_profile: AccountStrategyProfile {
+            target_audience: "内容运营负责人".to_string(),
+            content_pillars: vec!["AI 工具".to_string(), "内容生产".to_string()],
+            tone_style: "直接清晰".to_string(),
+            forbidden_topics: vec!["夸大收益".to_string()],
+            reference_accounts: vec!["参考账号A".to_string()],
+            topic_preferences: "优先教程和案例".to_string(),
+        },
         status: "active".to_string(),
         created_at: now,
         updated_at: now,
@@ -82,6 +130,14 @@ fn project_response_maps_repository_project_to_api_shape() {
     assert_eq!(json_value["name"], "科技博主");
     assert_eq!(json_value["positioning"], "科技知识账号");
     assert_eq!(json_value["status"], "active");
+    assert_eq!(
+        json_value["strategy_profile"]["target_audience"],
+        "内容运营负责人"
+    );
+    assert_eq!(
+        json_value["strategy_profile"]["content_pillars"],
+        json!(["AI 工具", "内容生产"])
+    );
 }
 
 #[test]

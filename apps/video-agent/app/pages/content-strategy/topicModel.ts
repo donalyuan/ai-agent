@@ -1,4 +1,5 @@
 import type {
+  AccountStrategyProfile,
   ContentTopic,
   ContentTopicPayload,
   ContentTopicSource,
@@ -8,7 +9,7 @@ import type {
   ScriptStyle,
 } from "../../lib/api";
 
-export type ContentStrategyView = "history" | "pool";
+export type ContentStrategyView = "account" | "history" | "pool";
 
 export const topicStatusOptions: Array<{ value: "all" | ContentTopicStatus; label: string }> = [
   { value: "all", label: "全部" },
@@ -74,6 +75,18 @@ export type TopicFormState = {
   tags: string;
 };
 
+export type AccountStrategyFormState = {
+  name: string;
+  positioning: string;
+  description: string;
+  target_audience: string;
+  content_pillars: string;
+  tone_style: string;
+  forbidden_topics: string;
+  reference_accounts: string;
+  topic_preferences: string;
+};
+
 export const emptyTopicStats: ContentTopicStats = {
   total: 0,
   idea: 0,
@@ -93,6 +106,27 @@ export const defaultTopicForm: TopicFormState = {
   tags: "",
 };
 
+export const emptyAccountStrategyProfile: AccountStrategyProfile = {
+  target_audience: "",
+  content_pillars: [],
+  tone_style: "",
+  forbidden_topics: [],
+  reference_accounts: [],
+  topic_preferences: "",
+};
+
+export const defaultAccountStrategyForm: AccountStrategyFormState = {
+  name: "",
+  positioning: "",
+  description: "",
+  target_audience: "",
+  content_pillars: "",
+  tone_style: "",
+  forbidden_topics: "",
+  reference_accounts: "",
+  topic_preferences: "",
+};
+
 export function topicToForm(topic: ContentTopic): TopicFormState {
   return {
     title: topic.title,
@@ -104,6 +138,56 @@ export function topicToForm(topic: ContentTopic): TopicFormState {
     score_reason: topic.score_reason,
     tags: topic.tags.join(","),
   };
+}
+
+export function projectToAccountStrategyForm(project?: {
+  name: string;
+  positioning: string;
+  description: string;
+  strategy_profile?: AccountStrategyProfile;
+}): AccountStrategyFormState {
+  if (!project) {
+    return defaultAccountStrategyForm;
+  }
+  const profile = project.strategy_profile || emptyAccountStrategyProfile;
+  return {
+    name: project.name,
+    positioning: project.positioning,
+    description: project.description,
+    target_audience: profile.target_audience,
+    content_pillars: profile.content_pillars.join("\n"),
+    tone_style: profile.tone_style,
+    forbidden_topics: profile.forbidden_topics.join("\n"),
+    reference_accounts: profile.reference_accounts.join("\n"),
+    topic_preferences: profile.topic_preferences,
+  };
+}
+
+export function accountStrategyPayloadFromForm(form: AccountStrategyFormState) {
+  return {
+    name: form.name.trim(),
+    positioning: form.positioning.trim(),
+    description: form.description.trim(),
+    strategy_profile: {
+      target_audience: form.target_audience.trim(),
+      content_pillars: splitLines(form.content_pillars),
+      tone_style: form.tone_style.trim(),
+      forbidden_topics: splitLines(form.forbidden_topics),
+      reference_accounts: splitLines(form.reference_accounts),
+      topic_preferences: form.topic_preferences.trim(),
+    },
+  };
+}
+
+export function accountStrategyProfileIsEmpty(profile: AccountStrategyProfile) {
+  return (
+    !profile.target_audience.trim() &&
+    profile.content_pillars.length === 0 &&
+    !profile.tone_style.trim() &&
+    profile.forbidden_topics.length === 0 &&
+    profile.reference_accounts.length === 0 &&
+    !profile.topic_preferences.trim()
+  );
 }
 
 export function topicPayloadFromForm(form: TopicFormState): ContentTopicPayload {

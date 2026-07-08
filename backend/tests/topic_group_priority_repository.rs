@@ -96,6 +96,7 @@ async fn insert_project(pool: &PgPool, name: &str) -> Uuid {
             name: name.to_string(),
             positioning: "AI 工具和内容生产效率".to_string(),
             description: "面向内容运营负责人的科技知识账号".to_string(),
+            strategy_profile: novex_api::repositories::AccountStrategyProfile::default(),
         })
         .await
         .unwrap()

@@ -28,6 +28,7 @@ import {
   createContentTopic,
   createTopicGroupReview,
   deleteContentTopic,
+  generateStrategyProfileDraft,
   generateScript,
   getLatestTopicQualityEvaluation,
   getLatestTopicGroupReview,
@@ -43,17 +44,23 @@ import {
   sendAgentMessage,
   updateContentTopic,
   updateContentTopicStatus,
+  updateProjectStrategyProfile,
   updateScriptStatus,
 } from "./lib/api";
+import { AccountStrategyPage } from "./pages/content-strategy/AccountStrategyPage";
 import { ContentStrategyPage, ScriptPreparationDialog } from "./pages/content-strategy/ContentStrategyPage";
 import { TopicHistoryPage } from "./pages/content-strategy/TopicHistoryPage";
 import {
   adjustTopicStats,
+  accountStrategyPayloadFromForm,
   defaultTopicForm,
+  defaultAccountStrategyForm,
   emptyTopicStats,
+  projectToAccountStrategyForm,
   sortContentTopicsByScore,
   topicPayloadFromForm,
   topicToForm,
+  type AccountStrategyFormState,
   type ContentStrategyView,
   type TopicFormState,
 } from "./pages/content-strategy/topicModel";
@@ -61,6 +68,7 @@ import { ScriptCreationPage } from "./pages/script-creation/ScriptCreationPage";
 import { upsertSummary } from "./pages/script-creation/scriptModel";
 
 const contentStrategyMenuKey = "content-strategy";
+const accountStrategyMenuKey = "account-strategy";
 const topicHistoryMenuKey = "topic-history";
 const topicGeneratorMenuKey = "topic-generator";
 const scriptCreationMenuKey = "script-creation";
@@ -134,6 +142,12 @@ async function listContentTopicsForBatchGroup(
   };
 }
 
+function accountStrategyFormsEqual(left: AccountStrategyFormState, right: AccountStrategyFormState) {
+  return (Object.keys(defaultAccountStrategyForm) as Array<keyof AccountStrategyFormState>).every(
+    (field) => left[field] === right[field],
+  );
+}
+
 export default function Home() {
   const client = useMemo(() => createApiClient(), []);
   const [apiAvailable, setApiAvailable] = useState<boolean | null>(null);
@@ -180,6 +194,13 @@ export default function Home() {
   const [topicBatchError, setTopicBatchError] = useState("");
   const [topicGroupError, setTopicGroupError] = useState("");
   const [topicActionError, setTopicActionError] = useState("");
+  const [accountStrategyError, setAccountStrategyError] = useState("");
+  const [accountStrategyForm, setAccountStrategyForm] =
+    useState<AccountStrategyFormState>(defaultAccountStrategyForm);
+  const [accountStrategyDraftNotes, setAccountStrategyDraftNotes] = useState("");
+  const [accountStrategyDraftSummary, setAccountStrategyDraftSummary] = useState("");
+  const [generatingAccountStrategyDraft, setGeneratingAccountStrategyDraft] = useState(false);
+  const [savingAccountStrategy, setSavingAccountStrategy] = useState(false);
   const [deletingTopicId, setDeletingTopicId] = useState<string | null>(null);
   const [showTopicForm, setShowTopicForm] = useState(false);
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
@@ -209,6 +230,14 @@ export default function Home() {
   const preserveAgentConversationRef = useRef<string | null>(null);
 
   const selectedProject = projects.find((project) => project.project_id === selectedProjectId);
+  const savedAccountStrategyForm = useMemo(
+    () => projectToAccountStrategyForm(selectedProject),
+    [selectedProject],
+  );
+  const hasAccountStrategyUnsavedChanges =
+    !accountStrategyFormsEqual(accountStrategyForm, savedAccountStrategyForm) ||
+    accountStrategyDraftNotes.length > 0 ||
+    accountStrategyDraftSummary.length > 0;
   const poolActiveTopicBatchId =
     topicBatchViewMode === "all"
       ? null
@@ -237,7 +266,9 @@ export default function Home() {
   const writesDisabled = apiAvailable === false;
   const selectedSubMenuKey =
     selectedMenuKey === contentStrategyMenuKey
-      ? contentStrategyView === "history"
+      ? contentStrategyView === "account"
+        ? accountStrategyMenuKey
+        : contentStrategyView === "history"
         ? topicHistoryMenuKey
         : topicGeneratorMenuKey
       : selectedMenuKey === scriptCreationMenuKey
@@ -458,7 +489,11 @@ export default function Home() {
   }, [client, selectedProjectId, selectedMenuKey, topicGroupSort]);
 
   useEffect(() => {
-    if (!selectedProjectId || selectedMenuKey !== contentStrategyMenuKey) {
+    if (
+      !selectedProjectId ||
+      selectedMenuKey !== contentStrategyMenuKey ||
+      contentStrategyView === "account"
+    ) {
       if (!selectedProjectId) {
         setTopics([]);
         setTopicStats(emptyTopicStats);
@@ -534,6 +569,7 @@ export default function Home() {
     if (
       !selectedProjectId ||
       selectedMenuKey !== contentStrategyMenuKey ||
+      contentStrategyView === "account" ||
       !topicBatchesLoaded ||
       !activeTopicReviewRootBatchId
     ) {
@@ -575,6 +611,7 @@ export default function Home() {
   }, [
     activeTopicReviewRootBatchId,
     client,
+    contentStrategyView,
     selectedMenuKey,
     selectedProjectId,
     topicBatchesLoaded,
@@ -584,6 +621,7 @@ export default function Home() {
     if (
       !selectedProjectId ||
       selectedMenuKey !== contentStrategyMenuKey ||
+      contentStrategyView === "account" ||
       !topicBatchesLoaded ||
       !activeTopicBatchId
     ) {
@@ -625,6 +663,7 @@ export default function Home() {
   }, [
     activeTopicBatchId,
     client,
+    contentStrategyView,
     selectedMenuKey,
     selectedProjectId,
     topicBatchesLoaded,
@@ -667,6 +706,15 @@ export default function Home() {
   }, [selectedProjectId]);
 
   useEffect(() => {
+    setAccountStrategyForm(projectToAccountStrategyForm(selectedProject));
+    setAccountStrategyDraftNotes("");
+    setAccountStrategyDraftSummary("");
+    setAccountStrategyError("");
+    setGeneratingAccountStrategyDraft(false);
+    setSavingAccountStrategy(false);
+  }, [selectedProjectId]);
+
+  useEffect(() => {
     selectedScriptIdRef.current = selectedScriptId;
     if (preserveAgentConversationRef.current) {
       setAgentConversationId(preserveAgentConversationRef.current);
@@ -703,6 +751,11 @@ export default function Home() {
   }
 
   function handleSelectWorkspaceSubMenu(menuKey: string) {
+    if (menuKey === accountStrategyMenuKey) {
+      setSelectedMenuKey(contentStrategyMenuKey);
+      setContentStrategyView("account");
+      return;
+    }
     if (menuKey === topicHistoryMenuKey) {
       setSelectedMenuKey(contentStrategyMenuKey);
       setContentStrategyView("history");
@@ -890,6 +943,89 @@ export default function Home() {
       setTopicActionError(errorToMessage(error));
     } finally {
       setSavingTopic(false);
+    }
+  }
+
+  function handleAccountStrategyFormChange(field: keyof AccountStrategyFormState, value: string) {
+    setAccountStrategyForm((currentForm) => ({ ...currentForm, [field]: value }));
+  }
+
+  function handleCancelAccountStrategyEdit() {
+    setAccountStrategyForm(projectToAccountStrategyForm(selectedProject));
+    setAccountStrategyDraftNotes("");
+    setAccountStrategyDraftSummary("");
+    setAccountStrategyError("");
+  }
+
+  async function handleGenerateAccountStrategyDraft() {
+    if (!selectedProjectId) {
+      setAccountStrategyError("请先选择账号");
+      return;
+    }
+
+    setGeneratingAccountStrategyDraft(true);
+    setAccountStrategyError("");
+    setAccountStrategyDraftSummary("");
+    const projectIdAtSend = selectedProjectId;
+
+    try {
+      const response = await generateStrategyProfileDraft(client, selectedProjectId, {
+        direction_notes: accountStrategyDraftNotes.trim(),
+      });
+      if (selectedProjectIdRef.current !== projectIdAtSend) {
+        return;
+      }
+      setAccountStrategyForm((currentForm) => ({
+        ...currentForm,
+        target_audience: response.draft.target_audience,
+        content_pillars: response.draft.content_pillars.join("\n"),
+        tone_style: response.draft.tone_style,
+        forbidden_topics: response.draft.forbidden_topics.join("\n"),
+        reference_accounts: response.draft.reference_accounts.join("\n"),
+        topic_preferences: response.draft.topic_preferences,
+      }));
+      setAccountStrategyDraftSummary(response.draft_summary);
+    } catch (error) {
+      if (selectedProjectIdRef.current === projectIdAtSend) {
+        setAccountStrategyError(errorToMessage(error));
+      }
+    } finally {
+      if (selectedProjectIdRef.current === projectIdAtSend) {
+        setGeneratingAccountStrategyDraft(false);
+      }
+    }
+  }
+
+  async function handleSubmitAccountStrategy(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedProjectId) {
+      setAccountStrategyError("请先选择账号");
+      return;
+    }
+
+    const payload = accountStrategyPayloadFromForm(accountStrategyForm);
+    if (!payload.name) {
+      setAccountStrategyError("账号名称不能为空");
+      return;
+    }
+
+    setSavingAccountStrategy(true);
+    setAccountStrategyError("");
+
+    try {
+      const updatedProject = await updateProjectStrategyProfile(client, selectedProjectId, payload);
+      setProjects((currentProjects) =>
+        currentProjects.map((project) =>
+          project.project_id === updatedProject.project_id ? updatedProject : project,
+        ),
+      );
+      setSelectedProjectId(updatedProject.project_id);
+      setAccountStrategyForm(projectToAccountStrategyForm(updatedProject));
+      setAccountStrategyDraftSummary("");
+    } catch (error) {
+      setAccountStrategyError(errorToMessage(error));
+    } finally {
+      setSavingAccountStrategy(false);
     }
   }
 
@@ -1240,7 +1376,25 @@ export default function Home() {
         ) : null
       }
     >
-      {selectedMenuKey === contentStrategyMenuKey && contentStrategyView === "history" ? (
+      {selectedMenuKey === contentStrategyMenuKey && contentStrategyView === "account" ? (
+        <AccountStrategyPage
+          project={selectedProject}
+          form={accountStrategyForm}
+          hasUnsavedChanges={hasAccountStrategyUnsavedChanges}
+          draftNotes={accountStrategyDraftNotes}
+          draftSummary={accountStrategyDraftSummary}
+          error={accountStrategyError}
+          generatingDraft={generatingAccountStrategyDraft}
+          saving={savingAccountStrategy}
+          writesDisabled={writesDisabled}
+          onBackToTopicPool={() => setContentStrategyView("pool")}
+          onCancel={handleCancelAccountStrategyEdit}
+          onDraftNotesChange={setAccountStrategyDraftNotes}
+          onFormChange={handleAccountStrategyFormChange}
+          onGenerateDraft={handleGenerateAccountStrategyDraft}
+          onSubmit={handleSubmitAccountStrategy}
+        />
+      ) : selectedMenuKey === contentStrategyMenuKey && contentStrategyView === "history" ? (
         <TopicHistoryPage
           project={selectedProject}
           topics={topics}

@@ -3,17 +3,19 @@ pub mod script;
 pub mod topic;
 
 pub use request::{
-    AgentConversationResponse, AgentMessageListResponse, AgentMessageResponse, AgentRunResponse,
-    AgentTurnResponseBody, ContentTopicListResponse, ContentTopicResponse,
-    ContentTopicStatsResponse, CreateAgentConversationRequest, CreateContentTopicRequest,
-    CreateProjectRequest, GenerateScriptRequest, PrepareScriptFromTopicRequest,
-    PrepareScriptFromTopicResponse, ProjectListResponse, ProjectResponse, SceneResponse,
-    ScriptListFilter, ScriptListResponse, ScriptResponse, ScriptStyle, ScriptSummaryResponse,
-    SendAgentMessageRequest, TopicGenerationBatchListResponse, TopicGenerationBatchSummaryResponse,
-    TopicGroupListQuery, TopicGroupListResponse, TopicGroupSummaryResponse,
-    TopicQualityEvaluationResponse, TopicReviewSnapshotResponse, TopicScriptRequestPreview,
-    UpdateContentTopicRequest, UpdateContentTopicStatusRequest, UpdateScriptStatusRequest,
-    UpdateScriptStatusResponse, WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
+    AccountStrategyProfileRequest, AgentConversationResponse, AgentMessageListResponse,
+    AgentMessageResponse, AgentRunResponse, AgentTurnResponseBody, ContentTopicListResponse,
+    ContentTopicResponse, ContentTopicStatsResponse, CreateAgentConversationRequest,
+    CreateContentTopicRequest, CreateProjectRequest, GenerateScriptRequest,
+    PrepareScriptFromTopicRequest, PrepareScriptFromTopicResponse, ProjectListResponse,
+    ProjectResponse, SceneResponse, ScriptListFilter, ScriptListResponse, ScriptResponse,
+    ScriptStyle, ScriptSummaryResponse, SendAgentMessageRequest, StrategyProfileDraftRequest,
+    StrategyProfileDraftResponse, TopicGenerationBatchListResponse,
+    TopicGenerationBatchSummaryResponse, TopicGroupListQuery, TopicGroupListResponse,
+    TopicGroupSummaryResponse, TopicQualityEvaluationResponse, TopicReviewSnapshotResponse,
+    TopicScriptRequestPreview, UpdateContentTopicRequest, UpdateContentTopicStatusRequest,
+    UpdateProjectStrategyProfileRequest, UpdateScriptStatusRequest, UpdateScriptStatusResponse,
+    WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
 };
 pub use script::{Scene, Script, ScriptStatus, ScriptStatusParseError, ScriptSummary};
 pub use topic::{

@@ -72,14 +72,14 @@ export function WorkspaceShell({
               {apiAvailable === null ? "服务检测中" : apiAvailable ? "API 正常" : "API 不可用"}
             </span>
             <label className="projectSelectLabel">
-              当前项目
+              当前账号
               <select
-                aria-label="当前项目"
+                aria-label="当前账号"
                 disabled={!projects.length}
                 onChange={(event) => onSelectProject(event.target.value)}
                 value={selectedProjectId}
               >
-                {projects.length ? null : <option value="">暂无项目</option>}
+                {projects.length ? null : <option value="">暂无账号</option>}
                 {projects.map((project) => (
                   <option key={project.project_id} value={project.project_id}>
                     {project.name}

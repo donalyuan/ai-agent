@@ -5,6 +5,7 @@ import {
   createContentTopic,
   createTopicGroupReview,
   deleteContentTopic,
+  generateStrategyProfileDraft,
   generateScript,
   getApiBaseUrl,
   getLatestTopicQualityEvaluation,
@@ -22,14 +23,25 @@ import {
   sendAgentMessage,
   updateContentTopic,
   updateContentTopicStatus,
+  updateProjectStrategyProfile,
   updateScriptStatus,
 } from "./api";
+
+const strategyProfile = {
+  target_audience: "内容运营负责人",
+  content_pillars: ["AI 工具", "内容生产"],
+  tone_style: "直接清晰",
+  forbidden_topics: ["夸大收益"],
+  reference_accounts: ["参考账号A"],
+  topic_preferences: "优先教程和案例",
+};
 
 const project = {
   project_id: "11111111-1111-4111-8111-111111111111",
   name: "科技博主",
   positioning: "科技知识账号",
   description: "面向程序员的知识短视频",
+  strategy_profile: strategyProfile,
   status: "active",
   created_at: "2026-07-02T00:00:00Z",
   updated_at: "2026-07-02T00:00:00Z",
@@ -302,6 +314,22 @@ const workspaceMenus = [
     metadata: { phase: 2 },
     children: [
       {
+        menu_id: "20000000-0000-4000-8000-000000000009",
+        menu_key: "account-strategy",
+        label: "账号策略",
+        description: "维护当前内容账号策略资料。",
+        route_path: "/strategy/account",
+        icon: "badge",
+        menu_type: "page",
+        module_key: "strategy.account",
+        agent_key: "topic-generation-agent",
+        sort_order: 10,
+        is_enabled: true,
+        status: "active",
+        metadata: { phase: 2 },
+        children: [],
+      },
+      {
         menu_id: "20000000-0000-4000-8000-000000000008",
         menu_key: "topic-history",
         label: "历史生成",
@@ -311,7 +339,7 @@ const workspaceMenus = [
         menu_type: "page",
         module_key: "strategy.topic-history",
         agent_key: "topic-generation-agent",
-        sort_order: 10,
+        sort_order: 20,
         is_enabled: true,
         status: "active",
         metadata: { phase: 2 },
@@ -327,7 +355,7 @@ const workspaceMenus = [
         menu_type: "page",
         module_key: "strategy.topics",
         agent_key: "topic-generation-agent",
-        sort_order: 20,
+        sort_order: 30,
         is_enabled: true,
         status: "active",
         metadata: { phase: 2 },
@@ -435,9 +463,69 @@ describe("video-agent api client", () => {
       headers: { accept: "application/json" },
     });
     expect(result.menus[0].label).toBe("内容策略");
-    expect(result.menus[0].children[0].menu_key).toBe("topic-history");
-    expect(result.menus[0].children[1].label).toBe("当前选题池");
+    expect(result.menus[0].children[0].menu_key).toBe("account-strategy");
+    expect(result.menus[0].children[1].menu_key).toBe("topic-history");
+    expect(result.menus[0].children[2].label).toBe("当前选题池");
     expect(result.menus[1].children[0].agent_key).toBe("script-generation-agent");
+  });
+
+  it("更新账号策略资料并生成策略草稿", async () => {
+    const draftResponse = {
+      draft: {
+        ...strategyProfile,
+        target_audience: "AI 副业新手",
+      },
+      draft_summary: "草稿偏向 AI 工具教程和避坑。",
+    };
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ ...project, name: "AI 工具账号" }))
+      .mockResolvedValueOnce(jsonResponse(draftResponse));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const updated = await updateProjectStrategyProfile(client, project.project_id, {
+      name: "AI 工具账号",
+      positioning: "AI 工具教程账号",
+      description: "面向内容运营负责人",
+      strategy_profile: strategyProfile,
+    });
+    const draft = await generateStrategyProfileDraft(client, project.project_id, {
+      direction_notes: "偏 AI 副业新手，强调避坑。",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `http://api.test/api/projects/${project.project_id}/strategy-profile`,
+      {
+        method: "PUT",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          name: "AI 工具账号",
+          positioning: "AI 工具教程账号",
+          description: "面向内容运营负责人",
+          strategy_profile: strategyProfile,
+        }),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `http://api.test/api/projects/${project.project_id}/strategy-profile/draft`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          direction_notes: "偏 AI 副业新手，强调避坑。",
+        }),
+      },
+    );
+    expect(updated.name).toBe("AI 工具账号");
+    expect(draft.draft.target_audience).toBe("AI 副业新手");
+    expect(draft.draft_summary).toContain("避坑");
   });
 
   it("请求脚本列表时带状态筛选", async () => {

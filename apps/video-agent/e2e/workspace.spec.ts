@@ -5,14 +5,39 @@ const scriptId = "22222222-2222-4222-8222-222222222222";
 const previousTopicBatchId = "77777777-7777-4777-8777-777777777777";
 const supplementTopicBatchId = "99999999-9999-4999-8999-999999999901";
 
+const emptyStrategyProfile = {
+  target_audience: "",
+  content_pillars: [],
+  tone_style: "",
+  forbidden_topics: [],
+  reference_accounts: [],
+  topic_preferences: "",
+};
+
 const project = {
   project_id: projectId,
   name: "科技博主",
   positioning: "科技知识账号",
   description: "面向程序员的知识短视频",
+  strategy_profile: emptyStrategyProfile,
   status: "active",
   created_at: "2026-07-02T00:00:00Z",
   updated_at: "2026-07-02T00:00:00Z",
+};
+
+const updatedStrategyProfile = {
+  target_audience: "内容运营负责人",
+  content_pillars: ["AI 工具", "内容生产"],
+  tone_style: "直接清晰",
+  forbidden_topics: ["夸大收益"],
+  reference_accounts: ["参考账号A"],
+  topic_preferences: "优先教程和案例",
+};
+
+const accountStrategyProject = {
+  ...project,
+  strategy_profile: updatedStrategyProfile,
+  updated_at: "2026-07-08T02:00:00Z",
 };
 
 const scriptSummary = {
@@ -262,13 +287,19 @@ const workspaceMenus = [
     ...menuNode("content-strategy", "内容策略", true, "active", 10),
     children: [
       {
-        ...menuNode("topic-history", "历史生成", true, "active", 10),
+        ...menuNode("account-strategy", "账号策略", true, "active", 10),
+        agent_key: "topic-generation-agent",
+        menu_type: "page",
+        module_key: "strategy.account",
+      },
+      {
+        ...menuNode("topic-history", "历史生成", true, "active", 20),
         agent_key: "topic-generation-agent",
         menu_type: "page",
         module_key: "strategy.topic-history",
       },
       {
-        ...menuNode("topic-generator", "当前选题池", true, "active", 20),
+        ...menuNode("topic-generator", "当前选题池", true, "active", 30),
         agent_key: "topic-generation-agent",
         menu_type: "page",
         module_key: "strategy.topics",
@@ -298,13 +329,19 @@ const contentStrategyWorkspaceMenus = [
     ...menuNode("content-strategy", "内容策略", true, "active", 10),
     children: [
       {
-        ...menuNode("topic-history", "历史生成", true, "active", 10),
+        ...menuNode("account-strategy", "账号策略", true, "active", 10),
+        agent_key: "topic-generation-agent",
+        menu_type: "page",
+        module_key: "strategy.account",
+      },
+      {
+        ...menuNode("topic-history", "历史生成", true, "active", 20),
         agent_key: "topic-generation-agent",
         menu_type: "page",
         module_key: "strategy.topic-history",
       },
       {
-        ...menuNode("topic-generator", "当前选题池", true, "active", 20),
+        ...menuNode("topic-generator", "当前选题池", true, "active", 30),
         agent_key: "topic-generation-agent",
         menu_type: "page",
         module_key: "strategy.topics",
@@ -683,6 +720,38 @@ async function mockContentStrategyWorkflow(page: Page) {
   });
 }
 
+async function mockAccountStrategyWorkflow(page: Page) {
+  await page.unroute(/\/api\/video-workspace\/menus$/);
+  await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { menus: contentStrategyWorkspaceMenus } });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/topic-generation-batches$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { batches: [] } });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/topics(\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: { topics: [], stats: { total: 0, idea: 0, approved: 0, scripted: 0, archived: 0 } },
+    });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/scripts(\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: { scripts: [], total: 0, limit: 20, offset: 0 },
+    });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/strategy-profile$`), async (route) => {
+    expect(route.request().method()).toBe("PUT");
+    expect(route.request().postDataJSON()).toEqual({
+      name: project.name,
+      positioning: project.positioning,
+      description: project.description,
+      strategy_profile: updatedStrategyProfile,
+    });
+    await route.fulfill({ contentType: "application/json", json: accountStrategyProject });
+  });
+}
+
 async function mockContentStrategyHistoryWorkflow(page: Page) {
   let supplementGenerated = false;
   let reviewCreated = false;
@@ -928,6 +997,7 @@ test("内容策略页从已确认选题确认参数并生成脚本", async ({ pa
     expect(card.width).toBeLessThanOrEqual(150);
     expect(card.height).toBeLessThanOrEqual(76);
   }
+  await expect(page.getByRole("region", { name: "选题池" }).getByText("策略资料状态")).toHaveCount(0);
   const poolLayout = await page.locator('[aria-label="选题池"]').evaluate((pool) => {
     const poolRect = pool.getBoundingClientRect();
     const detail = document.querySelector(".topicDetailColumn")?.getBoundingClientRect();
@@ -939,7 +1009,7 @@ test("内容策略页从已确认选题确认参数并生成脚本", async ({ pa
     };
   });
   expect(poolLayout.filtersTop).not.toBeNull();
-  expect(poolLayout.filtersTop!).toBeLessThanOrEqual(96);
+  expect(poolLayout.filtersTop!).toBeLessThanOrEqual(180);
   expect(poolLayout.detailWidth).not.toBeNull();
   expect(poolLayout.detailWidth!).toBeGreaterThanOrEqual(340);
   expect(poolLayout.poolWidth).toBeGreaterThanOrEqual(360);
@@ -978,6 +1048,85 @@ test("内容策略页从已确认选题确认参数并生成脚本", async ({ pa
   await expect(sourceTopicPanel.getByText(approvedTopic.angle)).toBeVisible();
 });
 
+test("内容策略账号策略页保存资料后当前选题池不展示账号策略区块", async ({ page }) => {
+  await page.setViewportSize({ width: 1756, height: 980 });
+  await mockAccountStrategyWorkflow(page);
+  await page.goto("/");
+
+  const workspaceMenu = page.getByRole("navigation", { name: "视频工作台菜单" });
+  await workspaceMenu.getByRole("button", { name: /内容策略/ }).click();
+  const contentStrategySubMenu = workspaceMenu.getByLabel("内容策略二级菜单");
+  await expect(contentStrategySubMenu.getByRole("button")).toHaveText(["账号策略", "历史生成", "当前选题池"]);
+  await contentStrategySubMenu.getByRole("button", { name: "账号策略" }).click();
+
+  const accountPage = page.getByRole("region", { name: "账号策略资料" });
+  await expect(accountPage.getByText("内容策略 / 账号策略")).toBeVisible();
+  await expect(accountPage.getByRole("button", { name: "返回当前选题池" })).toBeVisible();
+  await expect(accountPage.getByRole("button", { name: "AI 生成草稿" })).toHaveCount(0);
+  await expect(accountPage.getByText("当前正式策略资料待补齐")).toBeVisible();
+  await expect(accountPage.getByRole("region", { name: "基础资料" })).toBeVisible();
+  await expect(accountPage.getByRole("region", { name: "结构化策略" })).toBeVisible();
+  await expect(accountPage.getByRole("region", { name: "保存后应用到选题链路" })).toBeVisible();
+  await expect(accountPage.getByRole("region", { name: "AI 生成策略草稿" })).toBeVisible();
+  const accountLayout = await page.locator(".accountStrategyPage").evaluate((element) => {
+    const pageRect = element.getBoundingClientRect();
+    const workbenchRect = document.querySelector(".workbench")?.getBoundingClientRect();
+    return workbenchRect
+      ? {
+          rightGap: Math.round(workbenchRect.right - pageRect.right),
+          width: Math.round(pageRect.width),
+          workbenchWidth: Math.round(workbenchRect.width),
+        }
+      : null;
+  });
+  expect(accountLayout).not.toBeNull();
+  expect(accountLayout!.rightGap).toBeLessThanOrEqual(2);
+  expect(accountLayout!.width).toBeGreaterThan(1168);
+  const accountPanelGeometry = await page.locator(".accountStrategyBodyGrid").evaluate((element) => {
+    const basics = element.querySelector(".strategyBasicsPanel")?.getBoundingClientRect();
+    const context = element.querySelector(".strategyContextPanel")?.getBoundingClientRect();
+    const structured = element.querySelector(".strategyStructuredPanel")?.getBoundingClientRect();
+    const draft = element.querySelector(".accountDraftPanel")?.getBoundingClientRect();
+    return basics && context && structured && draft
+      ? {
+          topDelta: Math.abs(Math.round(structured.top - basics.top)),
+          bottomDelta: Math.abs(Math.round(structured.bottom - draft.bottom)),
+          basicsToContextGap: Math.round(context.top - basics.bottom),
+          contextToDraftGap: Math.round(draft.top - context.bottom),
+        }
+      : null;
+  });
+  expect(accountPanelGeometry).not.toBeNull();
+  expect(accountPanelGeometry!.topDelta).toBeLessThanOrEqual(2);
+  expect(accountPanelGeometry!.bottomDelta).toBeLessThanOrEqual(2);
+  expect(accountPanelGeometry!.basicsToContextGap).toBeGreaterThanOrEqual(18);
+  expect(accountPanelGeometry!.basicsToContextGap).toBeLessThanOrEqual(22);
+  expect(accountPanelGeometry!.contextToDraftGap).toBeGreaterThanOrEqual(18);
+  expect(accountPanelGeometry!.contextToDraftGap).toBeLessThanOrEqual(22);
+  await accountPage.getByLabel("目标受众").fill(updatedStrategyProfile.target_audience);
+  await accountPage.getByLabel("内容支柱").fill(updatedStrategyProfile.content_pillars.join("\n"));
+  await accountPage.getByLabel("表达风格").fill(updatedStrategyProfile.tone_style);
+  await accountPage.getByLabel("禁区方向").fill(updatedStrategyProfile.forbidden_topics.join("\n"));
+  await accountPage.getByLabel("参考账号").fill(updatedStrategyProfile.reference_accounts.join("\n"));
+  await accountPage.getByLabel("选题偏好").fill(updatedStrategyProfile.topic_preferences);
+  await accountPage.getByRole("button", { name: "保存并应用" }).click();
+
+  const structured = accountPage.getByRole("region", { name: "结构化策略" });
+  await expect(structured.getByText("目标受众：内容运营负责人")).toBeVisible();
+  await expect(structured.getByText("内容支柱：AI 工具 / 内容生产")).toBeVisible();
+  await expect(page.getByLabel("当前账号")).toHaveValue(projectId);
+
+  await contentStrategySubMenu.getByRole("button", { name: "当前选题池" }).click();
+  const topicPool = page.getByRole("region", { name: "选题池" });
+  await expect(topicPool.getByRole("heading", { name: "账号策略" })).toHaveCount(0);
+  await expect(topicPool.getByText("策略资料状态")).toHaveCount(0);
+  await expect(topicPool.getByText("账号策略摘要")).toHaveCount(0);
+  await expect(topicPool.getByText("内容运营负责人")).toHaveCount(0);
+  await expect(topicPool.getByText("表达风格")).toHaveCount(0);
+  await expect(topicPool.getByText("选题偏好")).toHaveCount(0);
+  await expect(topicPool.getByLabel("账号名称")).toHaveCount(0);
+});
+
 test("内容策略当前选题池在超宽桌面保持可读比例", async ({ page }) => {
   await page.setViewportSize({ width: 2552, height: 1308 });
   await mockContentStrategyWorkflow(page);
@@ -1002,7 +1151,8 @@ test("内容策略当前选题池在超宽桌面保持可读比例", async ({ pa
   expect(wideLayout.poolWidth).not.toBeNull();
   expect(wideLayout.poolWidth!).toBeLessThanOrEqual(1040);
   expect(wideLayout.detailWidth).not.toBeNull();
-  expect(wideLayout.detailWidth!).toBeGreaterThanOrEqual(420);
+  expect(wideLayout.detailWidth!).toBeGreaterThanOrEqual(340);
+  expect(wideLayout.detailWidth!).toBeLessThanOrEqual(420);
 
   const overflowingTopicItemChildren = await page.locator(".topicItem").evaluateAll((items) =>
     items.flatMap((item, itemIndex) => {
@@ -1031,7 +1181,7 @@ test("内容策略历史生成列表页展示批次并限制已成稿选题删�
 
   const workspaceMenu = page.getByRole("navigation", { name: "视频工作台菜单" });
   const contentStrategySubMenu = workspaceMenu.getByLabel("内容策略二级菜单");
-  await expect(contentStrategySubMenu.getByRole("button")).toHaveText(["历史生成", "当前选题池"]);
+  await expect(contentStrategySubMenu.getByRole("button")).toHaveText(["账号策略", "历史生成", "当前选题池"]);
   await expect(contentStrategySubMenu.getByRole("button", { name: "当前选题池" })).toHaveClass(/active/);
   const contentStrategyRows = await page.locator(".contentStrategyWorkspace").evaluate((element) =>
     getComputedStyle(element).gridTemplateRows.split(" ").length,
@@ -1124,7 +1274,7 @@ test("内容策略空选题池布局贴近原型顶部", async ({ page }) => {
   const filtersTop = Math.round(filtersBox!.y - poolBox!.y);
   const emptyTop = Math.round(emptyTitleBox!.y - poolBox!.y);
   const emptyHeight = Math.round(emptyHintBox!.y + emptyHintBox!.height - emptyTitleBox!.y);
-  expect(filtersTop).toBeLessThanOrEqual(96);
-  expect(emptyTop).toBeLessThanOrEqual(180);
+  expect(filtersTop).toBeLessThanOrEqual(180);
+  expect(emptyTop).toBeLessThanOrEqual(260);
   expect(emptyHeight).toBeLessThanOrEqual(150);
 });

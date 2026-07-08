@@ -173,8 +173,11 @@ async fn workspace_menu_route_returns_visible_sorted_tree() {
     assert_eq!(content_strategy["is_enabled"], true);
     assert_eq!(content_strategy["status"], "active");
     assert_eq!(content_strategy["metadata"], json!({ "phase": 2 }));
-    assert_eq!(content_strategy["children"][0]["menu_key"], "topic-history");
-    assert_eq!(content_strategy["children"][0]["label"], "历史生成");
+    assert_eq!(
+        content_strategy["children"][0]["menu_key"],
+        "account-strategy"
+    );
+    assert_eq!(content_strategy["children"][0]["label"], "账号策略");
     assert_eq!(content_strategy["children"][0]["is_enabled"], true);
     assert_eq!(content_strategy["children"][0]["status"], "active");
     assert_eq!(
@@ -182,12 +185,24 @@ async fn workspace_menu_route_returns_visible_sorted_tree() {
         "topic-generation-agent"
     );
     assert_eq!(
-        content_strategy["children"][1]["menu_key"],
-        "topic-generator"
+        content_strategy["children"][0]["module_key"],
+        "strategy.account"
     );
-    assert_eq!(content_strategy["children"][1]["label"], "当前选题池");
+    assert_eq!(content_strategy["children"][1]["menu_key"], "topic-history");
+    assert_eq!(content_strategy["children"][1]["label"], "历史生成");
     assert_eq!(content_strategy["children"][1]["is_enabled"], true);
     assert_eq!(content_strategy["children"][1]["status"], "active");
+    assert_eq!(
+        content_strategy["children"][1]["agent_key"],
+        "topic-generation-agent"
+    );
+    assert_eq!(
+        content_strategy["children"][2]["menu_key"],
+        "topic-generator"
+    );
+    assert_eq!(content_strategy["children"][2]["label"], "当前选题池");
+    assert_eq!(content_strategy["children"][2]["is_enabled"], true);
+    assert_eq!(content_strategy["children"][2]["status"], "active");
 
     let material_menu = menus
         .iter()

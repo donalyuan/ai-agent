@@ -36,12 +36,14 @@ vi.mock("./lib/api", async (importOriginal) => {
     listTopicGenerationBatches: vi.fn(),
     listTopicGroups: vi.fn(),
     createTopicGroupReview: vi.fn(),
+    generateStrategyProfileDraft: vi.fn(),
     getLatestTopicGroupReview: vi.fn(),
     getLatestTopicQualityEvaluation: vi.fn(),
     createContentTopic: vi.fn(),
     deleteContentTopic: vi.fn(),
     updateContentTopic: vi.fn(),
     updateContentTopicStatus: vi.fn(),
+    updateProjectStrategyProfile: vi.fn(),
     prepareScriptFromTopic: vi.fn(),
     createAgentConversation: vi.fn(),
     listAgentMessages: vi.fn(),
@@ -49,11 +51,30 @@ vi.mock("./lib/api", async (importOriginal) => {
   };
 });
 
+const strategyProfile = {
+  target_audience: "内容运营负责人",
+  content_pillars: ["AI 工具", "内容生产"],
+  tone_style: "直接清晰",
+  forbidden_topics: ["夸大收益"],
+  reference_accounts: ["参考账号A"],
+  topic_preferences: "优先教程和案例",
+};
+
+const emptyStrategyProfile = {
+  target_audience: "",
+  content_pillars: [],
+  tone_style: "",
+  forbidden_topics: [],
+  reference_accounts: [],
+  topic_preferences: "",
+};
+
 const project = {
   project_id: "11111111-1111-4111-8111-111111111111",
   name: "科技博主",
   positioning: "科技知识账号",
   description: "面向程序员的知识短视频",
+  strategy_profile: strategyProfile,
   status: "active",
   created_at: "2026-07-02T00:00:00Z",
   updated_at: "2026-07-02T00:00:00Z",
@@ -131,13 +152,19 @@ const workspaceMenus: WorkspaceMenuListResponse = {
       ...menuNode("content-strategy", "内容策略", true, "active", 10),
       children: [
         {
-          ...menuNode("topic-history", "历史生成", true, "active", 10),
+          ...menuNode("account-strategy", "账号策略", true, "active", 10),
+          agent_key: "topic-generation-agent",
+          menu_type: "page",
+          module_key: "strategy.account",
+        },
+        {
+          ...menuNode("topic-history", "历史生成", true, "active", 20),
           agent_key: "topic-generation-agent",
           menu_type: "page",
           module_key: "strategy.topic-history",
         },
         {
-          ...menuNode("topic-generator", "当前选题池", true, "active", 20),
+          ...menuNode("topic-generator", "当前选题池", true, "active", 30),
           agent_key: "topic-generation-agent",
           menu_type: "page",
           module_key: "strategy.topics",
@@ -169,13 +196,19 @@ const contentStrategyWorkspaceMenus: WorkspaceMenuListResponse = {
       ...menuNode("content-strategy", "内容策略", true, "active", 10),
       children: [
         {
-          ...menuNode("topic-history", "历史生成", true, "active", 10),
+          ...menuNode("account-strategy", "账号策略", true, "active", 10),
+          agent_key: "topic-generation-agent",
+          menu_type: "page",
+          module_key: "strategy.account",
+        },
+        {
+          ...menuNode("topic-history", "历史生成", true, "active", 20),
           agent_key: "topic-generation-agent",
           menu_type: "page",
           module_key: "strategy.topic-history",
         },
         {
-          ...menuNode("topic-generator", "当前选题池", true, "active", 20),
+          ...menuNode("topic-generator", "当前选题池", true, "active", 30),
           agent_key: "topic-generation-agent",
           menu_type: "page",
           module_key: "strategy.topics",
@@ -759,6 +792,15 @@ describe("video-agent 视频工作台页面", () => {
     vi.mocked(api.createTopicGroupReview).mockResolvedValue(topicReviewSnapshot);
     vi.mocked(api.getLatestTopicGroupReview).mockResolvedValue(null);
     mockTopicQualityEvaluation();
+    vi.mocked(api.generateStrategyProfileDraft).mockResolvedValue({
+      draft: {
+        ...strategyProfile,
+        target_audience: "AI 副业新手",
+        topic_preferences: "优先教程、避坑和真实案例",
+      },
+      draft_summary: "草稿偏向 AI 工具教程、避坑和真实案例。",
+    });
+    vi.mocked(api.updateProjectStrategyProfile).mockResolvedValue(project);
   });
 
   it("展示 VEDIO-AGENT 品牌、中文标题和业务流程菜单", async () => {
@@ -805,7 +847,8 @@ describe("video-agent 视频工作台页面", () => {
     await openScriptCreationWorkspace();
 
     expect(await screen.findByRole("heading", { name: "脚本 Agent 对话" })).toBeInTheDocument();
-    expect(screen.getByLabelText("当前项目")).toBeInTheDocument();
+    expect(screen.getByLabelText("当前账号")).toBeInTheDocument();
+    expect(screen.queryByLabelText("当前项目")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "项目上下文" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "还没有项目" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("项目名称")).not.toBeInTheDocument();
@@ -1149,6 +1192,23 @@ describe("video-agent 视频工作台页面", () => {
     expect(styles).toContain(".agentSubMenu");
     expect(styles).toContain(".agentSubItem");
     expect(styles).toContain(".topicBatchHistory");
+    expect(styles).toContain(".accountStrategyHero");
+    expect(styles).toContain(".accountStrategyCard");
+    expect(styles).toContain(".accountStrategyBodyGrid");
+    expect(styles).toContain(".strategyBasicsPanel");
+    expect(styles).toContain(".strategyStructuredPanel");
+    expect(styles).toContain(".strategyContextPanel");
+    expect(styles).toContain(".accountDraftPanel");
+    expect(styles).toMatch(/\.accountDraftButton\s*{[^}]*width:\s*132px/s);
+    expect(styles).not.toMatch(/\.accountStrategyPage\s*{[^}]*max-width:\s*1168px/s);
+    expect(styles).toMatch(/\.accountStrategyBodyGrid\s*{[^}]*grid-template-columns:\s*minmax\(480px,\s*1fr\)\s+minmax\(480px,\s*1fr\)/s);
+    expect(styles).toMatch(/\.accountStrategyBodyGrid\s*{[^}]*grid-template-rows:\s*210px\s+120px\s+126px/s);
+    expect(styles).toMatch(
+      /\.accountStrategyBodyGrid\s*{[^}]*grid-template-areas:\s*"basics structured"\s*"context structured"\s*"draft structured"/s,
+    );
+    expect(styles).toMatch(/\.strategyStructuredPanel\s*{[^}]*align-self:\s*stretch/s);
+    expect(styles).not.toMatch(/\.strategyStructuredPanel\s*{[^}]*margin-top:/s);
+    expect(styles).not.toMatch(/\.strategyStructuredPanel\s*{[^}]*height:\s*360px/s);
     expect(styles).toContain("flex-direction: column");
     expect(styles).toContain("flex: 1");
     expect(styles).toMatch(/\.topicList\s*{[^}]*align-content:\s*start/s);
@@ -1216,7 +1276,7 @@ describe("video-agent 视频工作台页面", () => {
     });
   });
 
-  it("内容策略二级菜单将历史生成展示在当前选题池上方", async () => {
+  it("内容策略二级菜单展示账号策略、历史生成和当前选题池", async () => {
     vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
     mockProjects({ projects: [project] });
     mockTopics(topicListResponse);
@@ -1226,13 +1286,226 @@ describe("video-agent 视频工作台页面", () => {
 
     const workspaceMenu = screen.getByRole("navigation", { name: "视频工作台菜单" });
     const menuButtons = within(workspaceMenu).getAllByRole("button");
+    const accountButton = within(workspaceMenu).getByRole("button", { name: "账号策略" });
     const historyButton = within(workspaceMenu).getByRole("button", { name: "历史生成" });
     const currentPoolButton = within(workspaceMenu).getByRole("button", { name: "当前选题池" });
+    expect(menuButtons.indexOf(accountButton)).toBeLessThan(menuButtons.indexOf(historyButton));
     expect(menuButtons.indexOf(historyButton)).toBeLessThan(menuButtons.indexOf(currentPoolButton));
+    expect(accountButton).toHaveClass("agentSubItem");
     expect(historyButton).toHaveClass("agentSubItem");
     expect(currentPoolButton).toHaveClass("active");
     expect(screen.queryByLabelText("内容策略视图菜单")).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "选题池" })).toBeInTheDocument();
+  });
+
+  it("账号策略独立页面按原型展示标题区、资料卡、AI 草稿和编辑控件", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockTopics(topicListResponse);
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "账号策略" }));
+    const accountPage = await screen.findByRole("region", { name: "账号策略资料" });
+
+    expect(document.querySelector(".accountStrategyHero")).not.toBeNull();
+    expect(document.querySelector(".accountStrategyCard")).not.toBeNull();
+    expect(within(accountPage).getByText("内容策略 / 账号策略")).toBeInTheDocument();
+    expect(within(accountPage).getByRole("heading", { name: "账号策略" })).toBeInTheDocument();
+    expect(within(accountPage).getByText("content-strategy")).toBeInTheDocument();
+    expect(within(accountPage).getAllByText("账号策略")[0]).toBeInTheDocument();
+    expect(within(accountPage).getByRole("button", { name: "返回当前选题池" })).toBeInTheDocument();
+    expect(within(accountPage).queryByRole("button", { name: "AI 生成草稿" })).not.toBeInTheDocument();
+    expect(within(accountPage).getByText("账号策略资料")).toBeInTheDocument();
+    expect(within(accountPage).getByText(/第一版只维护内容账号策略资料/)).toBeInTheDocument();
+    expect(within(accountPage).getByText(/AI 草稿只预填下方表单/)).toBeInTheDocument();
+
+    const basics = within(accountPage).getByRole("region", { name: "基础资料" });
+    expect(within(basics).getByText(/账号名称：科技博主/)).toBeInTheDocument();
+    expect(within(basics).getByText(/定位摘要：科技知识账号/)).toBeInTheDocument();
+    expect(within(basics).getByText(/描述：面向程序员的知识短视频/)).toBeInTheDocument();
+    const structured = within(accountPage).getByRole("region", { name: "结构化策略" });
+    expect(within(structured).getByText(/目标受众：内容运营负责人/)).toBeInTheDocument();
+    expect(within(structured).getByText(/内容支柱：AI 工具 \/ 内容生产/)).toBeInTheDocument();
+    expect(structured.querySelector(".strategyValueTags")).not.toBeInTheDocument();
+    expect(within(accountPage).getByRole("region", { name: "保存后应用到选题链路" })).toBeInTheDocument();
+    const draftPanel = within(accountPage).getByRole("region", { name: "AI 生成策略草稿" });
+    expect(within(draftPanel).getByRole("button", { name: "生成草稿" })).toHaveClass("accountDraftButton");
+    expect(within(draftPanel).getByText(/手动触发/)).toBeInTheDocument();
+    expect(within(accountPage).getByLabelText("账号名称")).toHaveValue("科技博主");
+    const targetAudienceField = within(accountPage).getByLabelText("目标受众");
+    expect(targetAudienceField.tagName).toBe("TEXTAREA");
+    expect(targetAudienceField).toHaveValue("内容运营负责人");
+    expect(within(accountPage).getByRole("button", { name: "取消" })).toBeInTheDocument();
+    expect(within(accountPage).getByRole("button", { name: "保存并应用" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "选题池" })).not.toBeInTheDocument();
+
+    fireEvent.click(within(accountPage).getByRole("button", { name: "返回当前选题池" }));
+    expect(await screen.findByRole("region", { name: "选题池" })).toBeInTheDocument();
+  });
+
+  it("账号策略页未修改时禁用取消，手工修改后取消恢复正式资料", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "账号策略" }));
+    const accountPage = await screen.findByRole("region", { name: "账号策略资料" });
+    const cancelButton = within(accountPage).getByRole("button", { name: "取消" });
+
+    expect(cancelButton).toBeDisabled();
+
+    fireEvent.change(within(accountPage).getByLabelText("目标受众"), {
+      target: { value: "临时受众" },
+    });
+
+    expect(cancelButton).toBeEnabled();
+    fireEvent.click(cancelButton);
+
+    expect(within(accountPage).getByLabelText("目标受众")).toHaveValue("内容运营负责人");
+    expect(cancelButton).toBeDisabled();
+    expect(api.updateProjectStrategyProfile).not.toHaveBeenCalled();
+  });
+
+  it("账号策略页取消 AI 草稿时清空草稿内容并恢复正式资料", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "账号策略" }));
+    const accountPage = await screen.findByRole("region", { name: "账号策略资料" });
+    const cancelButton = within(accountPage).getByRole("button", { name: "取消" });
+
+    fireEvent.change(within(accountPage).getByLabelText("AI 草稿补充方向"), {
+      target: { value: "面向 AI 副业新手，强调避坑。" },
+    });
+    expect(cancelButton).toBeEnabled();
+    fireEvent.click(within(accountPage).getByRole("button", { name: "生成草稿" }));
+
+    expect(await within(accountPage).findByDisplayValue("AI 副业新手")).toBeInTheDocument();
+    expect(within(accountPage).getByText(/草稿偏向 AI 工具教程、避坑和真实案例/)).toBeInTheDocument();
+
+    fireEvent.click(cancelButton);
+
+    expect(within(accountPage).getByLabelText("目标受众")).toHaveValue("内容运营负责人");
+    expect(within(accountPage).getByLabelText("AI 草稿补充方向")).toHaveValue("");
+    expect(within(accountPage).queryByText(/草稿偏向 AI 工具教程、避坑和真实案例/)).not.toBeInTheDocument();
+    expect(within(accountPage).getByText(/草稿摘要：保存前不会修改正式账号资料/)).toBeInTheDocument();
+    expect(cancelButton).toBeDisabled();
+    expect(api.updateProjectStrategyProfile).not.toHaveBeenCalled();
+  });
+
+  it("账号策略页 AI 草稿只预填表单，保存前不更新当前账号资料", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "账号策略" }));
+    const accountPage = await screen.findByRole("region", { name: "账号策略资料" });
+
+    fireEvent.change(within(accountPage).getByLabelText("AI 草稿补充方向"), {
+      target: { value: "面向 AI 副业新手，强调避坑。" },
+    });
+    fireEvent.click(within(accountPage).getByRole("button", { name: "生成草稿" }));
+
+    expect(await within(accountPage).findByDisplayValue("AI 副业新手")).toBeInTheDocument();
+    expect(within(accountPage).getByText(/草稿偏向 AI 工具教程、避坑和真实案例/)).toBeInTheDocument();
+    expect(api.generateStrategyProfileDraft).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+      direction_notes: "面向 AI 副业新手，强调避坑。",
+    });
+    expect(api.updateProjectStrategyProfile).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("当前账号")).toHaveDisplayValue("科技博主");
+  });
+
+  it("账号策略页保存成功后同步账号列表和页面回显", async () => {
+    const updatedProject = {
+      ...project,
+      name: "AI 工具账号",
+      strategy_profile: {
+        ...strategyProfile,
+        target_audience: "AI 副业新手",
+      },
+    };
+    vi.mocked(api.updateProjectStrategyProfile).mockResolvedValue(updatedProject);
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "账号策略" }));
+    const accountPage = await screen.findByRole("region", { name: "账号策略资料" });
+
+    fireEvent.change(within(accountPage).getByLabelText("账号名称"), {
+      target: { value: "AI 工具账号" },
+    });
+    fireEvent.change(within(accountPage).getByLabelText("目标受众"), {
+      target: { value: "AI 副业新手" },
+    });
+    fireEvent.click(within(accountPage).getByRole("button", { name: "保存并应用" }));
+
+    await waitFor(() => {
+      expect(api.updateProjectStrategyProfile).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+        name: "AI 工具账号",
+        positioning: "科技知识账号",
+        description: "面向程序员的知识短视频",
+        strategy_profile: {
+          ...strategyProfile,
+          target_audience: "AI 副业新手",
+        },
+      });
+    });
+    expect(screen.getByLabelText("当前账号")).toHaveDisplayValue("AI 工具账号");
+    const structured = within(accountPage).getByRole("region", { name: "结构化策略" });
+    await waitFor(() => {
+      expect(structured.querySelector(".strategyTextPreview")).toHaveTextContent("目标受众：AI 副业新手");
+    });
+    expect(within(accountPage).getByLabelText("目标受众")).toHaveValue("AI 副业新手");
+  });
+
+  it("账号策略页保存失败时展示错误且不覆盖旧资料", async () => {
+    vi.mocked(api.updateProjectStrategyProfile).mockRejectedValue(new Error("策略保存失败"));
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "账号策略" }));
+    const accountPage = await screen.findByRole("region", { name: "账号策略资料" });
+    const structured = within(accountPage).getByRole("region", { name: "结构化策略" });
+    const savedPreview = structured.querySelector(".strategyTextPreview") as HTMLElement;
+
+    fireEvent.change(within(accountPage).getByLabelText("目标受众"), {
+      target: { value: "错误保存受众" },
+    });
+    fireEvent.click(within(accountPage).getByRole("button", { name: "保存并应用" }));
+
+    expect(await within(accountPage).findByRole("alert")).toHaveTextContent("策略保存失败");
+    expect(within(savedPreview).getByText(/内容运营负责人/)).toBeInTheDocument();
+    expect(within(savedPreview).queryByText(/错误保存受众/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("当前账号")).toHaveDisplayValue("科技博主");
+  });
+
+  it("当前选题池不展示账号策略区块，账号策略只在独立二级页面维护", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "当前选题池" }));
+    const topicPool = await screen.findByRole("region", { name: "选题池" });
+
+    expect(within(topicPool).queryByRole("heading", { name: "账号策略" })).not.toBeInTheDocument();
+    expect(within(topicPool).queryByText("策略资料状态")).not.toBeInTheDocument();
+    expect(within(topicPool).queryByText("账号策略摘要")).not.toBeInTheDocument();
+    expect(within(topicPool).queryByText("内容运营负责人")).not.toBeInTheDocument();
+    expect(within(topicPool).queryByText("表达风格")).not.toBeInTheDocument();
+    expect(within(topicPool).queryByText("选题偏好")).not.toBeInTheDocument();
+    expect(within(topicPool).queryByRole("button", { name: "编辑账号策略" })).not.toBeInTheDocument();
+    expect(within(topicPool).queryByLabelText("账号名称")).not.toBeInTheDocument();
+    expect(within(topicPool).queryByLabelText("AI 草稿补充方向")).not.toBeInTheDocument();
   });
 
   it("历史生成页使用批次、选题和补充操作三列布局", async () => {

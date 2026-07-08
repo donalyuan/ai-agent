@@ -6,8 +6,8 @@ use novex_api::agents::models::{
 };
 use novex_api::agents::{LLMClient, LLMError, ScriptAgentError, ScriptAgentService};
 use novex_api::repositories::{
-    CreateProjectInput, Project, ProjectRepository, ProjectRepositoryError, ScriptRepository,
-    ScriptRepositoryError,
+    AccountStrategyProfile, CreateProjectInput, Project, ProjectRepository, ProjectRepositoryError,
+    ScriptRepository, ScriptRepositoryError, UpdateProjectStrategyProfileInput,
 };
 use novex_model::LLMPrompt;
 use serde_json::json;
@@ -33,6 +33,7 @@ impl ProjectRepository for MemoryProjectRepository {
                 name: "测试项目".to_string(),
                 positioning: "测试定位".to_string(),
                 description: "脚本服务测试项目".to_string(),
+                strategy_profile: AccountStrategyProfile::default(),
                 status: "active".to_string(),
                 created_at: now,
                 updated_at: now,
@@ -52,6 +53,28 @@ impl ProjectRepository for MemoryProjectRepository {
             name: input.name,
             positioning: input.positioning,
             description: input.description,
+            strategy_profile: input.strategy_profile,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    async fn update_strategy_profile(
+        &self,
+        project_id: Uuid,
+        input: UpdateProjectStrategyProfileInput,
+    ) -> Result<Project, ProjectRepositoryError> {
+        if !self.project_ids.contains(&project_id) {
+            return Err(ProjectRepositoryError::NotFound(project_id));
+        }
+        let now = Utc::now();
+        Ok(Project {
+            id: project_id,
+            name: input.name,
+            positioning: input.positioning,
+            description: input.description,
+            strategy_profile: input.strategy_profile,
             status: "active".to_string(),
             created_at: now,
             updated_at: now,
@@ -68,6 +91,7 @@ impl ProjectRepository for MemoryProjectRepository {
                 name: "测试项目".to_string(),
                 positioning: "测试定位".to_string(),
                 description: "脚本服务测试项目".to_string(),
+                strategy_profile: AccountStrategyProfile::default(),
                 status: "active".to_string(),
                 created_at: now,
                 updated_at: now,

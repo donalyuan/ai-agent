@@ -112,6 +112,32 @@ async fn insert_project(pool: &PgPool) -> Uuid {
     .expect("project fixture should be inserted")
 }
 
+async fn insert_project_with_strategy_profile(pool: &PgPool) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO projects (name, positioning, description, strategy_profile)
+        VALUES (
+            'AI 工具账号',
+            'AI 工具和内容生产效率',
+            '面向内容运营负责人的科技知识账号',
+            $1
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(json!({
+        "target_audience": "中小内容团队负责人",
+        "content_pillars": ["AI 工具教程", "内容生产案例"],
+        "tone_style": "直接清晰，少术语",
+        "forbidden_topics": ["夸大收益", "灰产引流"],
+        "reference_accounts": ["参考账号A"],
+        "topic_preferences": "优先 60 秒内可讲清楚步骤的教程选题"
+    }))
+    .fetch_one(pool)
+    .await
+    .expect("project fixture with strategy profile should be inserted")
+}
+
 async fn latest_topic_generation_batch_id(pool: &PgPool, project_id: Uuid) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
         r#"
@@ -211,6 +237,153 @@ fn topic_input(project_id: Uuid, batch_id: Uuid, title: &str) -> CreateContentTo
         source: ContentTopicSource::Agent,
         metadata: json!({}),
     }
+}
+
+#[tokio::test]
+async fn account_strategy_context_is_injected_into_topic_generation_and_quality_prompts() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = insert_project_with_strategy_profile(&test_pool).await;
+    let generation = json!({
+        "topics": [
+            {
+                "title": "AI 工具如何改变选题会",
+                "angle": "用一个团队会议场景说明 AI 如何缩短选题周期",
+                "target_audience": "中小内容团队负责人",
+                "hook_points": ["减少重复劳动", "保留人工判断"],
+                "content_type": "knowledge",
+                "score": 90,
+                "score_reason": "贴合账号策略资料中的目标受众和教程偏好",
+                "tags": ["AI工具", "内容生产"]
+            }
+        ]
+    });
+    let quality = json!({
+        "summary": "本批 1 条通过。",
+        "items": [
+            {
+                "candidate_key": "candidate-1",
+                "title": "AI 工具如何改变选题会",
+                "decision": "pass",
+                "quality_score": 90,
+                "flags": [],
+                "reason": "贴合账号策略资料，未触碰禁区。"
+            }
+        ]
+    });
+    let llm_client = Arc::new(ScriptedLLMClient::from_results(vec![
+        Ok(quality.to_string()),
+        Ok(generation.to_string()),
+    ]));
+    let (runtime, conversation_repository, _topic_repository) =
+        build_topic_runtime(test_pool.clone(), llm_client.clone());
+    let conversation = conversation_repository
+        .create_conversation(CreateAgentConversationInput {
+            project_id: Some(project_id),
+            agent_type: "topic".to_string(),
+            subject_type: None,
+            subject_id: None,
+            title: "选题生成".to_string(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+
+    runtime
+        .handle_turn(AgentTurnRequest {
+            conversation_id: conversation.id,
+            user_message: "生成 1 个 AI 工具教程选题".to_string(),
+            supplement_of_batch_id: None,
+        })
+        .await
+        .unwrap();
+
+    {
+        let prompts = llm_client.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 2);
+        for prompt in [&prompts[0].user, &prompts[1].user] {
+            assert!(prompt.contains("账号策略资料"));
+            assert!(prompt.contains("中小内容团队负责人"));
+            assert!(prompt.contains("AI 工具教程"));
+            assert!(prompt.contains("内容生产案例"));
+            assert!(prompt.contains("直接清晰，少术语"));
+            assert!(prompt.contains("夸大收益"));
+            assert!(prompt.contains("灰产引流"));
+            assert!(prompt.contains("参考账号A"));
+            assert!(prompt.contains("优先 60 秒内可讲清楚步骤的教程选题"));
+        }
+    }
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn account_strategy_context_is_injected_into_topic_group_review_prompt() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = insert_project_with_strategy_profile(&test_pool).await;
+    let llm_client = Arc::new(ScriptedLLMClient::returning_raw("{}"));
+    let (_runtime, _conversation_repository, topic_repository) =
+        build_topic_runtime(test_pool.clone(), llm_client);
+    let original_batch = topic_repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: None,
+            supplement_of_batch_id: None,
+            prompt: "原始生成 AI 工具方向选题".to_string(),
+            requested_count: 1,
+            status: TopicGenerationBatchStatus::Succeeded,
+            error_message: None,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    let original_topic = topic_repository
+        .create_topic(topic_input(
+            project_id,
+            original_batch.id,
+            "AI 工具教程选题",
+        ))
+        .await
+        .unwrap();
+    let review_llm_client = Arc::new(ScriptedLLMClient::returning(json!({
+        "review_summary": "优先推进贴合账号策略的教程选题。",
+        "topic_reviews": [
+            {
+                "topic_id": original_topic.id,
+                "priority": "priority",
+                "reason": "符合目标受众和教程偏好。",
+                "risk_flags": [],
+                "similar_topic_ids": []
+            }
+        ]
+    })));
+    let (runtime, _conversation_repository, _topic_repository) =
+        build_topic_runtime(test_pool.clone(), review_llm_client.clone());
+
+    runtime
+        .review_topic_group(project_id, original_batch.id)
+        .await
+        .unwrap();
+
+    {
+        let prompts = review_llm_client.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        let prompt = &prompts[0].user;
+        assert!(prompt.contains("账号策略资料"));
+        assert!(prompt.contains("中小内容团队负责人"));
+        assert!(prompt.contains("AI 工具教程"));
+        assert!(prompt.contains("内容生产案例"));
+        assert!(prompt.contains("直接清晰，少术语"));
+        assert!(prompt.contains("夸大收益"));
+        assert!(prompt.contains("灰产引流"));
+        assert!(prompt.contains("参考账号A"));
+        assert!(prompt.contains("优先 60 秒内可讲清楚步骤的教程选题"));
+    }
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
 }
 
 #[tokio::test]

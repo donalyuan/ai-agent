@@ -3,11 +3,21 @@ export type ScriptStyle = "knowledge" | "story" | "tutorial";
 export type ContentTopicStatus = "idea" | "approved" | "scripted" | "archived";
 export type ContentTopicSource = "manual" | "agent";
 
+export type AccountStrategyProfile = {
+  target_audience: string;
+  content_pillars: string[];
+  tone_style: string;
+  forbidden_topics: string[];
+  reference_accounts: string[];
+  topic_preferences: string;
+};
+
 export type Project = {
   project_id: string;
   name: string;
   positioning: string;
   description: string;
+  strategy_profile: AccountStrategyProfile;
   status: string;
   created_at: string;
   updated_at: string;
@@ -45,6 +55,23 @@ export type CreateProjectPayload = {
   name: string;
   positioning: string;
   description: string;
+  strategy_profile?: AccountStrategyProfile;
+};
+
+export type UpdateProjectStrategyProfilePayload = {
+  name: string;
+  positioning: string;
+  description: string;
+  strategy_profile: AccountStrategyProfile;
+};
+
+export type StrategyProfileDraftPayload = {
+  direction_notes: string;
+};
+
+export type StrategyProfileDraftResponse = {
+  draft: AccountStrategyProfile;
+  draft_summary: string;
 };
 
 export type ScriptSummary = {
@@ -451,6 +478,32 @@ export function createProject(client: ApiClient, payload: CreateProjectPayload) 
     method: "POST",
     body: payload,
   });
+}
+
+export function updateProjectStrategyProfile(
+  client: ApiClient,
+  projectId: string,
+  payload: UpdateProjectStrategyProfilePayload,
+) {
+  return request<Project>(client, `/api/projects/${projectId}/strategy-profile`, {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function generateStrategyProfileDraft(
+  client: ApiClient,
+  projectId: string,
+  payload: StrategyProfileDraftPayload,
+) {
+  return request<StrategyProfileDraftResponse>(
+    client,
+    `/api/projects/${projectId}/strategy-profile/draft`,
+    {
+      method: "POST",
+      body: payload,
+    },
+  );
 }
 
 export function listScripts(

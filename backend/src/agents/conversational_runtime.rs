@@ -13,8 +13,9 @@ use crate::agents::{ScriptAgentError, ScriptAgentService};
 use crate::repositories::{
     ConversationRepository, ConversationRepositoryError, CreateContentTopicInput,
     CreateTopicGenerationBatchInput, CreateTopicQualityEvaluationInput,
-    CreateTopicReviewSnapshotInput, ProjectRepository, ProjectRepositoryError, ScriptRepository,
-    ScriptRepositoryError, TopicRepository, TopicRepositoryError, UpdateTopicGenerationBatchInput,
+    CreateTopicReviewSnapshotInput, Project, ProjectRepository, ProjectRepositoryError,
+    ScriptRepository, ScriptRepositoryError, TopicRepository, TopicRepositoryError,
+    UpdateTopicGenerationBatchInput,
 };
 use novex_model::{LLMClient, LLMError, LLMJsonSchema, LLMPrompt};
 use serde::Deserialize;
@@ -282,8 +283,7 @@ impl AgentRuntime {
         let result = self
             .review_topic_group_with_run(
                 topic_repository.as_ref(),
-                &project.positioning,
-                &project.description,
+                &format_account_strategy_context(&project),
                 &root_batch,
                 &topics,
                 run.id,
@@ -320,8 +320,7 @@ impl AgentRuntime {
     async fn review_topic_group_with_run(
         &self,
         topic_repository: &dyn TopicRepository,
-        project_positioning: &str,
-        project_description: &str,
+        account_strategy_context: &str,
         root_batch: &TopicGenerationBatch,
         topics: &[ContentTopic],
         run_id: Uuid,
@@ -338,12 +337,7 @@ impl AgentRuntime {
             })
             .await?;
 
-        let prompt = build_topic_group_review_prompt(
-            project_positioning,
-            project_description,
-            root_batch,
-            topics,
-        );
+        let prompt = build_topic_group_review_prompt(account_strategy_context, root_batch, topics);
         let raw = self.llm_client.generate_script(prompt).await;
         let review_output = match raw {
             Ok(raw) => match TopicReviewLLMOutput::parse_and_validate(&raw, topics) {
@@ -541,6 +535,7 @@ impl AgentRuntime {
             AgentRuntimeError::Validation("选题 Agent 未配置 topic repository".to_string())
         })?;
         let project = self.project_repository.get_project(project_id).await?;
+        let account_strategy_context = format_account_strategy_context(&project);
 
         self.conversation_repository
             .add_step(CreateAgentStepInput {
@@ -603,8 +598,7 @@ impl AgentRuntime {
         let raw = self
             .llm_client
             .generate_script(build_topic_generation_prompt(
-                &project.positioning,
-                &project.description,
+                &account_strategy_context,
                 requested_count,
                 &user_message.content,
                 supplement_context.as_ref(),
@@ -654,8 +648,7 @@ impl AgentRuntime {
         let raw_quality = self
             .llm_client
             .generate_script(build_topic_quality_gate_prompt(
-                &project.positioning,
-                &project.description,
+                &account_strategy_context,
                 &user_message.content,
                 &candidates,
                 supplement_context.as_ref(),
@@ -764,8 +757,7 @@ impl AgentRuntime {
             let raw_rewrite = self
                 .llm_client
                 .generate_script(build_topic_generation_prompt(
-                    &project.positioning,
-                    &project.description,
+                    &account_strategy_context,
                     requested_count,
                     &rewrite_user_message,
                     supplement_context.as_ref(),
@@ -818,8 +810,7 @@ impl AgentRuntime {
             let raw_rewrite_quality = self
                 .llm_client
                 .generate_script(build_topic_quality_gate_prompt(
-                    &project.positioning,
-                    &project.description,
+                    &account_strategy_context,
                     &user_message.content,
                     &rewritten_candidates,
                     supplement_context.as_ref(),
@@ -1807,8 +1798,7 @@ fn previous_conversation_messages(
 }
 
 fn build_topic_generation_prompt(
-    project_positioning: &str,
-    project_description: &str,
+    account_strategy_context: &str,
     requested_count: i32,
     user_message: &str,
     supplement_context: Option<&TopicSupplementPromptContext>,
@@ -1822,8 +1812,9 @@ fn build_topic_generation_prompt(
         user: format!(
             r#"请基于项目定位和用户补充要求生成 {requested_count} 个候选选题。
 
-项目定位：{project_positioning}
-项目描述：{project_description}
+账号策略资料：
+{account_strategy_context}
+
 用户补充要求：{user_message}
 {supplement_context_text}
 
@@ -1851,8 +1842,7 @@ JSON Schema：
   ]
 }}"#,
             requested_count = requested_count,
-            project_positioning = project_positioning,
-            project_description = project_description,
+            account_strategy_context = account_strategy_context,
             user_message = user_message,
             supplement_context_text = supplement_context_text
         ),
@@ -1862,8 +1852,7 @@ JSON Schema：
 }
 
 fn build_topic_quality_gate_prompt(
-    project_positioning: &str,
-    project_description: &str,
+    account_strategy_context: &str,
     user_message: &str,
     candidates: &[TopicLLMOutput],
     supplement_context: Option<&TopicSupplementPromptContext>,
@@ -1877,8 +1866,9 @@ fn build_topic_quality_gate_prompt(
         user: format!(
             r#"请评估候选选题是否允许进入选题池。质量闸门只做入库前筛选，不允许自动确认、归档、删除选题或生成脚本。
 
-项目定位：{project_positioning}
-项目描述：{project_description}
+账号策略资料：
+{account_strategy_context}
+
 用户生成要求：{user_message}
 
 同主题组已有选题：
@@ -1888,7 +1878,7 @@ fn build_topic_quality_gate_prompt(
 {candidate_context}
 
 评估维度：
-1. 账号匹配度：是否贴合项目定位和描述。
+1. 账号匹配度：是否贴合账号策略资料。
 2. 具体度：是否避免百科式、泛化标题。
 3. 差异化：是否避免同批或同主题组已有选题重复。
 4. 脚本化可行性：是否适合短视频结构化表达。
@@ -1918,8 +1908,7 @@ JSON Schema：
     }}
   ]
 }}"#,
-            project_positioning = project_positioning,
-            project_description = project_description,
+            account_strategy_context = account_strategy_context,
             user_message = user_message,
             existing_topic_context = existing_topic_context,
             candidate_context = format_topic_quality_candidate_context(candidates)
@@ -1930,8 +1919,7 @@ JSON Schema：
 }
 
 fn build_topic_group_review_prompt(
-    project_positioning: &str,
-    project_description: &str,
+    account_strategy_context: &str,
     root_batch: &TopicGenerationBatch,
     topics: &[ContentTopic],
 ) -> LLMPrompt {
@@ -1943,8 +1931,9 @@ fn build_topic_group_review_prompt(
 
 评审只作为决策辅助，不允许自动确认、归档、删除选题或生成脚本。
 
-项目定位：{project_positioning}
-项目描述：{project_description}
+账号策略资料：
+{account_strategy_context}
+
 原始生成要求：{original_prompt}
 
 当前主题组选题：
@@ -1971,13 +1960,52 @@ JSON Schema：
     }}
   ]
 }}"#,
-            project_positioning = project_positioning,
-            project_description = project_description,
+            account_strategy_context = account_strategy_context,
             original_prompt = truncate_for_prompt(&root_batch.prompt, 500),
             topic_context = format_topic_group_review_topic_context(root_batch, topics)
         ),
         max_output_tokens: Some(2_000),
         output_schema: Some(topic_review_output_schema()),
+    }
+}
+
+pub fn format_account_strategy_context(project: &Project) -> String {
+    let profile = &project.strategy_profile;
+    format!(
+        r#"- 账号名称：{name}
+- 定位摘要：{positioning}
+- 账号描述：{description}
+- 目标受众：{target_audience}
+- 内容支柱：{content_pillars}
+- 表达风格：{tone_style}
+- 禁区方向：{forbidden_topics}
+- 参考账号：{reference_accounts}
+- 选题偏好：{topic_preferences}"#,
+        name = non_empty_text(&project.name),
+        positioning = non_empty_text(&project.positioning),
+        description = non_empty_text(&project.description),
+        target_audience = non_empty_text(&profile.target_audience),
+        content_pillars = format_context_list(&profile.content_pillars),
+        tone_style = non_empty_text(&profile.tone_style),
+        forbidden_topics = format_context_list(&profile.forbidden_topics),
+        reference_accounts = format_context_list(&profile.reference_accounts),
+        topic_preferences = non_empty_text(&profile.topic_preferences),
+    )
+}
+
+fn format_context_list(values: &[String]) -> String {
+    if values.is_empty() {
+        return "未填写".to_string();
+    }
+    values.join("、")
+}
+
+fn non_empty_text(value: &str) -> &str {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "未填写"
+    } else {
+        trimmed
     }
 }
 
