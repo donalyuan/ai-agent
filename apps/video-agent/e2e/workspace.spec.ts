@@ -978,6 +978,53 @@ test("内容策略页从已确认选题确认参数并生成脚本", async ({ pa
   await expect(sourceTopicPanel.getByText(approvedTopic.angle)).toBeVisible();
 });
 
+test("内容策略当前选题池在超宽桌面保持可读比例", async ({ page }) => {
+  await page.setViewportSize({ width: 2552, height: 1308 });
+  await mockContentStrategyWorkflow(page);
+  await page.goto("/");
+
+  await expect(page.getByRole("region", { name: "选题池" })).toBeVisible();
+  const wideLayout = await page.locator(".contentStrategyWorkspace").evaluate((workspace) => {
+    const workspaceRect = workspace.getBoundingClientRect();
+    const pool = document.querySelector('[aria-label="选题池"]')?.getBoundingClientRect();
+    const detail = document.querySelector(".topicDetailColumn")?.getBoundingClientRect();
+    const agent = document.querySelector('[aria-label="选题 Agent"]')?.getBoundingClientRect();
+    return {
+      agentWidth: agent ? Math.round(agent.width) : null,
+      detailWidth: detail ? Math.round(detail.width) : null,
+      poolWidth: pool ? Math.round(pool.width) : null,
+      workspaceWidth: Math.round(workspaceRect.width),
+    };
+  });
+
+  expect(wideLayout.agentWidth).toBe(360);
+  expect(wideLayout.workspaceWidth).toBeLessThanOrEqual(1800);
+  expect(wideLayout.poolWidth).not.toBeNull();
+  expect(wideLayout.poolWidth!).toBeLessThanOrEqual(1040);
+  expect(wideLayout.detailWidth).not.toBeNull();
+  expect(wideLayout.detailWidth!).toBeGreaterThanOrEqual(420);
+
+  const overflowingTopicItemChildren = await page.locator(".topicItem").evaluateAll((items) =>
+    items.flatMap((item, itemIndex) => {
+      const itemRect = item.getBoundingClientRect();
+      return Array.from(
+        item.querySelectorAll(".topicPoolBadges span, .topicPoolActions button, .topicScore"),
+      )
+        .map((child) => {
+          const childRect = child.getBoundingClientRect();
+          return {
+            bottomOverflow: Math.round(childRect.bottom - itemRect.bottom),
+            itemIndex,
+            rightOverflow: Math.round(childRect.right - itemRect.right),
+            text: child.textContent?.trim() || "",
+          };
+        })
+        .filter((entry) => entry.bottomOverflow > 0 || entry.rightOverflow > 0);
+    }),
+  );
+  expect(overflowingTopicItemChildren).toEqual([]);
+});
+
 test("内容策略历史生成列表页展示批次并限制已成稿选题删除", async ({ page }) => {
   await mockContentStrategyHistoryWorkflow(page);
   await page.goto("/");

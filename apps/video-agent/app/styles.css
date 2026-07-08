@@ -874,7 +874,10 @@ button:focus-visible {
 }
 
 .contentStrategyWorkspace {
+  width: 100%;
+  max-width: 1800px;
   min-width: 0;
+  justify-self: start;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 16px;
@@ -972,7 +975,7 @@ button:focus-visible {
 .contentStrategyGrid {
   min-width: 0;
   display: grid;
-  grid-template-columns: 360px minmax(360px, 1fr) 360px;
+  grid-template-columns: 360px minmax(384px, 1fr) minmax(360px, 420px);
   gap: 16px;
 }
 
@@ -1881,7 +1884,7 @@ button.topicReviewDuplicateTitle:hover {
 
 .topicItem {
   width: 100%;
-  min-height: 90px;
+  min-height: 112px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   display: grid;
