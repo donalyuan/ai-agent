@@ -19,6 +19,7 @@ import {
   TopicGenerationBatchSummary,
   TopicGroupSort,
   TopicGroupSummary,
+  TopicQualityEvaluation,
   TopicReviewSnapshot,
   WorkspaceMenuNode,
   checkHealth,
@@ -28,6 +29,7 @@ import {
   createTopicGroupReview,
   deleteContentTopic,
   generateScript,
+  getLatestTopicQualityEvaluation,
   getLatestTopicGroupReview,
   getScript,
   getScriptAgentTurnMetadata,
@@ -153,6 +155,10 @@ export default function Home() {
   const [topicReviewSnapshot, setTopicReviewSnapshot] = useState<TopicReviewSnapshot | null>(null);
   const [topicReviewLoading, setTopicReviewLoading] = useState(false);
   const [topicReviewError, setTopicReviewError] = useState("");
+  const [topicQualityEvaluation, setTopicQualityEvaluation] =
+    useState<TopicQualityEvaluation | null>(null);
+  const [topicQualityLoading, setTopicQualityLoading] = useState(false);
+  const [topicQualityError, setTopicQualityError] = useState("");
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [topicStatusFilter, setTopicStatusFilter] = useState<"all" | ContentTopicStatus>("all");
   const [topicSourceFilter] = useState<"all" | ContentTopicSource>("all");
@@ -575,6 +581,56 @@ export default function Home() {
   ]);
 
   useEffect(() => {
+    if (
+      !selectedProjectId ||
+      selectedMenuKey !== contentStrategyMenuKey ||
+      !topicBatchesLoaded ||
+      !activeTopicBatchId
+    ) {
+      setTopicQualityEvaluation(null);
+      setTopicQualityLoading(false);
+      setTopicQualityError("");
+      return;
+    }
+
+    let active = true;
+    const batchId = activeTopicBatchId;
+
+    async function loadLatestTopicQualityEvaluation() {
+      setTopicQualityLoading(true);
+      setTopicQualityError("");
+
+      try {
+        const evaluation = await getLatestTopicQualityEvaluation(client, batchId, selectedProjectId);
+        if (active) {
+          setTopicQualityEvaluation(evaluation);
+        }
+      } catch (error) {
+        if (active) {
+          setTopicQualityEvaluation(null);
+          setTopicQualityError(errorToMessage(error));
+        }
+      } finally {
+        if (active) {
+          setTopicQualityLoading(false);
+        }
+      }
+    }
+
+    loadLatestTopicQualityEvaluation();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    activeTopicBatchId,
+    client,
+    selectedMenuKey,
+    selectedProjectId,
+    topicBatchesLoaded,
+  ]);
+
+  useEffect(() => {
     selectedProjectIdRef.current = selectedProjectId;
     setAgentConversationId(null);
     setAgentMessages([]);
@@ -605,6 +661,9 @@ export default function Home() {
     setTopicReviewSnapshot(null);
     setTopicReviewLoading(false);
     setTopicReviewError("");
+    setTopicQualityEvaluation(null);
+    setTopicQualityLoading(false);
+    setTopicQualityError("");
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -1190,6 +1249,9 @@ export default function Home() {
           topicBatches={topicBatches}
           topicGroups={topicGroups}
           topicGroupSort={topicGroupSort}
+          qualityError={topicQualityError}
+          qualityEvaluation={topicQualityEvaluation}
+          qualityLoading={topicQualityLoading}
           loadingTopicBatches={!topicBatchesLoaded || !topicGroupsLoaded}
           topicBatchError={topicBatchError || topicGroupError}
           loading={loadingTopics}

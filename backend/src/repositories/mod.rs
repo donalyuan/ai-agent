@@ -13,9 +13,9 @@ pub use project_repository::{
 };
 pub use script_repository::{PostgresScriptRepository, ScriptRepository, ScriptRepositoryError};
 pub use topic_repository::{
-    CreateContentTopicInput, CreateTopicGenerationBatchInput, CreateTopicReviewSnapshotInput,
-    PostgresTopicRepository, TopicRepository, TopicRepositoryError, UpdateContentTopicInput,
-    UpdateTopicGenerationBatchInput,
+    CreateContentTopicInput, CreateTopicGenerationBatchInput, CreateTopicQualityEvaluationInput,
+    CreateTopicReviewSnapshotInput, PostgresTopicRepository, TopicRepository, TopicRepositoryError,
+    UpdateContentTopicInput, UpdateTopicGenerationBatchInput,
 };
 pub use workspace_menu_repository::{
     PostgresWorkspaceMenuRepository, WorkspaceMenu, WorkspaceMenuRepositoryError,

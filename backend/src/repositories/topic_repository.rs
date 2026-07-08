@@ -2,8 +2,9 @@ use crate::agents::models::{
     ContentTopic, ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatch,
     TopicGenerationBatchStatus, TopicGenerationBatchSummary, TopicGroupReviewFreshness,
     TopicGroupScriptPriority, TopicGroupScriptPriorityMetrics, TopicGroupScriptPriorityStatus,
-    TopicGroupSort, TopicGroupSummary, TopicReviewPriority, TopicReviewResult,
-    TopicReviewRiskFlag, TopicReviewSnapshot, TopicReviewSnapshotStatus,
+    TopicGroupSort, TopicGroupSummary, TopicQualityEvaluation, TopicQualityEvaluationStatus,
+    TopicQualityGateResult, TopicReviewPriority, TopicReviewResult, TopicReviewRiskFlag,
+    TopicReviewSnapshot, TopicReviewSnapshotStatus,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -63,6 +64,19 @@ pub struct CreateTopicGenerationBatchInput {
     pub status: TopicGenerationBatchStatus,
     pub error_message: Option<String>,
     pub metadata: Value,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CreateTopicQualityEvaluationInput {
+    pub project_id: Uuid,
+    pub batch_id: Uuid,
+    pub source_run_id: Option<Uuid>,
+    pub status: TopicQualityEvaluationStatus,
+    pub pass_count: i32,
+    pub reject_count: i32,
+    pub rewrite_triggered: bool,
+    pub result: TopicQualityGateResult,
+    pub error_message: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -152,6 +166,17 @@ pub trait TopicRepository: Send + Sync {
         project_id: Uuid,
         limit: i64,
     ) -> Result<Vec<TopicGenerationBatchSummary>, TopicRepositoryError>;
+
+    async fn create_topic_quality_evaluation(
+        &self,
+        input: CreateTopicQualityEvaluationInput,
+    ) -> Result<TopicQualityEvaluation, TopicRepositoryError>;
+
+    async fn get_latest_topic_quality_evaluation(
+        &self,
+        project_id: Uuid,
+        batch_id: Uuid,
+    ) -> Result<Option<TopicQualityEvaluation>, TopicRepositoryError>;
 
     async fn list_topic_group_summaries(
         &self,
@@ -608,6 +633,66 @@ impl TopicRepository for PostgresTopicRepository {
         rows.into_iter().map(batch_summary_from_row).collect()
     }
 
+    async fn create_topic_quality_evaluation(
+        &self,
+        input: CreateTopicQualityEvaluationInput,
+    ) -> Result<TopicQualityEvaluation, TopicRepositoryError> {
+        let result = serde_json::to_value(input.result)
+            .map_err(|error| TopicRepositoryError::Storage(error.to_string()))?;
+        let row = sqlx::query(
+            r#"
+            INSERT INTO topic_quality_evaluations (
+                project_id, batch_id, source_run_id, status, pass_count, reject_count,
+                rewrite_triggered, result, error_message
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id, project_id, batch_id, source_run_id, status,
+                      pass_count, reject_count, rewrite_triggered, result,
+                      error_message, created_at, updated_at
+            "#,
+        )
+        .bind(input.project_id)
+        .bind(input.batch_id)
+        .bind(input.source_run_id)
+        .bind(input.status.as_str())
+        .bind(input.pass_count)
+        .bind(input.reject_count)
+        .bind(input.rewrite_triggered)
+        .bind(result)
+        .bind(input.error_message)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(TopicRepositoryError::from)?;
+
+        topic_quality_evaluation_from_row(row)
+    }
+
+    async fn get_latest_topic_quality_evaluation(
+        &self,
+        project_id: Uuid,
+        batch_id: Uuid,
+    ) -> Result<Option<TopicQualityEvaluation>, TopicRepositoryError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, project_id, batch_id, source_run_id, status,
+                   pass_count, reject_count, rewrite_triggered, result,
+                   error_message, created_at, updated_at
+            FROM topic_quality_evaluations
+            WHERE project_id = $1
+              AND batch_id = $2
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(project_id)
+        .bind(batch_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(TopicRepositoryError::from)?;
+
+        row.map(topic_quality_evaluation_from_row).transpose()
+    }
+
     async fn list_topic_group_summaries(
         &self,
         project_id: Uuid,
@@ -622,7 +707,8 @@ impl TopicRepository for PostgresTopicRepository {
                 root.prompt,
                 root.created_at,
                 COUNT(DISTINCT topic.id) AS topic_count,
-                COUNT(DISTINCT supplement.id) AS supplement_batch_count
+                COUNT(DISTINCT supplement.id) FILTER (WHERE supplement_topic.id IS NOT NULL)
+                    AS supplement_batch_count
             FROM topic_generation_batches root
             INNER JOIN topic_generation_batches batch
                 ON batch.project_id = root.project_id
@@ -636,6 +722,10 @@ impl TopicRepository for PostgresTopicRepository {
                 ON supplement.project_id = root.project_id
                AND supplement.status = 'succeeded'
                AND supplement.supplement_of_batch_id = root.id
+            LEFT JOIN content_topics supplement_topic
+                ON supplement_topic.project_id = root.project_id
+               AND supplement_topic.batch_id = supplement.id
+               AND supplement_topic.deleted_at IS NULL
             WHERE root.project_id = $1
               AND root.status = 'succeeded'
               AND root.supplement_of_batch_id IS NULL
@@ -938,9 +1028,7 @@ fn topic_group_script_priority(
         TopicGroupScriptPriorityStatus::Defer => {
             "淘汰、重复、偏离定位或脚本化困难信号占主导，暂不建议推进。".to_string()
         }
-        TopicGroupScriptPriorityStatus::NeedsReview => {
-            "请先完成当前主题组评审。".to_string()
-        }
+        TopicGroupScriptPriorityStatus::NeedsReview => "请先完成当前主题组评审。".to_string(),
     };
     let recommended_topic_ids = ready_candidates
         .into_iter()
@@ -998,10 +1086,12 @@ fn topic_group_status_rank(status: &TopicGroupScriptPriorityStatus) -> i32 {
 }
 
 fn compare_topic_group_created_at(left: &TopicGroupSummary, right: &TopicGroupSummary) -> Ordering {
-    right
-        .created_at
-        .cmp(&left.created_at)
-        .then_with(|| right.root_batch_id.to_string().cmp(&left.root_batch_id.to_string()))
+    right.created_at.cmp(&left.created_at).then_with(|| {
+        right
+            .root_batch_id
+            .to_string()
+            .cmp(&left.root_batch_id.to_string())
+    })
 }
 
 #[derive(Debug)]
@@ -1130,6 +1220,32 @@ fn topic_review_snapshot_from_row(row: PgRow) -> Result<TopicReviewSnapshot, Top
         result,
         error_message: row.get("error_message"),
         metadata: row.get("metadata"),
+        created_at: row.get::<DateTime<Utc>, _>("created_at"),
+        updated_at: row.get::<DateTime<Utc>, _>("updated_at"),
+    })
+}
+
+fn topic_quality_evaluation_from_row(
+    row: PgRow,
+) -> Result<TopicQualityEvaluation, TopicRepositoryError> {
+    let status_value: String = row.get("status");
+    let status = TopicQualityEvaluationStatus::try_from(status_value.as_str())
+        .map_err(|error| TopicRepositoryError::Storage(error.to_string()))?;
+    let result_value: Value = row.get("result");
+    let result = serde_json::from_value(result_value)
+        .map_err(|error| TopicRepositoryError::Storage(error.to_string()))?;
+
+    Ok(TopicQualityEvaluation {
+        id: row.get("id"),
+        project_id: row.get("project_id"),
+        batch_id: row.get("batch_id"),
+        source_run_id: row.get("source_run_id"),
+        status,
+        pass_count: row.get("pass_count"),
+        reject_count: row.get("reject_count"),
+        rewrite_triggered: row.get("rewrite_triggered"),
+        result,
+        error_message: row.get("error_message"),
         created_at: row.get::<DateTime<Utc>, _>("created_at"),
         updated_at: row.get::<DateTime<Utc>, _>("updated_at"),
     })

@@ -2,6 +2,7 @@ use super::{
     ContentTopic, ContentTopicSource, ContentTopicStatus, Scene, Script, ScriptStatus,
     ScriptSummary, TopicGenerationBatchStatus, TopicGenerationBatchSummary,
     TopicGroupReviewFreshness, TopicGroupScriptPriority, TopicGroupSort, TopicGroupSummary,
+    TopicQualityEvaluation, TopicQualityEvaluationStatus, TopicQualityGateResult,
     TopicReviewResult, TopicReviewSnapshot, TopicReviewSnapshotStatus,
 };
 use crate::agents::conversation::{
@@ -346,6 +347,41 @@ impl From<TopicReviewSnapshot> for TopicReviewSnapshotResponse {
             metadata: snapshot.metadata,
             created_at: snapshot.created_at,
             updated_at: snapshot.updated_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TopicQualityEvaluationResponse {
+    pub evaluation_id: Uuid,
+    pub project_id: Uuid,
+    pub batch_id: Uuid,
+    pub source_run_id: Option<Uuid>,
+    pub status: TopicQualityEvaluationStatus,
+    pub pass_count: i32,
+    pub reject_count: i32,
+    pub rewrite_triggered: bool,
+    pub result: TopicQualityGateResult,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<TopicQualityEvaluation> for TopicQualityEvaluationResponse {
+    fn from(evaluation: TopicQualityEvaluation) -> Self {
+        Self {
+            evaluation_id: evaluation.id,
+            project_id: evaluation.project_id,
+            batch_id: evaluation.batch_id,
+            source_run_id: evaluation.source_run_id,
+            status: evaluation.status,
+            pass_count: evaluation.pass_count,
+            reject_count: evaluation.reject_count,
+            rewrite_triggered: evaluation.rewrite_triggered,
+            result: evaluation.result,
+            error_message: evaluation.error_message,
+            created_at: evaluation.created_at,
+            updated_at: evaluation.updated_at,
         }
     }
 }

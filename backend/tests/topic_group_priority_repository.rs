@@ -1,7 +1,7 @@
 use novex_api::agents::models::{
-    ContentTopicSource, TopicGenerationBatchStatus, TopicGroupReviewFreshness, TopicGroupSort,
-    TopicGroupScriptPriorityStatus, TopicReviewItem, TopicReviewPriority, TopicReviewResult,
-    TopicReviewRiskFlag, TopicReviewSnapshotStatus,
+    ContentTopicSource, TopicGenerationBatchStatus, TopicGroupReviewFreshness,
+    TopicGroupScriptPriorityStatus, TopicGroupSort, TopicReviewItem, TopicReviewPriority,
+    TopicReviewResult, TopicReviewRiskFlag, TopicReviewSnapshotStatus,
 };
 use novex_api::repositories::{
     CreateContentTopicInput, CreateTopicGenerationBatchInput, CreateTopicReviewSnapshotInput,
@@ -193,8 +193,14 @@ async fn topic_group_summaries_rank_fresh_reviewed_groups_for_script_production(
     let repository = PostgresTopicRepository::new(test_pool.clone());
 
     let ready_root = insert_batch(&repository, project_id, "AI 工具实战", None).await;
-    let ready_topic_1 =
-        insert_topic(&repository, project_id, ready_root, "低成本 AI 工具栈", 92.0).await;
+    let ready_topic_1 = insert_topic(
+        &repository,
+        project_id,
+        ready_root,
+        "低成本 AI 工具栈",
+        92.0,
+    )
+    .await;
     let ready_topic_2 =
         insert_topic(&repository, project_id, ready_root, "AI 复盘选题会", 88.0).await;
     let duplicate_topic =
@@ -246,9 +252,15 @@ async fn topic_group_summaries_rank_fresh_reviewed_groups_for_script_production(
         TopicGroupScriptPriorityStatus::ReadyForScript
     );
     assert_eq!(summaries[0].script_priority.score, Some(69));
-    assert_eq!(summaries[0].script_priority.metrics.ready_candidate_count, 2);
+    assert_eq!(
+        summaries[0].script_priority.metrics.ready_candidate_count,
+        2
+    );
     assert_eq!(summaries[0].script_priority.metrics.priority_count, 3);
-    assert_eq!(summaries[0].script_priority.metrics.high_score_topic_count, 4);
+    assert_eq!(
+        summaries[0].script_priority.metrics.high_score_topic_count,
+        4
+    );
     assert_eq!(summaries[0].script_priority.metrics.backup_count, 1);
     assert_eq!(summaries[0].script_priority.metrics.reject_count, 1);
     assert_eq!(summaries[0].script_priority.metrics.duplicate_count, 1);
@@ -292,7 +304,14 @@ async fn topic_group_summaries_mark_missing_and_stale_reviews_as_needs_review() 
     .await;
 
     let missing_root = insert_batch(&repository, project_id, "未评审主题", None).await;
-    insert_topic(&repository, project_id, missing_root, "还没有评审的选题", 93.0).await;
+    insert_topic(
+        &repository,
+        project_id,
+        missing_root,
+        "还没有评审的选题",
+        93.0,
+    )
+    .await;
 
     let summaries = repository
         .list_topic_group_summaries(project_id, TopicGroupSort::ScriptPriority, 20)
@@ -332,12 +351,22 @@ async fn topic_group_summaries_fold_supplements_into_root_batch() {
     let repository = PostgresTopicRepository::new(test_pool.clone());
 
     let root_batch = insert_batch(&repository, project_id, "原始 AI 工具选题", None).await;
-    let supplement_batch =
-        insert_batch(&repository, project_id, "补充 AI 工具选题", Some(root_batch)).await;
-    let root_topic =
-        insert_topic(&repository, project_id, root_batch, "原始批次候选", 88.0).await;
-    let supplement_topic =
-        insert_topic(&repository, project_id, supplement_batch, "补充批次候选", 91.0).await;
+    let supplement_batch = insert_batch(
+        &repository,
+        project_id,
+        "补充 AI 工具选题",
+        Some(root_batch),
+    )
+    .await;
+    let root_topic = insert_topic(&repository, project_id, root_batch, "原始批次候选", 88.0).await;
+    let supplement_topic = insert_topic(
+        &repository,
+        project_id,
+        supplement_batch,
+        "补充批次候选",
+        91.0,
+    )
+    .await;
     create_review(
         &repository,
         project_id,
@@ -362,6 +391,61 @@ async fn topic_group_summaries_fold_supplements_into_root_batch() {
         summaries[0].script_priority.recommended_topic_ids,
         vec![supplement_topic, root_topic]
     );
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn topic_group_summaries_count_only_supplements_with_visible_topics() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = insert_project(&test_pool, "科技博主").await;
+    let repository = PostgresTopicRepository::new(test_pool.clone());
+
+    let root_batch = insert_batch(&repository, project_id, "原始 AI 工具选题", None).await;
+    let visible_supplement = insert_batch(
+        &repository,
+        project_id,
+        "有可见选题的补充批次",
+        Some(root_batch),
+    )
+    .await;
+    let hidden_supplement = insert_batch(
+        &repository,
+        project_id,
+        "选题已移除的补充批次",
+        Some(root_batch),
+    )
+    .await;
+
+    insert_topic(&repository, project_id, root_batch, "原始批次候选", 88.0).await;
+    insert_topic(
+        &repository,
+        project_id,
+        visible_supplement,
+        "可见补充候选",
+        91.0,
+    )
+    .await;
+    let hidden_topic = insert_topic(
+        &repository,
+        project_id,
+        hidden_supplement,
+        "已移除补充候选",
+        86.0,
+    )
+    .await;
+    repository.soft_delete_topic(hidden_topic).await.unwrap();
+
+    let summaries = repository
+        .list_topic_group_summaries(project_id, TopicGroupSort::CreatedAt, 20)
+        .await
+        .unwrap();
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].topic_count, 2);
+    assert_eq!(summaries[0].supplement_batch_count, 1);
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

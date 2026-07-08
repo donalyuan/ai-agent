@@ -11,9 +11,9 @@ pub use request::{
     ScriptListFilter, ScriptListResponse, ScriptResponse, ScriptStyle, ScriptSummaryResponse,
     SendAgentMessageRequest, TopicGenerationBatchListResponse, TopicGenerationBatchSummaryResponse,
     TopicGroupListQuery, TopicGroupListResponse, TopicGroupSummaryResponse,
-    TopicReviewSnapshotResponse, TopicScriptRequestPreview, UpdateContentTopicRequest,
-    UpdateContentTopicStatusRequest, UpdateScriptStatusRequest, UpdateScriptStatusResponse,
-    WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
+    TopicQualityEvaluationResponse, TopicReviewSnapshotResponse, TopicScriptRequestPreview,
+    UpdateContentTopicRequest, UpdateContentTopicStatusRequest, UpdateScriptStatusRequest,
+    UpdateScriptStatusResponse, WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
 };
 pub use script::{Scene, Script, ScriptStatus, ScriptStatusParseError, ScriptSummary};
 pub use topic::{
@@ -21,8 +21,11 @@ pub use topic::{
     ContentTopicStatus, ContentTopicStatusParseError, TopicGenerationBatch,
     TopicGenerationBatchStatus, TopicGenerationBatchStatusParseError, TopicGenerationBatchSummary,
     TopicGroupReviewFreshness, TopicGroupScriptPriority, TopicGroupScriptPriorityMetrics,
-    TopicGroupScriptPriorityStatus, TopicGroupSort, TopicGroupSummary, TopicReviewItem,
-    TopicReviewPriority, TopicReviewPriorityParseError, TopicReviewResult, TopicReviewRiskFlag,
+    TopicGroupScriptPriorityStatus, TopicGroupSort, TopicGroupSummary, TopicQualityDecision,
+    TopicQualityDecisionParseError, TopicQualityEvaluation, TopicQualityEvaluationStatus,
+    TopicQualityEvaluationStatusParseError, TopicQualityFlag, TopicQualityFlagParseError,
+    TopicQualityGateItem, TopicQualityGateResult, TopicReviewItem, TopicReviewPriority,
+    TopicReviewPriorityParseError, TopicReviewResult, TopicReviewRiskFlag,
     TopicReviewRiskFlagParseError, TopicReviewSnapshot, TopicReviewSnapshotStatus,
     TopicReviewSnapshotStatusParseError,
 };

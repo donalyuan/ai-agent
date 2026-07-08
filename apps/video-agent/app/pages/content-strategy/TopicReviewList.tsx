@@ -3,6 +3,7 @@ import { useState } from "react";
 import type {
   ContentTopic,
   ContentTopicStatus,
+  TopicQualityFlag,
   TopicReviewItem,
   TopicReviewPriority,
   TopicReviewRiskFlag,
@@ -27,6 +28,23 @@ const riskFlagLabels: Record<TopicReviewRiskFlag, string> = {
   hard_to_script: "脚本化难",
   off_positioning: "偏离定位",
   compliance_risk: "合规风险",
+};
+
+const qualityFlagLabels: Record<TopicQualityFlag, string> = {
+  too_generic: "泛化",
+  duplicate: "疑似重复",
+  hard_to_script: "脚本化难",
+  off_positioning: "偏离定位",
+  compliance_risk: "合规风险",
+  score_untrusted: "评分存疑",
+};
+
+type TopicQualityGateMetadata = {
+  evaluation_id?: string;
+  candidate_key?: string;
+  quality_score: number;
+  flags: TopicQualityFlag[];
+  reason: string;
 };
 
 type TopicReviewListProps = {
@@ -250,6 +268,7 @@ function PoolTopicRows({
           </span>
           <div className="topicPoolBadges">
             <TopicStatusBadge status={topic.status} />
+            <TopicQualityBadges topic={topic} />
           </div>
           {topic.score !== null ? <strong className="topicScore">{Math.round(topic.score)}</strong> : null}
           <div className="topicPoolActions">
@@ -376,6 +395,7 @@ function ReviewedTopicCard({
         <TopicStatusBadge status={topic.status} />
         <OriginBadge activeRootBatchId={activeRootBatchId} topic={topic} />
         {topic.score !== null ? <span>{Math.round(topic.score)} 分</span> : null}
+        <TopicQualityBadges topic={topic} />
       </div>
 
       {item ? (
@@ -514,6 +534,57 @@ function OriginBadge({
     >
       {topic.batch_id === activeRootBatchId ? "原始生成" : "补充生成"}
     </span>
+  );
+}
+
+function TopicQualityBadges({ topic }: { topic: ContentTopic }) {
+  const qualityGate = getTopicQualityGate(topic);
+  if (!qualityGate) {
+    return null;
+  }
+  return (
+    <>
+      <span className="topicQualityBadge" title={qualityGate.reason}>
+        {`质量 ${Math.round(qualityGate.quality_score)}`}
+      </span>
+      {qualityGate.flags.map((flag) => (
+        <span className="topicQualityFlag" key={flag}>
+          {qualityFlagLabels[flag]}
+        </span>
+      ))}
+    </>
+  );
+}
+
+function getTopicQualityGate(topic: ContentTopic): TopicQualityGateMetadata | null {
+  const rawQualityGate = topic.metadata.quality_gate;
+  if (!rawQualityGate || typeof rawQualityGate !== "object" || Array.isArray(rawQualityGate)) {
+    return null;
+  }
+  const qualityGate = rawQualityGate as Record<string, unknown>;
+  const qualityScore = qualityGate.quality_score;
+  const reason = qualityGate.reason;
+  const flags = qualityGate.flags;
+  if (typeof qualityScore !== "number" || typeof reason !== "string") {
+    return null;
+  }
+  return {
+    evaluation_id: typeof qualityGate.evaluation_id === "string" ? qualityGate.evaluation_id : undefined,
+    candidate_key: typeof qualityGate.candidate_key === "string" ? qualityGate.candidate_key : undefined,
+    quality_score: qualityScore,
+    flags: Array.isArray(flags) ? flags.filter(isTopicQualityFlag) : [],
+    reason,
+  };
+}
+
+function isTopicQualityFlag(value: unknown): value is TopicQualityFlag {
+  return (
+    value === "too_generic" ||
+    value === "duplicate" ||
+    value === "off_positioning" ||
+    value === "hard_to_script" ||
+    value === "compliance_risk" ||
+    value === "score_untrusted"
   );
 }
 

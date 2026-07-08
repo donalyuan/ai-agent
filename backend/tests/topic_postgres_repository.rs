@@ -1,10 +1,12 @@
 use novex_api::agents::models::{
     ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatchStatus,
+    TopicQualityDecision, TopicQualityEvaluationStatus, TopicQualityFlag, TopicQualityGateItem,
+    TopicQualityGateResult,
 };
 use novex_api::repositories::{
-    CreateContentTopicInput, CreateTopicGenerationBatchInput, PostgresProjectRepository,
-    PostgresTopicRepository, ProjectRepository, TopicRepository, UpdateContentTopicInput,
-    UpdateTopicGenerationBatchInput,
+    CreateContentTopicInput, CreateTopicGenerationBatchInput, CreateTopicQualityEvaluationInput,
+    PostgresProjectRepository, PostgresTopicRepository, ProjectRepository, TopicRepository,
+    UpdateContentTopicInput, UpdateTopicGenerationBatchInput,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -101,6 +103,21 @@ async fn insert_project(pool: &PgPool) -> Uuid {
         .id
 }
 
+async fn insert_agent_run(pool: &PgPool, project_id: Uuid) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO agent_runs (project_id, agent_type, status, input)
+        VALUES ($1, 'topic', 'running', $2)
+        RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .bind(json!({"intent": "generate_topics"}))
+    .fetch_one(pool)
+    .await
+    .expect("agent run fixture should be inserted")
+}
+
 async fn insert_script_for_topic(pool: &PgPool, project_id: Uuid, topic_id: Uuid) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
         r#"
@@ -115,6 +132,109 @@ async fn insert_script_for_topic(pool: &PgPool, project_id: Uuid, topic_id: Uuid
     .fetch_one(pool)
     .await
     .expect("script fixture should be inserted for topic")
+}
+
+#[tokio::test]
+async fn postgres_topic_repository_persists_topic_quality_evaluations() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let other_project_id = insert_project(&test_pool).await;
+    let run_id = insert_agent_run(&test_pool, project_id).await;
+    let repository = PostgresTopicRepository::new(test_pool.clone());
+    let batch = repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: Some(run_id),
+            supplement_of_batch_id: None,
+            prompt: "生成 AI 工具方向选题".to_string(),
+            requested_count: 3,
+            status: TopicGenerationBatchStatus::Running,
+            error_message: None,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+
+    let first = repository
+        .create_topic_quality_evaluation(CreateTopicQualityEvaluationInput {
+            project_id,
+            batch_id: batch.id,
+            source_run_id: Some(run_id),
+            status: TopicQualityEvaluationStatus::Succeeded,
+            pass_count: 1,
+            reject_count: 2,
+            rewrite_triggered: false,
+            result: TopicQualityGateResult {
+                summary: "首轮 3 条中 1 条通过。".to_string(),
+                items: vec![TopicQualityGateItem {
+                    candidate_key: "candidate-1".to_string(),
+                    title: "AI 工具如何改变选题会".to_string(),
+                    decision: TopicQualityDecision::Pass,
+                    quality_score: 84,
+                    flags: vec![],
+                    reason: "贴合账号定位。".to_string(),
+                }],
+            },
+            error_message: None,
+        })
+        .await
+        .unwrap();
+    let latest = repository
+        .create_topic_quality_evaluation(CreateTopicQualityEvaluationInput {
+            project_id,
+            batch_id: batch.id,
+            source_run_id: Some(run_id),
+            status: TopicQualityEvaluationStatus::Succeeded,
+            pass_count: 2,
+            reject_count: 1,
+            rewrite_triggered: true,
+            result: TopicQualityGateResult {
+                summary: "重写后 3 条中 2 条通过，1 条重复淘汰。".to_string(),
+                items: vec![TopicQualityGateItem {
+                    candidate_key: "candidate-2".to_string(),
+                    title: "AI 工作流复盘选题".to_string(),
+                    decision: TopicQualityDecision::Reject,
+                    quality_score: 58,
+                    flags: vec![TopicQualityFlag::Duplicate],
+                    reason: "与同主题组已有选题重复。".to_string(),
+                }],
+            },
+            error_message: None,
+        })
+        .await
+        .unwrap();
+
+    let loaded = repository
+        .get_latest_topic_quality_evaluation(project_id, batch.id)
+        .await
+        .unwrap()
+        .expect("latest topic quality evaluation should exist");
+    assert_eq!(loaded.id, latest.id);
+    assert_ne!(loaded.id, first.id);
+    assert_eq!(loaded.project_id, project_id);
+    assert_eq!(loaded.batch_id, batch.id);
+    assert_eq!(loaded.source_run_id, Some(run_id));
+    assert_eq!(loaded.pass_count, 2);
+    assert_eq!(loaded.reject_count, 1);
+    assert!(loaded.rewrite_triggered);
+    assert_eq!(
+        loaded.result.summary,
+        "重写后 3 条中 2 条通过，1 条重复淘汰。"
+    );
+    assert_eq!(
+        loaded.result.items[0].flags,
+        vec![TopicQualityFlag::Duplicate]
+    );
+
+    let isolated = repository
+        .get_latest_topic_quality_evaluation(other_project_id, batch.id)
+        .await
+        .unwrap();
+    assert!(isolated.is_none());
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
 }
 
 fn manual_topic(project_id: Uuid) -> CreateContentTopicInput {

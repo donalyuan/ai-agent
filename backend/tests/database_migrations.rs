@@ -171,6 +171,7 @@ async fn migrations_create_video_agent_core_schema() {
         "agent_messages",
         "content_topics",
         "topic_generation_batches",
+        "topic_quality_evaluations",
         "viral_videos",
         "content_strategies",
         "video_workspace_menus",
@@ -197,6 +198,9 @@ async fn migrations_create_video_agent_core_schema() {
         "idx_content_topics_created",
         "idx_topic_generation_batches_project",
         "idx_topic_generation_batches_supplement_of",
+        "idx_topic_quality_evaluations_project_batch_created",
+        "idx_topic_quality_evaluations_source_run",
+        "idx_topic_quality_evaluations_status",
         "idx_scripts_topic",
         "idx_video_workspace_menus_parent_sort",
     ] {
@@ -243,6 +247,15 @@ async fn migrations_create_video_agent_core_schema() {
         )
         .await,
         "topic generation batch status should be constrained"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "topic_quality_evaluations",
+            "topic_quality_evaluations_status_check"
+        )
+        .await,
+        "topic quality evaluation status should be constrained"
     );
     assert!(
         column_exists(

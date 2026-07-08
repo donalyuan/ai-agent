@@ -4,12 +4,13 @@ use novex_api::agents::models::{
     ContentTopic, ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatch,
     TopicGenerationBatchStatus, TopicGenerationBatchSummary, TopicGroupReviewFreshness,
     TopicGroupScriptPriority, TopicGroupScriptPriorityMetrics, TopicGroupScriptPriorityStatus,
-    TopicGroupSort, TopicGroupSummary, TopicReviewPriority, TopicReviewRiskFlag,
-    TopicReviewSnapshot, TopicReviewSnapshotStatus,
+    TopicGroupSort, TopicGroupSummary, TopicQualityDecision, TopicQualityEvaluation,
+    TopicQualityEvaluationStatus, TopicQualityFlag, TopicQualityGateItem, TopicQualityGateResult,
+    TopicReviewPriority, TopicReviewRiskFlag, TopicReviewSnapshot, TopicReviewSnapshotStatus,
 };
 use novex_api::repositories::{
-    CreateContentTopicInput, CreateTopicGenerationBatchInput, CreateTopicReviewSnapshotInput,
-    TopicRepository, TopicRepositoryError, UpdateContentTopicInput,
+    CreateContentTopicInput, CreateTopicGenerationBatchInput, CreateTopicQualityEvaluationInput,
+    CreateTopicReviewSnapshotInput, TopicRepository, TopicRepositoryError, UpdateContentTopicInput,
     UpdateTopicGenerationBatchInput,
 };
 use serde_json::json;
@@ -21,6 +22,7 @@ use uuid::Uuid;
 struct MemoryTopicRepository {
     topics: Mutex<HashMap<Uuid, ContentTopic>>,
     batches: Mutex<HashMap<Uuid, TopicGenerationBatch>>,
+    quality_evaluations: Mutex<HashMap<Uuid, TopicQualityEvaluation>>,
     review_snapshots: Mutex<HashMap<Uuid, TopicReviewSnapshot>>,
 }
 
@@ -333,6 +335,53 @@ impl TopicRepository for MemoryTopicRepository {
         Ok(batches)
     }
 
+    async fn create_topic_quality_evaluation(
+        &self,
+        input: CreateTopicQualityEvaluationInput,
+    ) -> Result<TopicQualityEvaluation, TopicRepositoryError> {
+        let now = Utc::now();
+        let evaluation = TopicQualityEvaluation {
+            id: Uuid::new_v4(),
+            project_id: input.project_id,
+            batch_id: input.batch_id,
+            source_run_id: input.source_run_id,
+            status: input.status,
+            pass_count: input.pass_count,
+            reject_count: input.reject_count,
+            rewrite_triggered: input.rewrite_triggered,
+            result: input.result,
+            error_message: input.error_message,
+            created_at: now,
+            updated_at: now,
+        };
+        self.quality_evaluations
+            .lock()
+            .unwrap()
+            .insert(evaluation.id, evaluation.clone());
+        Ok(evaluation)
+    }
+
+    async fn get_latest_topic_quality_evaluation(
+        &self,
+        project_id: Uuid,
+        batch_id: Uuid,
+    ) -> Result<Option<TopicQualityEvaluation>, TopicRepositoryError> {
+        let latest = self
+            .quality_evaluations
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|evaluation| evaluation.project_id == project_id)
+            .filter(|evaluation| evaluation.batch_id == batch_id)
+            .max_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            })
+            .cloned();
+        Ok(latest)
+    }
+
     async fn list_topic_group_summaries(
         &self,
         project_id: Uuid,
@@ -388,13 +437,21 @@ impl TopicRepository for MemoryTopicRepository {
                     .cloned();
                 let review_freshness =
                     memory_review_freshness(&group_topics, latest_snapshot.as_ref());
-                let script_priority =
-                    memory_script_priority(&group_topics, latest_snapshot.as_ref(), &review_freshness);
+                let script_priority = memory_script_priority(
+                    &group_topics,
+                    latest_snapshot.as_ref(),
+                    &review_freshness,
+                );
+                let visible_batch_ids = group_topics
+                    .iter()
+                    .filter_map(|topic| topic.batch_id)
+                    .collect::<HashSet<_>>();
                 let supplement_batch_count = batches
                     .values()
                     .filter(|batch| batch.project_id == project_id)
                     .filter(|batch| batch.status == TopicGenerationBatchStatus::Succeeded)
                     .filter(|batch| batch.supplement_of_batch_id == Some(root_batch.id))
+                    .filter(|batch| visible_batch_ids.contains(&batch.id))
                     .count() as i64;
 
                 Some(TopicGroupSummary {
@@ -580,7 +637,9 @@ fn memory_script_priority(
         .collect::<Vec<_>>();
     recommended_topic_ids.sort_by(|left, right| {
         let left_topic = topic_by_id.get(left).expect("candidate topic should exist");
-        let right_topic = topic_by_id.get(right).expect("candidate topic should exist");
+        let right_topic = topic_by_id
+            .get(right)
+            .expect("candidate topic should exist");
         right_topic
             .score
             .unwrap_or(-1.0)
@@ -867,4 +926,95 @@ async fn topic_repository_trait_rejects_soft_deleting_scripted_topic() {
         error,
         TopicRepositoryError::TopicCannotBeDeleted(topic_id) if topic_id == topic.id
     ));
+}
+
+#[tokio::test]
+async fn topic_repository_trait_supports_topic_quality_evaluations() {
+    let repository = MemoryTopicRepository::default();
+    let project_id = Uuid::new_v4();
+    let other_project_id = Uuid::new_v4();
+    let run_id = Uuid::new_v4();
+    let batch = repository
+        .create_generation_batch(CreateTopicGenerationBatchInput {
+            project_id,
+            source_run_id: Some(run_id),
+            supplement_of_batch_id: None,
+            prompt: "本周 AI 工具方向，生成 2 个选题".to_string(),
+            requested_count: 2,
+            status: TopicGenerationBatchStatus::Running,
+            error_message: None,
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+
+    let first = repository
+        .create_topic_quality_evaluation(CreateTopicQualityEvaluationInput {
+            project_id,
+            batch_id: batch.id,
+            source_run_id: Some(run_id),
+            status: TopicQualityEvaluationStatus::Succeeded,
+            pass_count: 1,
+            reject_count: 1,
+            rewrite_triggered: false,
+            result: TopicQualityGateResult {
+                summary: "首轮 2 条中 1 条通过，1 条淘汰。".to_string(),
+                items: vec![TopicQualityGateItem {
+                    candidate_key: "candidate-1".to_string(),
+                    title: "AI 工具选题".to_string(),
+                    decision: TopicQualityDecision::Pass,
+                    quality_score: 86,
+                    flags: vec![],
+                    reason: "贴合账号定位。".to_string(),
+                }],
+            },
+            error_message: None,
+        })
+        .await
+        .unwrap();
+    let latest = repository
+        .create_topic_quality_evaluation(CreateTopicQualityEvaluationInput {
+            project_id,
+            batch_id: batch.id,
+            source_run_id: Some(run_id),
+            status: TopicQualityEvaluationStatus::Succeeded,
+            pass_count: 2,
+            reject_count: 1,
+            rewrite_triggered: true,
+            result: TopicQualityGateResult {
+                summary: "重写后 3 条中 2 条通过，1 条重复淘汰。".to_string(),
+                items: vec![TopicQualityGateItem {
+                    candidate_key: "candidate-2".to_string(),
+                    title: "AI 工作流复盘选题".to_string(),
+                    decision: TopicQualityDecision::Reject,
+                    quality_score: 61,
+                    flags: vec![TopicQualityFlag::Duplicate],
+                    reason: "与同主题组已有选题重复。".to_string(),
+                }],
+            },
+            error_message: None,
+        })
+        .await
+        .unwrap();
+
+    let loaded = repository
+        .get_latest_topic_quality_evaluation(project_id, batch.id)
+        .await
+        .unwrap()
+        .expect("latest quality evaluation should exist");
+    assert_eq!(loaded.id, latest.id);
+    assert_ne!(loaded.id, first.id);
+    assert_eq!(loaded.pass_count, 2);
+    assert_eq!(loaded.reject_count, 1);
+    assert!(loaded.rewrite_triggered);
+    assert_eq!(
+        loaded.result.items[0].flags,
+        vec![TopicQualityFlag::Duplicate]
+    );
+
+    let isolated = repository
+        .get_latest_topic_quality_evaluation(other_project_id, batch.id)
+        .await
+        .unwrap();
+    assert!(isolated.is_none());
 }

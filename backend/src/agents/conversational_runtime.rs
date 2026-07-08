@@ -5,15 +5,16 @@ use crate::agents::conversation::{
 };
 use crate::agents::models::{
     ContentTopic, ContentTopicSource, ContentTopicStatus, GenerateScriptRequest, Scene, Script,
-    ScriptStyle, TopicGenerationBatch, TopicGenerationBatchStatus, TopicReviewItem,
-    TopicReviewResult, TopicReviewSnapshot, TopicReviewSnapshotStatus,
+    ScriptStyle, TopicGenerationBatch, TopicGenerationBatchStatus, TopicQualityDecision,
+    TopicQualityEvaluationStatus, TopicQualityFlag, TopicQualityGateItem, TopicQualityGateResult,
+    TopicReviewItem, TopicReviewResult, TopicReviewSnapshot, TopicReviewSnapshotStatus,
 };
 use crate::agents::{ScriptAgentError, ScriptAgentService};
 use crate::repositories::{
     ConversationRepository, ConversationRepositoryError, CreateContentTopicInput,
-    CreateTopicGenerationBatchInput, CreateTopicReviewSnapshotInput, ProjectRepository,
-    ProjectRepositoryError, ScriptRepository, ScriptRepositoryError, TopicRepository,
-    TopicRepositoryError, UpdateTopicGenerationBatchInput,
+    CreateTopicGenerationBatchInput, CreateTopicQualityEvaluationInput,
+    CreateTopicReviewSnapshotInput, ProjectRepository, ProjectRepositoryError, ScriptRepository,
+    ScriptRepositoryError, TopicRepository, TopicRepositoryError, UpdateTopicGenerationBatchInput,
 };
 use novex_model::{LLMClient, LLMError, LLMJsonSchema, LLMPrompt};
 use serde::Deserialize;
@@ -650,8 +651,309 @@ impl AgentRuntime {
             })
             .await?;
 
-        let mut created_topic_ids = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
+        let raw_quality = self
+            .llm_client
+            .generate_script(build_topic_quality_gate_prompt(
+                &project.positioning,
+                &project.description,
+                &user_message.content,
+                &candidates,
+                supplement_context.as_ref(),
+            ))
+            .await;
+        let quality_result = match raw_quality {
+            Ok(raw) => match TopicQualityLLMOutput::parse_and_validate(&raw, &candidates) {
+                Ok(output) => output.result(),
+                Err(error) => {
+                    let message = error.to_string();
+                    self.mark_topic_batch_failed(
+                        topic_repository.as_ref(),
+                        batch.id,
+                        message.clone(),
+                    )
+                    .await;
+                    self.add_failed_topic_step(
+                        run.id,
+                        3,
+                        "evaluate_topic_quality",
+                        message.clone(),
+                    )
+                    .await;
+                    self.save_failed_topic_quality_evaluation(
+                        topic_repository.as_ref(),
+                        project_id,
+                        batch.id,
+                        run.id,
+                        message.clone(),
+                    )
+                    .await;
+                    return Err(AgentRuntimeError::InvalidLlmOutput(message));
+                }
+            },
+            Err(error) => {
+                let message = error.to_string();
+                self.mark_topic_batch_failed(topic_repository.as_ref(), batch.id, message.clone())
+                    .await;
+                self.add_failed_topic_step(run.id, 3, "evaluate_topic_quality", message.clone())
+                    .await;
+                self.save_failed_topic_quality_evaluation(
+                    topic_repository.as_ref(),
+                    project_id,
+                    batch.id,
+                    run.id,
+                    message,
+                )
+                .await;
+                return Err(AgentRuntimeError::Llm(error));
+            }
+        };
+        let initial_quality_items_by_key = quality_items_by_key(&quality_result);
+        let pass_count = candidates
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                let key = topic_candidate_key(*index);
+                initial_quality_items_by_key
+                    .get(key.as_str())
+                    .is_some_and(|item| topic_quality_item_passes(item))
+            })
+            .count() as i32;
+        let reject_count = candidates.len() as i32 - pass_count;
+        let quality_evaluation = topic_repository
+            .create_topic_quality_evaluation(CreateTopicQualityEvaluationInput {
+                project_id,
+                batch_id: batch.id,
+                source_run_id: Some(run.id),
+                status: TopicQualityEvaluationStatus::Succeeded,
+                pass_count,
+                reject_count,
+                rewrite_triggered: false,
+                result: quality_result.clone(),
+                error_message: None,
+            })
+            .await?;
+
+        self.conversation_repository
+            .add_step(CreateAgentStepInput {
+                agent_run_id: run.id,
+                step_order: 3,
+                step_type: "evaluate_topic_quality".to_string(),
+                status: "succeeded".to_string(),
+                input: json!({ "batch_id": batch.id, "candidate_count": candidates.len() }),
+                output: Some(json!({
+                    "topic_quality_evaluation_id": quality_evaluation.id,
+                    "pass_count": pass_count,
+                    "reject_count": reject_count,
+                    "rewrite_triggered": false
+                })),
+                error_message: None,
+            })
+            .await?;
+
+        let mut final_candidates = candidates;
+        let mut final_quality_result = quality_result;
+        let mut final_quality_evaluation = quality_evaluation;
+        let mut final_pass_count = pass_count;
+        let mut final_reject_count = reject_count;
+        let mut rewrite_triggered = false;
+        let mut persist_step_order = 4;
+
+        if topic_quality_pass_rate_is_low(final_pass_count, final_candidates.len()) {
+            let rewrite_user_message =
+                build_topic_rewrite_user_message(&user_message.content, &final_quality_result);
+            let raw_rewrite = self
+                .llm_client
+                .generate_script(build_topic_generation_prompt(
+                    &project.positioning,
+                    &project.description,
+                    requested_count,
+                    &rewrite_user_message,
+                    supplement_context.as_ref(),
+                ))
+                .await;
+            let rewritten_candidates = match raw_rewrite {
+                Ok(raw) => match TopicLLMOutput::parse_and_validate(&raw) {
+                    Ok(candidates) => candidates,
+                    Err(error) => {
+                        self.mark_topic_batch_failed(
+                            topic_repository.as_ref(),
+                            batch.id,
+                            error.to_string(),
+                        )
+                        .await;
+                        self.add_failed_topic_step(run.id, 4, "rewrite_topics", error.to_string())
+                            .await;
+                        return Err(AgentRuntimeError::InvalidLlmOutput(error.to_string()));
+                    }
+                },
+                Err(error) => {
+                    self.mark_topic_batch_failed(
+                        topic_repository.as_ref(),
+                        batch.id,
+                        error.to_string(),
+                    )
+                    .await;
+                    self.add_failed_topic_step(run.id, 4, "rewrite_topics", error.to_string())
+                        .await;
+                    return Err(AgentRuntimeError::Llm(error));
+                }
+            };
+            self.conversation_repository
+                .add_step(CreateAgentStepInput {
+                    agent_run_id: run.id,
+                    step_order: 4,
+                    step_type: "rewrite_topics".to_string(),
+                    status: "succeeded".to_string(),
+                    input: json!({
+                        "batch_id": batch.id,
+                        "requested_count": requested_count,
+                        "previous_pass_count": final_pass_count,
+                        "previous_reject_count": final_reject_count
+                    }),
+                    output: Some(json!({ "topic_count": rewritten_candidates.len() })),
+                    error_message: None,
+                })
+                .await?;
+
+            let raw_rewrite_quality = self
+                .llm_client
+                .generate_script(build_topic_quality_gate_prompt(
+                    &project.positioning,
+                    &project.description,
+                    &user_message.content,
+                    &rewritten_candidates,
+                    supplement_context.as_ref(),
+                ))
+                .await;
+            let rewritten_quality_result = match raw_rewrite_quality {
+                Ok(raw) => {
+                    match TopicQualityLLMOutput::parse_and_validate(&raw, &rewritten_candidates) {
+                        Ok(output) => output.result(),
+                        Err(error) => {
+                            let message = error.to_string();
+                            self.mark_topic_batch_failed(
+                                topic_repository.as_ref(),
+                                batch.id,
+                                message.clone(),
+                            )
+                            .await;
+                            self.add_failed_topic_step(
+                                run.id,
+                                5,
+                                "evaluate_topic_quality",
+                                message.clone(),
+                            )
+                            .await;
+                            self.save_failed_topic_quality_evaluation(
+                                topic_repository.as_ref(),
+                                project_id,
+                                batch.id,
+                                run.id,
+                                message.clone(),
+                            )
+                            .await;
+                            return Err(AgentRuntimeError::InvalidLlmOutput(message));
+                        }
+                    }
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    self.mark_topic_batch_failed(
+                        topic_repository.as_ref(),
+                        batch.id,
+                        message.clone(),
+                    )
+                    .await;
+                    self.add_failed_topic_step(
+                        run.id,
+                        5,
+                        "evaluate_topic_quality",
+                        message.clone(),
+                    )
+                    .await;
+                    self.save_failed_topic_quality_evaluation(
+                        topic_repository.as_ref(),
+                        project_id,
+                        batch.id,
+                        run.id,
+                        message,
+                    )
+                    .await;
+                    return Err(AgentRuntimeError::Llm(error));
+                }
+            };
+            let rewritten_items_by_key = quality_items_by_key(&rewritten_quality_result);
+            let rewritten_pass_count = rewritten_candidates
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| {
+                    let key = topic_candidate_key(*index);
+                    rewritten_items_by_key
+                        .get(key.as_str())
+                        .is_some_and(|item| topic_quality_item_passes(item))
+                })
+                .count() as i32;
+            let rewritten_reject_count = rewritten_candidates.len() as i32 - rewritten_pass_count;
+            let rewritten_quality_evaluation = topic_repository
+                .create_topic_quality_evaluation(CreateTopicQualityEvaluationInput {
+                    project_id,
+                    batch_id: batch.id,
+                    source_run_id: Some(run.id),
+                    status: TopicQualityEvaluationStatus::Succeeded,
+                    pass_count: rewritten_pass_count,
+                    reject_count: rewritten_reject_count,
+                    rewrite_triggered: true,
+                    result: rewritten_quality_result.clone(),
+                    error_message: None,
+                })
+                .await?;
+            self.conversation_repository
+                .add_step(CreateAgentStepInput {
+                    agent_run_id: run.id,
+                    step_order: 5,
+                    step_type: "evaluate_topic_quality".to_string(),
+                    status: "succeeded".to_string(),
+                    input: json!({
+                        "batch_id": batch.id,
+                        "candidate_count": rewritten_candidates.len(),
+                        "rewrite_triggered": true
+                    }),
+                    output: Some(json!({
+                        "topic_quality_evaluation_id": rewritten_quality_evaluation.id,
+                        "pass_count": rewritten_pass_count,
+                        "reject_count": rewritten_reject_count,
+                        "rewrite_triggered": true
+                    })),
+                    error_message: None,
+                })
+                .await?;
+
+            final_candidates = rewritten_candidates;
+            final_quality_result = rewritten_quality_result;
+            final_quality_evaluation = rewritten_quality_evaluation;
+            final_pass_count = rewritten_pass_count;
+            final_reject_count = rewritten_reject_count;
+            rewrite_triggered = true;
+            persist_step_order = 6;
+        }
+
+        if final_pass_count == 0 {
+            let message = "质量闸门未产生可用选题".to_string();
+            self.mark_topic_batch_failed(topic_repository.as_ref(), batch.id, message.clone())
+                .await;
+            return Err(AgentRuntimeError::Validation(message));
+        }
+
+        let final_quality_items_by_key = quality_items_by_key(&final_quality_result);
+        let mut created_topic_ids = Vec::with_capacity(final_pass_count as usize);
+        for (index, candidate) in final_candidates.into_iter().enumerate() {
+            let candidate_key = topic_candidate_key(index);
+            let Some(quality_item) = final_quality_items_by_key.get(candidate_key.as_str()) else {
+                continue;
+            };
+            if !topic_quality_item_passes(quality_item) {
+                continue;
+            }
             let topic = topic_repository
                 .create_topic(CreateContentTopicInput {
                     project_id,
@@ -665,7 +967,16 @@ impl AgentRuntime {
                     score_reason: candidate.score_reason,
                     tags: candidate.tags,
                     source: ContentTopicSource::Agent,
-                    metadata: json!({ "source_run_id": run.id }),
+                    metadata: json!({
+                        "source_run_id": run.id,
+                        "quality_gate": {
+                            "evaluation_id": final_quality_evaluation.id,
+                            "candidate_key": candidate_key,
+                            "quality_score": quality_item.quality_score,
+                            "flags": quality_item.flags,
+                            "reason": quality_item.reason
+                        }
+                    }),
                 })
                 .await?;
             created_topic_ids.push(topic.id);
@@ -681,7 +992,11 @@ impl AgentRuntime {
                         "conversation_id": conversation.id,
                         "supplement_of_batch_id": supplement_of_batch_id,
                         "created_topic_ids": created_topic_ids,
-                        "topic_count": created_topic_ids.len()
+                        "topic_count": created_topic_ids.len(),
+                        "quality_evaluation_id": final_quality_evaluation.id,
+                        "quality_pass_count": final_pass_count,
+                        "quality_reject_count": final_reject_count,
+                        "quality_rewrite_triggered": rewrite_triggered
                     }),
                 },
             )
@@ -690,7 +1005,7 @@ impl AgentRuntime {
         self.conversation_repository
             .add_step(CreateAgentStepInput {
                 agent_run_id: run.id,
-                step_order: 3,
+                step_order: persist_step_order,
                 step_type: "persist_topics".to_string(),
                 status: "succeeded".to_string(),
                 input: json!({ "batch_id": batch.id }),
@@ -698,7 +1013,8 @@ impl AgentRuntime {
                     "batch_id": batch.id,
                     "supplement_of_batch_id": supplement_of_batch_id,
                     "created_topic_ids": created_topic_ids,
-                    "topic_count": created_topic_ids.len()
+                    "topic_count": created_topic_ids.len(),
+                    "quality_evaluation_id": final_quality_evaluation.id
                 })),
                 error_message: None,
             })
@@ -709,13 +1025,19 @@ impl AgentRuntime {
             .save_message(CreateAgentMessageInput {
                 conversation_id: conversation.id,
                 role: AgentMessageRole::Assistant,
-                content: format!("已生成 {topic_count} 个候选选题。"),
+                content: format!(
+                    "已生成 {topic_count} 个候选选题，通过 {final_pass_count} 条，淘汰 {final_reject_count} 条。"
+                ),
                 metadata: json!({
                     "intent": "generate_topics",
                     "batch_id": batch.id,
                     "supplement_of_batch_id": supplement_of_batch_id,
                     "created_topic_ids": created_topic_ids,
                     "topic_count": topic_count,
+                    "quality_evaluation_id": final_quality_evaluation.id,
+                    "quality_pass_count": final_pass_count,
+                    "quality_reject_count": final_reject_count,
+                    "quality_rewrite_triggered": rewrite_triggered,
                     "status": ContentTopicStatus::Idea
                 }),
             })
@@ -780,6 +1102,29 @@ impl AgentRuntime {
                 result: TopicReviewResult::default(),
                 error_message: Some(error_message),
                 metadata: json!({}),
+            })
+            .await;
+    }
+
+    async fn save_failed_topic_quality_evaluation(
+        &self,
+        topic_repository: &dyn TopicRepository,
+        project_id: Uuid,
+        batch_id: Uuid,
+        run_id: Uuid,
+        error_message: String,
+    ) {
+        let _ = topic_repository
+            .create_topic_quality_evaluation(CreateTopicQualityEvaluationInput {
+                project_id,
+                batch_id,
+                source_run_id: Some(run_id),
+                status: TopicQualityEvaluationStatus::Failed,
+                pass_count: 0,
+                reject_count: 0,
+                rewrite_triggered: false,
+                result: TopicQualityGateResult::default(),
+                error_message: Some(error_message),
             })
             .await;
     }
@@ -1051,9 +1396,89 @@ struct TopicLLMOutput {
 }
 
 #[derive(Debug, Deserialize)]
+struct TopicQualityLLMOutput {
+    summary: String,
+    items: Vec<TopicQualityGateItem>,
+}
+
+#[derive(Debug, Deserialize)]
 struct TopicReviewLLMOutput {
     review_summary: String,
     topic_reviews: Vec<TopicReviewItem>,
+}
+
+impl TopicQualityLLMOutput {
+    fn parse_and_validate(
+        raw: &str,
+        candidates: &[TopicLLMOutput],
+    ) -> Result<Self, TopicQualityError> {
+        let json_text = extract_topic_quality_json_object(raw)?;
+        let mut output: Self =
+            serde_json::from_str(json_text).map_err(|error| TopicQualityError::InvalidJson {
+                message: error.to_string(),
+            })?;
+        output.normalize();
+        output.validate(candidates)?;
+        Ok(output)
+    }
+
+    fn normalize(&mut self) {
+        self.summary = self.summary.trim().to_string();
+        for item in &mut self.items {
+            item.candidate_key = item.candidate_key.trim().to_string();
+            item.title = item.title.trim().to_string();
+            item.reason = item.reason.trim().to_string();
+        }
+    }
+
+    fn validate(&self, candidates: &[TopicLLMOutput]) -> Result<(), TopicQualityError> {
+        if self.summary.is_empty() {
+            return Err(TopicQualityError::Validation(
+                "summary is required".to_string(),
+            ));
+        }
+        if self.items.len() != candidates.len() {
+            return Err(TopicQualityError::Validation(
+                "every candidate must have one quality item".to_string(),
+            ));
+        }
+
+        let candidate_keys = (0..candidates.len())
+            .map(topic_candidate_key)
+            .collect::<std::collections::HashSet<_>>();
+        let mut reviewed_keys = std::collections::HashSet::new();
+        for item in &self.items {
+            if !candidate_keys.contains(&item.candidate_key) {
+                return Err(TopicQualityError::Validation(
+                    "candidate_key must belong to current candidates".to_string(),
+                ));
+            }
+            if !reviewed_keys.insert(item.candidate_key.clone()) {
+                return Err(TopicQualityError::Validation(
+                    "candidate_key must not be duplicated".to_string(),
+                ));
+            }
+            if !(0..=100).contains(&item.quality_score) {
+                return Err(TopicQualityError::Validation(
+                    "quality_score must be between 0 and 100".to_string(),
+                ));
+            }
+            if item.reason.trim().is_empty() {
+                return Err(TopicQualityError::Validation(
+                    "reason is required".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn result(self) -> TopicQualityGateResult {
+        TopicQualityGateResult {
+            summary: self.summary,
+            items: self.items,
+        }
+    }
 }
 
 impl TopicReviewLLMOutput {
@@ -1153,6 +1578,103 @@ impl fmt::Display for TopicReviewError {
 }
 
 impl std::error::Error for TopicReviewError {}
+
+#[derive(Debug)]
+enum TopicQualityError {
+    InvalidJson { message: String },
+    Validation(String),
+}
+
+impl fmt::Display for TopicQualityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidJson { message } => {
+                write!(formatter, "invalid topic quality JSON: {message}")
+            }
+            Self::Validation(message) => write!(formatter, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for TopicQualityError {}
+
+fn topic_candidate_key(index: usize) -> String {
+    format!("candidate-{}", index + 1)
+}
+
+fn quality_items_by_key(
+    result: &TopicQualityGateResult,
+) -> std::collections::HashMap<&str, &TopicQualityGateItem> {
+    result
+        .items
+        .iter()
+        .map(|item| (item.candidate_key.as_str(), item))
+        .collect()
+}
+
+fn topic_quality_item_passes(item: &TopicQualityGateItem) -> bool {
+    item.decision == TopicQualityDecision::Pass
+        && item.quality_score >= 70
+        && !item.flags.iter().any(|flag| {
+            matches!(
+                flag,
+                TopicQualityFlag::OffPositioning
+                    | TopicQualityFlag::ComplianceRisk
+                    | TopicQualityFlag::Duplicate
+            )
+        })
+}
+
+fn topic_quality_pass_rate_is_low(pass_count: i32, candidate_count: usize) -> bool {
+    candidate_count > 0 && pass_count * 100 < candidate_count as i32 * 60
+}
+
+fn build_topic_rewrite_user_message(
+    original_user_message: &str,
+    quality_result: &TopicQualityGateResult,
+) -> String {
+    format!(
+        r#"{original_user_message}
+
+基于质量闸门淘汰原因重写候选选题。请保留原始用户要求和账号定位，但避开以下问题：
+{quality_context}
+
+重写要求：
+1. 不要复用被淘汰候选的泛化标题。
+2. 强化具体场景、目标受众、脚本化路径和差异化角度。
+3. 仍然只输出 topic_generation_batch JSON Schema。"#,
+        original_user_message = original_user_message,
+        quality_context = format_topic_quality_rewrite_context(quality_result)
+    )
+}
+
+fn format_topic_quality_rewrite_context(quality_result: &TopicQualityGateResult) -> String {
+    if quality_result.items.is_empty() {
+        return "- 无".to_string();
+    }
+
+    quality_result
+        .items
+        .iter()
+        .filter(|item| !topic_quality_item_passes(item))
+        .map(|item| {
+            let flags = if item.flags.is_empty() {
+                "无".to_string()
+            } else {
+                item.flags
+                    .iter()
+                    .map(TopicQualityFlag::as_str)
+                    .collect::<Vec<_>>()
+                    .join("、")
+            };
+            format!(
+                "- {}：{}；质量分={}；flags={}；原因={}",
+                item.candidate_key, item.title, item.quality_score, flags, item.reason
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 impl TopicLLMOutput {
     fn parse_and_validate(raw: &str) -> Result<Vec<Self>, TopicOutputError> {
@@ -1339,6 +1861,74 @@ JSON Schema：
     }
 }
 
+fn build_topic_quality_gate_prompt(
+    project_positioning: &str,
+    project_description: &str,
+    user_message: &str,
+    candidates: &[TopicLLMOutput],
+    supplement_context: Option<&TopicSupplementPromptContext>,
+) -> LLMPrompt {
+    let existing_topic_context = supplement_context
+        .map(format_quality_existing_topic_context)
+        .unwrap_or_else(|| "- 无".to_string());
+    LLMPrompt {
+        system: "你是短视频内容策略质量闸门。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。"
+            .to_string(),
+        user: format!(
+            r#"请评估候选选题是否允许进入选题池。质量闸门只做入库前筛选，不允许自动确认、归档、删除选题或生成脚本。
+
+项目定位：{project_positioning}
+项目描述：{project_description}
+用户生成要求：{user_message}
+
+同主题组已有选题：
+{existing_topic_context}
+
+待评估候选：
+{candidate_context}
+
+评估维度：
+1. 账号匹配度：是否贴合项目定位和描述。
+2. 具体度：是否避免百科式、泛化标题。
+3. 差异化：是否避免同批或同主题组已有选题重复。
+4. 脚本化可行性：是否适合短视频结构化表达。
+5. 风险与禁区：是否存在合规风险或明显偏题。
+6. 评分可信度：候选原始评分与理由是否一致。
+
+输出要求：
+1. 必须只输出一个 JSON 对象。
+2. items 必须逐一覆盖待评估候选，candidate_key 必须原样使用。
+3. decision 只能是 pass 或 reject。
+4. quality_score 必须是 0 到 100 的整数。
+5. flags 只能使用 too_generic、duplicate、off_positioning、hard_to_script、compliance_risk、score_untrusted。
+6. 出现 off_positioning、compliance_risk 或无法差异化的 duplicate 时必须 reject。
+7. quality_score 低于 70 时必须 reject。
+
+JSON Schema：
+{{
+  "summary": "本批次 2 条中 1 条通过，1 条因泛化被淘汰。",
+  "items": [
+    {{
+      "candidate_key": "candidate-1",
+      "title": "候选标题",
+      "decision": "pass",
+      "quality_score": 86,
+      "flags": [],
+      "reason": "贴合账号定位，脚本化路径清晰。"
+    }}
+  ]
+}}"#,
+            project_positioning = project_positioning,
+            project_description = project_description,
+            user_message = user_message,
+            existing_topic_context = existing_topic_context,
+            candidate_context = format_topic_quality_candidate_context(candidates)
+        ),
+        max_output_tokens: Some(2_000),
+        output_schema: Some(topic_quality_gate_output_schema()),
+    }
+}
+
 fn build_topic_group_review_prompt(
     project_positioning: &str,
     project_description: &str,
@@ -1484,6 +2074,46 @@ fn format_existing_topic_context(context: &TopicSupplementPromptContext) -> Stri
         .join("\n")
 }
 
+fn format_topic_quality_candidate_context(candidates: &[TopicLLMOutput]) -> String {
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            let tags = if candidate.tags.is_empty() {
+                "无".to_string()
+            } else {
+                candidate.tags.join("、")
+            };
+            let hook_points = if candidate.hook_points.is_empty() {
+                "无".to_string()
+            } else {
+                candidate.hook_points.join("、")
+            };
+            format!(
+                "{}. candidate_key={}；标题：{}；角度：{}；目标受众：{}；看点：{}；内容类型：{}；原始评分：{}；评分理由：{}；标签：{}",
+                index + 1,
+                topic_candidate_key(index),
+                truncate_for_prompt(&candidate.title, 120),
+                truncate_for_prompt(&candidate.angle, 180),
+                truncate_for_prompt(&candidate.target_audience, 120),
+                truncate_for_prompt(&hook_points, 180),
+                truncate_for_prompt(&candidate.content_type, 80),
+                candidate
+                    .score
+                    .map(|score| score.to_string())
+                    .unwrap_or_else(|| "无".to_string()),
+                truncate_for_prompt(&candidate.score_reason, 180),
+                truncate_for_prompt(&tags, 160)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_quality_existing_topic_context(context: &TopicSupplementPromptContext) -> String {
+    format_existing_topic_context(context)
+}
+
 fn format_conversation_history(messages: &[AgentMessage]) -> String {
     if messages.is_empty() {
         return "- 无".to_string();
@@ -1563,6 +2193,65 @@ fn topic_generation_output_schema() -> LLMJsonSchema {
                                 "minItems": 1,
                                 "items": { "type": "string", "minLength": 1 }
                             }
+                        }
+                    }
+                }
+            }
+        }),
+    }
+}
+
+fn topic_quality_gate_output_schema() -> LLMJsonSchema {
+    LLMJsonSchema {
+        name: "topic_quality_gate".to_string(),
+        strict: true,
+        schema: json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["summary", "items"],
+            "properties": {
+                "summary": { "type": "string", "minLength": 1 },
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                            "candidate_key",
+                            "title",
+                            "decision",
+                            "quality_score",
+                            "flags",
+                            "reason"
+                        ],
+                        "properties": {
+                            "candidate_key": { "type": "string", "minLength": 1 },
+                            "title": { "type": "string", "minLength": 1 },
+                            "decision": {
+                                "type": "string",
+                                "enum": ["pass", "reject"]
+                            },
+                            "quality_score": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 100
+                            },
+                            "flags": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "enum": [
+                                        "too_generic",
+                                        "duplicate",
+                                        "off_positioning",
+                                        "hard_to_script",
+                                        "compliance_risk",
+                                        "score_untrusted"
+                                    ]
+                                }
+                            },
+                            "reason": { "type": "string", "minLength": 1 }
                         }
                     }
                 }
@@ -1658,6 +2347,21 @@ fn extract_topic_json_object(raw: &str) -> Result<&str, TopicOutputError> {
         .ok_or_else(|| TopicOutputError::Validation("missing JSON object end".to_string()))?;
     if start > end {
         return Err(TopicOutputError::Validation(
+            "invalid JSON object bounds".to_string(),
+        ));
+    }
+    Ok(&raw[start..=end])
+}
+
+fn extract_topic_quality_json_object(raw: &str) -> Result<&str, TopicQualityError> {
+    let start = raw
+        .find('{')
+        .ok_or_else(|| TopicQualityError::Validation("missing JSON object start".to_string()))?;
+    let end = raw
+        .rfind('}')
+        .ok_or_else(|| TopicQualityError::Validation("missing JSON object end".to_string()))?;
+    if start > end {
+        return Err(TopicQualityError::Validation(
             "invalid JSON object bounds".to_string(),
         ));
     }

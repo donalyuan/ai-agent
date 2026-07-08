@@ -165,6 +165,56 @@ async fn insert_failed_topic_batch(
     .expect("failed topic generation batch fixture should be inserted")
 }
 
+async fn insert_topic_quality_evaluation(
+    pool: &PgPool,
+    project_id: Uuid,
+    batch_id: Uuid,
+    pass_count: i32,
+    reject_count: i32,
+    rewrite_triggered: bool,
+    summary: &str,
+) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO topic_quality_evaluations (
+            project_id, batch_id, status, pass_count, reject_count,
+            rewrite_triggered, result
+        )
+        VALUES ($1, $2, 'succeeded', $3, $4, $5, $6)
+        RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .bind(batch_id)
+    .bind(pass_count)
+    .bind(reject_count)
+    .bind(rewrite_triggered)
+    .bind(json!({
+        "summary": summary,
+        "items": [
+            {
+                "candidate_key": "candidate-1",
+                "title": "AI 工具如何改变选题会",
+                "decision": "pass",
+                "quality_score": 88,
+                "flags": [],
+                "reason": "贴合账号定位。"
+            },
+            {
+                "candidate_key": "candidate-2",
+                "title": "人工智能是什么",
+                "decision": "reject",
+                "quality_score": 52,
+                "flags": ["too_generic", "score_untrusted"],
+                "reason": "标题过于泛化。"
+            }
+        ]
+    }))
+    .fetch_one(pool)
+    .await
+    .expect("topic quality evaluation fixture should be inserted")
+}
+
 async fn insert_agent_topic(
     pool: &PgPool,
     project_id: Uuid,
@@ -333,6 +383,83 @@ async fn topic_routes_list_generation_batches_with_topic_counts() {
         supplement["supplement_of_batch_id"],
         previous_batch.to_string()
     );
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn topic_routes_get_latest_topic_quality_evaluation() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool, "科技博主").await;
+    let other_project_id = insert_project(&test_pool, "生活博主").await;
+    let batch_id = insert_topic_batch(&test_pool, project_id, "最新一批 AI 工具选题", 3).await;
+    let old_evaluation_id = insert_topic_quality_evaluation(
+        &test_pool,
+        project_id,
+        batch_id,
+        1,
+        2,
+        false,
+        "首轮质量较低。",
+    )
+    .await;
+    let latest_evaluation_id = insert_topic_quality_evaluation(
+        &test_pool,
+        project_id,
+        batch_id,
+        2,
+        1,
+        true,
+        "重写后 3 条中 2 条通过，1 条淘汰。",
+    )
+    .await;
+    assert_ne!(old_evaluation_id, latest_evaluation_id);
+    let app = test_app(test_url, test_pool.clone());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/topic-generation-batches/{batch_id}/quality-evaluation?project_id={project_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["evaluation_id"], latest_evaluation_id.to_string());
+    assert_eq!(body["project_id"], project_id.to_string());
+    assert_eq!(body["batch_id"], batch_id.to_string());
+    assert_eq!(body["status"], "succeeded");
+    assert_eq!(body["pass_count"], 2);
+    assert_eq!(body["reject_count"], 1);
+    assert_eq!(body["rewrite_triggered"], true);
+    assert_eq!(
+        body["result"]["summary"],
+        "重写后 3 条中 2 条通过，1 条淘汰。"
+    );
+    assert_eq!(
+        body["result"]["items"][1]["flags"],
+        json!(["too_generic", "score_untrusted"])
+    );
+
+    let wrong_project_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/topic-generation-batches/{batch_id}/quality-evaluation?project_id={other_project_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_project_response.status(), StatusCode::NOT_FOUND);
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

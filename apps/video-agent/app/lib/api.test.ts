@@ -7,6 +7,7 @@ import {
   deleteContentTopic,
   generateScript,
   getApiBaseUrl,
+  getLatestTopicQualityEvaluation,
   getLatestTopicGroupReview,
   getScript,
   getScriptAgentTurnMetadata,
@@ -126,6 +127,41 @@ const topicReviewSnapshot = {
   metadata: {},
   created_at: "2026-07-02T00:30:00Z",
   updated_at: "2026-07-02T00:30:10Z",
+};
+
+const topicQualityEvaluation = {
+  evaluation_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  project_id: project.project_id,
+  batch_id: topicGenerationBatch.batch_id,
+  source_run_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  status: "succeeded",
+  pass_count: 2,
+  reject_count: 1,
+  rewrite_triggered: true,
+  result: {
+    summary: "重写后 3 条中 2 条通过，1 条淘汰。",
+    items: [
+      {
+        candidate_key: "candidate-1",
+        title: "AI 工具如何改变选题会",
+        decision: "pass",
+        quality_score: 88,
+        flags: [],
+        reason: "贴合账号定位。",
+      },
+      {
+        candidate_key: "candidate-2",
+        title: "人工智能是什么",
+        decision: "reject",
+        quality_score: 52,
+        flags: ["too_generic", "score_untrusted"],
+        reason: "标题过于泛化。",
+      },
+    ],
+  },
+  error_message: null,
+  created_at: "2026-07-02T00:22:12Z",
+  updated_at: "2026-07-02T00:22:18Z",
 };
 
 const topicGroupSummary = {
@@ -500,6 +536,26 @@ describe("video-agent api client", () => {
     );
     expect(result?.root_batch_id).toBe(topicGenerationBatch.batch_id);
     expect(result?.review_summary).toContain("优先推进");
+  });
+
+  it("读取选题批次最新质量评估报告", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(topicQualityEvaluation));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await getLatestTopicQualityEvaluation(
+      client,
+      topicGenerationBatch.batch_id,
+      project.project_id,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://api.test/api/topic-generation-batches/${topicGenerationBatch.batch_id}/quality-evaluation?project_id=${project.project_id}`,
+      { headers: { accept: "application/json" } },
+    );
+    expect(result?.pass_count).toBe(2);
+    expect(result?.reject_count).toBe(1);
+    expect(result?.rewrite_triggered).toBe(true);
+    expect(result?.result.items[1].flags).toEqual(["too_generic", "score_untrusted"]);
   });
 
   it("创建、编辑并更新选题状态", async () => {

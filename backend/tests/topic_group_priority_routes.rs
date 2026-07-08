@@ -250,10 +250,16 @@ async fn topic_group_priority_route_returns_ranked_groups_for_project() {
     let groups = body["topic_groups"].as_array().unwrap();
     assert_eq!(groups.len(), 2);
     assert_eq!(groups[0]["root_batch_id"], ready_root.to_string());
-    assert_eq!(groups[0]["latest_review_snapshot_id"], ready_snapshot_id.to_string());
+    assert_eq!(
+        groups[0]["latest_review_snapshot_id"],
+        ready_snapshot_id.to_string()
+    );
     assert_eq!(groups[0]["review_freshness"], "fresh");
     assert_eq!(groups[0]["script_priority"]["status"], "ready_for_script");
-    assert_eq!(groups[0]["script_priority"]["recommended_topic_ids"][0], ready_topic.to_string());
+    assert_eq!(
+        groups[0]["script_priority"]["recommended_topic_ids"][0],
+        ready_topic.to_string()
+    );
     assert_eq!(groups[1]["root_batch_id"], missing_root.to_string());
     assert_eq!(groups[1]["script_priority"]["status"], "needs_review");
     assert!(groups[1]["script_priority"]["score"].is_null());
@@ -292,8 +298,14 @@ async fn topic_group_priority_route_supports_created_at_sort_and_project_isolati
     .await;
 
     let other_root = insert_topic_batch(&test_pool, other_project_id, "其他项目主题", 200).await;
-    let other_topic =
-        insert_agent_topic(&test_pool, other_project_id, other_root, "其他项目候选", 99.0).await;
+    let other_topic = insert_agent_topic(
+        &test_pool,
+        other_project_id,
+        other_root,
+        "其他项目候选",
+        99.0,
+    )
+    .await;
     insert_review_snapshot(
         &test_pool,
         other_project_id,

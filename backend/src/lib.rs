@@ -32,10 +32,10 @@ use crate::agents::models::{
     PrepareScriptFromTopicRequest, PrepareScriptFromTopicResponse, ProjectListResponse,
     ProjectResponse, ScriptListFilter, ScriptListResponse, ScriptResponse, SendAgentMessageRequest,
     TopicGenerationBatchListResponse, TopicGenerationBatchSummaryResponse, TopicGroupListQuery,
-    TopicGroupListResponse, TopicGroupSummaryResponse, TopicReviewSnapshotResponse,
-    TopicScriptRequestPreview, UpdateContentTopicRequest, UpdateContentTopicStatusRequest,
-    UpdateScriptStatusRequest, UpdateScriptStatusResponse, WorkspaceMenuListResponse,
-    WorkspaceMenuNodeResponse,
+    TopicGroupListResponse, TopicGroupSummaryResponse, TopicQualityEvaluationResponse,
+    TopicReviewSnapshotResponse, TopicScriptRequestPreview, UpdateContentTopicRequest,
+    UpdateContentTopicStatusRequest, UpdateScriptStatusRequest, UpdateScriptStatusResponse,
+    WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
 };
 
 pub mod agents;
@@ -319,6 +319,10 @@ pub fn build_app_with_state(state: AppState) -> Router {
             get(get_latest_topic_group_review),
         )
         .route(
+            "/api/topic-generation-batches/:batch_id/quality-evaluation",
+            get(get_latest_topic_quality_evaluation),
+        )
+        .route(
             "/api/topics/:topic_id",
             put(update_topic).delete(delete_topic),
         )
@@ -596,6 +600,28 @@ async fn get_latest_topic_group_review(
         .await?;
 
     Ok(Json(snapshot.map(TopicReviewSnapshotResponse::from)))
+}
+
+async fn get_latest_topic_quality_evaluation(
+    State(state): State<AppState>,
+    Path(batch_id): Path<Uuid>,
+    Query(query): Query<TopicGroupProjectQuery>,
+) -> Result<Json<Option<TopicQualityEvaluationResponse>>, ScriptApiError> {
+    let repository = state.topic_repository()?;
+    let batch = repository.get_generation_batch(batch_id).await?;
+    if query
+        .project_id
+        .is_some_and(|project_id| project_id != batch.project_id)
+    {
+        return Err(ScriptApiError::TopicRepository(
+            TopicRepositoryError::BatchNotFound(batch_id),
+        ));
+    }
+    let evaluation = repository
+        .get_latest_topic_quality_evaluation(batch.project_id, batch_id)
+        .await?;
+
+    Ok(Json(evaluation.map(TopicQualityEvaluationResponse::from)))
 }
 
 async fn resolve_topic_group_project_id(

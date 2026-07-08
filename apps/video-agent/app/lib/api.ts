@@ -126,7 +126,9 @@ export type ContentTopicStats = {
 
 export type TopicGenerationBatchStatus = "running" | "succeeded" | "failed";
 export type TopicReviewSnapshotStatus = "succeeded" | "failed";
+export type TopicQualityEvaluationStatus = "succeeded" | "failed";
 export type TopicReviewPriority = "priority" | "backup" | "reject";
+export type TopicQualityDecision = "pass" | "reject";
 export type TopicGroupSort = "script_priority" | "created_at";
 export type TopicGroupReviewFreshness = "fresh" | "missing" | "stale";
 export type TopicGroupScriptPriorityStatus =
@@ -140,6 +142,13 @@ export type TopicReviewRiskFlag =
   | "hard_to_script"
   | "off_positioning"
   | "compliance_risk";
+export type TopicQualityFlag =
+  | "too_generic"
+  | "duplicate"
+  | "off_positioning"
+  | "hard_to_script"
+  | "compliance_risk"
+  | "score_untrusted";
 
 export type TopicGenerationBatchSummary = {
   batch_id: string;
@@ -221,6 +230,35 @@ export type TopicReviewSnapshot = {
   result: TopicReviewResult;
   error_message: string | null;
   metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TopicQualityGateItem = {
+  candidate_key: string;
+  title: string;
+  decision: TopicQualityDecision;
+  quality_score: number;
+  flags: TopicQualityFlag[];
+  reason: string;
+};
+
+export type TopicQualityGateResult = {
+  summary: string;
+  items: TopicQualityGateItem[];
+};
+
+export type TopicQualityEvaluation = {
+  evaluation_id: string;
+  project_id: string;
+  batch_id: string;
+  source_run_id: string | null;
+  status: TopicQualityEvaluationStatus;
+  pass_count: number;
+  reject_count: number;
+  rewrite_triggered: boolean;
+  result: TopicQualityGateResult;
+  error_message: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -486,6 +524,22 @@ export function getLatestTopicGroupReview(client: ApiClient, rootBatchId: string
   return request<TopicReviewSnapshot | null>(
     client,
     `/api/topic-groups/${rootBatchId}/reviews/latest`,
+  );
+}
+
+export function getLatestTopicQualityEvaluation(
+  client: ApiClient,
+  batchId: string,
+  projectId?: string,
+) {
+  const searchParams = new URLSearchParams();
+  if (projectId) {
+    searchParams.set("project_id", projectId);
+  }
+  const query = searchParams.toString();
+  return request<TopicQualityEvaluation | null>(
+    client,
+    `/api/topic-generation-batches/${batchId}/quality-evaluation${query ? `?${query}` : ""}`,
   );
 }
 

@@ -285,12 +285,23 @@ function TopicAgentPanel({
       </form>
       <div className="agentMessages compactMessages" aria-label="选题 Agent 消息">
         {messages.length ? (
-          messages.map((message) => (
-            <article className={`agentMessage ${message.role}`} key={message.message_id}>
-              <span>{message.role === "user" ? "你" : "Agent"}</span>
-              <p>{message.content}</p>
-            </article>
-          ))
+          messages.map((message) => {
+            const qualitySummary = getTopicAgentQualitySummary(message);
+            return (
+              <article className={`agentMessage ${message.role}`} key={message.message_id}>
+                <span>{message.role === "user" ? "你" : "Agent"}</span>
+                <p>{message.content}</p>
+                {qualitySummary ? (
+                  <div className="agentQualitySummary" aria-label="质量闸门摘要">
+                    <strong>质量闸门</strong>
+                    <span>{`通过 ${qualitySummary.passCount}`}</span>
+                    <span>{`淘汰 ${qualitySummary.rejectCount}`}</span>
+                    <span>{qualitySummary.rewriteTriggered ? "已重写" : "未重写"}</span>
+                  </div>
+                ) : null}
+              </article>
+            );
+          })
         ) : (
           <div className="agentEmptyState">
             <strong>等待生成要求</strong>
@@ -300,6 +311,22 @@ function TopicAgentPanel({
       </div>
     </section>
   );
+}
+
+function getTopicAgentQualitySummary(message: AgentMessage) {
+  if (message.role !== "assistant") {
+    return null;
+  }
+  const passCount = message.metadata.quality_pass_count;
+  const rejectCount = message.metadata.quality_reject_count;
+  if (typeof passCount !== "number" || typeof rejectCount !== "number") {
+    return null;
+  }
+  return {
+    passCount,
+    rejectCount,
+    rewriteTriggered: message.metadata.quality_rewrite_triggered === true,
+  };
 }
 
 function TopicForm({

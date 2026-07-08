@@ -14,6 +14,7 @@ import type {
   ProjectListResponse,
   ScriptDetail,
   ScriptListResponse,
+  TopicQualityEvaluation,
   TopicGenerationBatchListResponse,
   TopicGroupListResponse,
   TopicReviewSnapshot,
@@ -36,6 +37,7 @@ vi.mock("./lib/api", async (importOriginal) => {
     listTopicGroups: vi.fn(),
     createTopicGroupReview: vi.fn(),
     getLatestTopicGroupReview: vi.fn(),
+    getLatestTopicQualityEvaluation: vi.fn(),
     createContentTopic: vi.fn(),
     deleteContentTopic: vi.fn(),
     updateContentTopic: vi.fn(),
@@ -349,6 +351,41 @@ const topicReviewSnapshot: TopicReviewSnapshot = {
   metadata: {},
   created_at: "2026-07-07T09:00:00Z",
   updated_at: "2026-07-07T09:00:15Z",
+};
+
+const topicQualityEvaluation: TopicQualityEvaluation = {
+  evaluation_id: "15151515-1515-4515-8515-151515151515",
+  project_id: project.project_id,
+  batch_id: latestTopicBatch.batch_id,
+  source_run_id: "16161616-1616-4616-8616-161616161616",
+  status: "succeeded",
+  pass_count: 2,
+  reject_count: 1,
+  rewrite_triggered: true,
+  result: {
+    summary: "重写后 3 条中 2 条通过，1 条淘汰。",
+    items: [
+      {
+        candidate_key: "candidate-1",
+        title: approvedTopic.title,
+        decision: "pass",
+        quality_score: 88,
+        flags: ["hard_to_script"],
+        reason: "贴合账号定位，但脚本化案例需要补强。",
+      },
+      {
+        candidate_key: "candidate-2",
+        title: "人工智能是什么",
+        decision: "reject",
+        quality_score: 52,
+        flags: ["too_generic", "score_untrusted"],
+        reason: "标题过于泛化，原始评分可信度不足。",
+      },
+    ],
+  },
+  error_message: null,
+  created_at: "2026-07-06T10:00:04Z",
+  updated_at: "2026-07-06T10:00:09Z",
 };
 
 const readyTopicGroup = {
@@ -671,6 +708,10 @@ function mockTopicGroups(response: TopicGroupListResponse = { topic_groups: [] }
   vi.mocked(api.listTopicGroups).mockResolvedValue(response);
 }
 
+function mockTopicQualityEvaluation(response: TopicQualityEvaluation | null = null) {
+  vi.mocked(api.getLatestTopicQualityEvaluation).mockResolvedValue(response);
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -717,6 +758,7 @@ describe("video-agent 视频工作台页面", () => {
     });
     vi.mocked(api.createTopicGroupReview).mockResolvedValue(topicReviewSnapshot);
     vi.mocked(api.getLatestTopicGroupReview).mockResolvedValue(null);
+    mockTopicQualityEvaluation();
   });
 
   it("展示 VEDIO-AGENT 品牌、中文标题和业务流程菜单", async () => {
@@ -1933,6 +1975,123 @@ describe("video-agent 视频工作台页面", () => {
       });
     });
     expect(screen.getByRole("button", { name: "查看全部选题" })).toBeInTheDocument();
+  });
+
+  it("选题 Agent 消息展示质量闸门通过数、淘汰数和重写状态", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    vi.mocked(api.createAgentConversation).mockResolvedValue(topicConversation);
+    vi.mocked(api.sendAgentMessage).mockResolvedValue({
+      user_message: topicUserMessage,
+      assistant_message: {
+        ...topicAssistantMessage,
+        metadata: {
+          ...topicAssistantMessage.metadata,
+          quality_pass_count: 2,
+          quality_reject_count: 1,
+          quality_rewrite_triggered: true,
+          quality_evaluation_id: topicQualityEvaluation.evaluation_id,
+        },
+      },
+      run: topicAgentRun,
+    });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    const agentPanel = await screen.findByRole("region", { name: "选题 Agent" });
+    fireEvent.change(within(agentPanel).getByLabelText("生成要求"), {
+      target: { value: topicUserMessage.content },
+    });
+    fireEvent.click(within(agentPanel).getByRole("button", { name: "生成选题" }));
+
+    expect(await within(agentPanel).findByText("质量闸门")).toBeInTheDocument();
+    expect(within(agentPanel).getByText("通过 2")).toBeInTheDocument();
+    expect(within(agentPanel).getByText("淘汰 1")).toBeInTheDocument();
+    expect(within(agentPanel).getByText("已重写")).toBeInTheDocument();
+  });
+
+  it("当前选题池卡片展示质量分和风险标签", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    const qualityTopic: ContentTopic = {
+      ...approvedTopic,
+      metadata: {
+        quality_gate: {
+          evaluation_id: topicQualityEvaluation.evaluation_id,
+          candidate_key: "candidate-1",
+          quality_score: 88,
+          flags: ["hard_to_script"],
+          reason: "贴合账号定位，但脚本化案例需要补强。",
+        },
+      },
+    };
+    mockTopics({
+      topics: [qualityTopic],
+      stats: { total: 1, idea: 0, approved: 1, scripted: 0, archived: 0 },
+    });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    const topicPool = await screen.findByRole("region", { name: "选题池" });
+    const qualityCard = await within(topicPool).findByRole("article", { name: `选题：${qualityTopic.title}` });
+
+    expect(within(qualityCard).getByText("质量 88")).toBeInTheDocument();
+    expect(within(qualityCard).getByText("脚本化难")).toBeInTheDocument();
+  });
+
+  it("历史生成批次卡展示质量摘要", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockTopicBatches({ batches: [latestTopicBatch] });
+    mockTopicQualityEvaluation(topicQualityEvaluation);
+    mockTopics({
+      topics: [{ ...approvedTopic, batch_id: latestTopicBatch.batch_id }],
+      stats: { total: 1, idea: 0, approved: 1, scripted: 0, archived: 0 },
+    });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "历史生成" }));
+    const history = await screen.findByRole("region", { name: "历史生成列表页" });
+    const batchColumn = within(history).getByRole("complementary", { name: "历史生成批次" });
+    const batchCard = await within(batchColumn).findByRole("button", { name: /最新一批 AI 工具选题/ });
+
+    await waitFor(() => {
+      expect(api.getLatestTopicQualityEvaluation).toHaveBeenCalledWith(
+        expect.anything(),
+        latestTopicBatch.batch_id,
+        project.project_id,
+      );
+      expect(batchCard).toHaveTextContent("质量：通过 2 · 淘汰 1 · 已重写");
+    });
+  });
+
+  it("历史生成页右侧展示质量报告，淘汰候选只读无确认、脚本、归档或移除操作", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockTopicBatches({ batches: [latestTopicBatch] });
+    mockTopicQualityEvaluation(topicQualityEvaluation);
+    mockTopics({
+      topics: [{ ...approvedTopic, batch_id: latestTopicBatch.batch_id }],
+      stats: { total: 1, idea: 0, approved: 1, scripted: 0, archived: 0 },
+    });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "历史生成" }));
+    const qualityReport = await screen.findByRole("region", { name: "质量报告" });
+    const rejectedCandidate = await within(qualityReport).findByRole("article", {
+      name: "淘汰候选：人工智能是什么",
+    });
+
+    expect(within(qualityReport).getByText("重写后 3 条中 2 条通过，1 条淘汰。")).toBeInTheDocument();
+    expect(within(rejectedCandidate).getByText("淘汰")).toBeInTheDocument();
+    expect(within(rejectedCandidate).getByText("52 分")).toBeInTheDocument();
+    expect(within(rejectedCandidate).getByText("泛化")).toBeInTheDocument();
+    expect(within(rejectedCandidate).getByText("评分存疑")).toBeInTheDocument();
+    for (const actionLabel of ["确认选题", "生成脚本", "归档选题", "移除"]) {
+      expect(within(rejectedCandidate).queryByRole("button", { name: actionLabel })).not.toBeInTheDocument();
+    }
   });
 
   it("内容策略页本地新增选题后仍按评分高低展示选题池", async () => {

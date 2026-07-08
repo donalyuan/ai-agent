@@ -808,6 +808,33 @@ button:focus-visible {
   justify-self: start;
 }
 
+.agentQualitySummary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.agentQualitySummary strong,
+.agentQualitySummary span {
+  min-height: 24px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.agentQualitySummary strong {
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
 .agentEmptyState {
   min-height: 120px;
   display: grid;
@@ -1123,7 +1150,8 @@ button:focus-visible {
 
 .topicHistorySupplementList,
 .topicHistorySupplementForm,
-.topicHistoryReviewPanel {
+.topicHistoryReviewPanel,
+.topicQualityReportPanel {
   min-width: 0;
   border: 1px solid var(--color-border);
   border-radius: 8px;
@@ -1160,7 +1188,8 @@ button:focus-visible {
 
 .topicHistorySupplementList h3,
 .topicHistorySupplementForm h3,
-.topicHistoryReviewPanel h3 {
+.topicHistoryReviewPanel h3,
+.topicQualityReportPanel h3 {
   margin: 0;
   color: var(--color-text);
   font-size: 14px;
@@ -1230,6 +1259,99 @@ button:focus-visible {
   color: var(--color-text-muted);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.topicQualitySummaryText {
+  color: var(--color-primary);
+  font-weight: 800;
+}
+
+.topicQualityReportStats,
+.topicQualityRejectedMeta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.topicQualityReportStats span,
+.topicQualityBadge,
+.topicQualityRejectedMeta > span:not(.topicQualityFlag) {
+  min-height: 24px;
+  border: 1px solid var(--color-primary-border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.topicQualityFlag {
+  min-height: 24px;
+  border: 1px solid var(--color-danger-border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.topicQualityReportSummary,
+.topicQualityReportEmpty,
+.topicQualityRejectedItem p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.topicQualityRejectedList {
+  display: grid;
+  gap: 8px;
+}
+
+.topicQualityRejectedItem {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: var(--color-surface);
+}
+
+.topicQualityRejectedItem > div:first-child {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.topicQualityRejectedItem strong {
+  min-width: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.topicQualityRejectedItem > div:first-child span {
+  min-height: 24px;
+  border: 1px solid var(--color-danger-border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .topicHistorySupplementHint {
@@ -1484,7 +1606,8 @@ button:focus-visible {
 }
 
 .topicReviewMeta > span:not(.statusBadge):not(.topicHistoryOriginBadge),
-.topicReviewRiskTags span {
+.topicReviewRiskTags span,
+.topicQualityBadge {
   min-height: 24px;
   border: 1px solid var(--color-border);
   border-radius: 999px;
@@ -1502,6 +1625,20 @@ button:focus-visible {
 }
 
 .topicReviewRiskTags span {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+}
+
+.topicReviewMeta .topicQualityBadge,
+.topicPoolBadges .topicQualityBadge {
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.topicReviewMeta .topicQualityFlag,
+.topicPoolBadges .topicQualityFlag {
   border-color: var(--color-danger-border);
   background: var(--color-danger-soft);
   color: var(--color-danger-text);

@@ -218,6 +218,185 @@ pub struct TopicGenerationBatchSummary {
     pub topic_count: i64,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicQualityEvaluationStatus {
+    Succeeded,
+    Failed,
+}
+
+impl TopicQualityEvaluationStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopicQualityEvaluationStatusParseError {
+    value: String,
+}
+
+impl fmt::Display for TopicQualityEvaluationStatusParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "unknown topic quality evaluation status: {}",
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for TopicQualityEvaluationStatusParseError {}
+
+impl TryFrom<&str> for TopicQualityEvaluationStatus {
+    type Error = TopicQualityEvaluationStatusParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "succeeded" => Ok(Self::Succeeded),
+            "failed" => Ok(Self::Failed),
+            _ => Err(TopicQualityEvaluationStatusParseError {
+                value: value.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicQualityDecision {
+    Pass,
+    Reject,
+}
+
+impl TopicQualityDecision {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Reject => "reject",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopicQualityDecisionParseError {
+    value: String,
+}
+
+impl fmt::Display for TopicQualityDecisionParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown topic quality decision: {}", self.value)
+    }
+}
+
+impl std::error::Error for TopicQualityDecisionParseError {}
+
+impl TryFrom<&str> for TopicQualityDecision {
+    type Error = TopicQualityDecisionParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "pass" => Ok(Self::Pass),
+            "reject" => Ok(Self::Reject),
+            _ => Err(TopicQualityDecisionParseError {
+                value: value.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicQualityFlag {
+    TooGeneric,
+    Duplicate,
+    OffPositioning,
+    HardToScript,
+    ComplianceRisk,
+    ScoreUntrusted,
+}
+
+impl TopicQualityFlag {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::TooGeneric => "too_generic",
+            Self::Duplicate => "duplicate",
+            Self::OffPositioning => "off_positioning",
+            Self::HardToScript => "hard_to_script",
+            Self::ComplianceRisk => "compliance_risk",
+            Self::ScoreUntrusted => "score_untrusted",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopicQualityFlagParseError {
+    value: String,
+}
+
+impl fmt::Display for TopicQualityFlagParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown topic quality flag: {}", self.value)
+    }
+}
+
+impl std::error::Error for TopicQualityFlagParseError {}
+
+impl TryFrom<&str> for TopicQualityFlag {
+    type Error = TopicQualityFlagParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "too_generic" => Ok(Self::TooGeneric),
+            "duplicate" => Ok(Self::Duplicate),
+            "off_positioning" => Ok(Self::OffPositioning),
+            "hard_to_script" => Ok(Self::HardToScript),
+            "compliance_risk" => Ok(Self::ComplianceRisk),
+            "score_untrusted" => Ok(Self::ScoreUntrusted),
+            _ => Err(TopicQualityFlagParseError {
+                value: value.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct TopicQualityGateResult {
+    pub summary: String,
+    #[serde(default)]
+    pub items: Vec<TopicQualityGateItem>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TopicQualityGateItem {
+    pub candidate_key: String,
+    pub title: String,
+    pub decision: TopicQualityDecision,
+    pub quality_score: i32,
+    #[serde(default)]
+    pub flags: Vec<TopicQualityFlag>,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TopicQualityEvaluation {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub batch_id: Uuid,
+    pub source_run_id: Option<Uuid>,
+    pub status: TopicQualityEvaluationStatus,
+    pub pass_count: i32,
+    pub reject_count: i32,
+    pub rewrite_triggered: bool,
+    pub result: TopicQualityGateResult,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TopicGroupSort {

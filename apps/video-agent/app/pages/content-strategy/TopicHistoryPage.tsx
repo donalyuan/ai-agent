@@ -7,6 +7,9 @@ import type {
   TopicGenerationBatchSummary,
   TopicGroupSort,
   TopicGroupSummary,
+  TopicQualityEvaluation,
+  TopicQualityFlag,
+  TopicQualityGateItem,
   TopicReviewSnapshot,
 } from "../../lib/api";
 import { TopicReviewList } from "./TopicReviewList";
@@ -24,6 +27,9 @@ type TopicHistoryPageProps = {
   loadingTopicBatches: boolean;
   preparingScript: boolean;
   project?: Project;
+  qualityError: string;
+  qualityEvaluation: TopicQualityEvaluation | null;
+  qualityLoading: boolean;
   reviewError: string;
   reviewLoading: boolean;
   reviewSnapshot: TopicReviewSnapshot | null;
@@ -52,6 +58,9 @@ export function TopicHistoryPage({
   loadingTopicBatches,
   preparingScript,
   project,
+  qualityError,
+  qualityEvaluation,
+  qualityLoading,
   reviewError,
   reviewLoading,
   reviewSnapshot,
@@ -178,6 +187,7 @@ export function TopicHistoryPage({
                   <TopicGroupPriorityCard
                     group={group}
                     key={group.root_batch_id}
+                    qualityEvaluation={qualityEvaluation}
                     selected={rootBatchId === group.root_batch_id}
                     onSelect={onSelectTopicBatch}
                   />
@@ -196,8 +206,11 @@ export function TopicHistoryPage({
                   >
                     <strong>{batch.prompt}</strong>
                     <span>
-                      {`${formatTopicBatchTime(batch.created_at)} · ${batch.topic_count} 条 · ${topicBatchStatusLabels[batch.status]}`}
-                    </span>
+                    {`${formatTopicBatchTime(batch.created_at)} · ${batch.topic_count} 条 · ${topicBatchStatusLabels[batch.status]}`}
+                  </span>
+                    {qualityEvaluation?.batch_id === batch.batch_id ? (
+                      <TopicQualityBatchSummary evaluation={qualityEvaluation} />
+                    ) : null}
                   </button>
                 ))}
           </div>
@@ -274,6 +287,14 @@ export function TopicHistoryPage({
               <span>选择批次后可以查看补充关系并继续生成。</span>
             </div>
           )}
+
+          {selectedBatch ? (
+            <TopicQualityReport
+              error={qualityError}
+              evaluation={qualityEvaluation}
+              loading={qualityLoading}
+            />
+          ) : null}
 
           {selectedBatch ? (
             <section aria-label="主题组评审" className="topicHistoryReviewPanel">
@@ -369,10 +390,12 @@ function errorToMessage(error: unknown) {
 
 function TopicGroupPriorityCard({
   group,
+  qualityEvaluation,
   selected,
   onSelect,
 }: {
   group: TopicGroupSummary;
+  qualityEvaluation: TopicQualityEvaluation | null;
   selected: boolean;
   onSelect: (batchId: string) => void;
 }) {
@@ -388,8 +411,95 @@ function TopicGroupPriorityCard({
       <span>{`${formatTopicBatchTime(group.created_at)} · ${topicGroupScoreLabel(group, candidateCount)}`}</span>
       <span>{`主题可见 ${group.topic_count} · 补充批次 ${group.supplement_batch_count}`}</span>
       <em>{topicGroupRiskSummary(group)}</em>
+      {qualityEvaluation?.batch_id === group.root_batch_id ? (
+        <TopicQualityBatchSummary evaluation={qualityEvaluation} />
+      ) : null}
     </button>
   );
+}
+
+function TopicQualityBatchSummary({ evaluation }: { evaluation: TopicQualityEvaluation }) {
+  return (
+    <span className="topicQualitySummaryText">{`质量：通过 ${evaluation.pass_count} · 淘汰 ${evaluation.reject_count} · ${
+      evaluation.rewrite_triggered ? "已重写" : "未重写"
+    }`}</span>
+  );
+}
+
+function TopicQualityReport({
+  error,
+  evaluation,
+  loading,
+}: {
+  error: string;
+  evaluation: TopicQualityEvaluation | null;
+  loading: boolean;
+}) {
+  const rejectedItems = evaluation?.result.items.filter((item) => item.decision === "reject") ?? [];
+  return (
+    <section aria-label="质量报告" className="topicQualityReportPanel">
+      <div className="panelHeader compactHeader topicHistorySupplementSectionHeader">
+        <div>
+          <h3>质量报告</h3>
+        </div>
+        <span>{loading ? "加载中" : evaluation ? "已同步" : "无报告"}</span>
+      </div>
+      {error ? <p className="errorText" role="alert">{error}</p> : null}
+      {loading ? <p className="stateText">正在加载质量报告</p> : null}
+      {!loading && !evaluation ? (
+        <p className="topicQualityReportEmpty">当前批次暂无质量报告。</p>
+      ) : null}
+      {evaluation ? (
+        <>
+          <div className="topicQualityReportStats" aria-label="质量评估统计">
+            <span>{`通过 ${evaluation.pass_count}`}</span>
+            <span>{`淘汰 ${evaluation.reject_count}`}</span>
+            <span>{evaluation.rewrite_triggered ? "已重写" : "未重写"}</span>
+          </div>
+          <p className="topicQualityReportSummary">{evaluation.result.summary}</p>
+          <div className="topicQualityRejectedList">
+            {rejectedItems.length ? (
+              rejectedItems.map((item) => <TopicQualityRejectedItem item={item} key={item.candidate_key} />)
+            ) : (
+              <p className="topicQualityReportEmpty">没有淘汰候选。</p>
+            )}
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function TopicQualityRejectedItem({ item }: { item: TopicQualityGateItem }) {
+  return (
+    <article aria-label={`淘汰候选：${item.title}`} className="topicQualityRejectedItem">
+      <div>
+        <strong>{item.title}</strong>
+        <span>淘汰</span>
+      </div>
+      <div className="topicQualityRejectedMeta">
+        <span>{`${item.quality_score} 分`}</span>
+        {item.flags.map((flag) => (
+          <span className="topicQualityFlag" key={flag}>
+            {topicQualityFlagLabel(flag)}
+          </span>
+        ))}
+      </div>
+      <p>{item.reason}</p>
+    </article>
+  );
+}
+
+function topicQualityFlagLabel(flag: TopicQualityFlag) {
+  const labels: Record<TopicQualityFlag, string> = {
+    too_generic: "泛化",
+    duplicate: "疑似重复",
+    off_positioning: "偏离定位",
+    hard_to_script: "脚本化难",
+    compliance_risk: "合规风险",
+    score_untrusted: "评分存疑",
+  };
+  return labels[flag];
 }
 
 function topicGroupStatusLabel(group: TopicGroupSummary) {
