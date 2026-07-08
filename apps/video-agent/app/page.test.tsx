@@ -1245,6 +1245,44 @@ describe("video-agent 视频工作台页面", () => {
     });
   });
 
+  it("历史生成页切换按时间排序后展示时间依据并刷新主题组顺序", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockTopicBatches({ batches: [latestTopicBatch, supplementTopicBatch, previousTopicBatch] });
+    vi.mocked(api.listTopicGroups).mockImplementation(async (_client, _projectId, options = {}) => ({
+      topic_groups:
+        options.sort === "created_at"
+          ? [missingReviewTopicGroup, readyTopicGroup]
+          : [readyTopicGroup, missingReviewTopicGroup],
+    }));
+    mockTopics(topicListResponse);
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "历史生成" }));
+    const history = await screen.findByRole("region", { name: "历史生成列表页" });
+    const batchColumn = within(history).getByRole("complementary", { name: "历史生成批次" });
+
+    expect(within(batchColumn).getAllByRole("button", { name: /AI/ })[0]).toHaveTextContent(
+      previousTopicBatch.prompt,
+    );
+
+    fireEvent.click(within(batchColumn).getByRole("button", { name: "按时间" }));
+
+    await waitFor(() => {
+      expect(api.listTopicGroups).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+        sort: "created_at",
+      });
+      expect(within(batchColumn).getByRole("button", { name: "按时间" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      const sortedGroupButtons = within(batchColumn).getAllByRole("button", { name: /AI/ });
+      expect(sortedGroupButtons[0]).toHaveTextContent(latestTopicBatch.prompt);
+      expect(sortedGroupButtons[0]).toHaveTextContent("07-06");
+    });
+  });
+
   it("历史生成页标记缺失或过期评审主题组为需评审", async () => {
     vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
     mockProjects({ projects: [project] });

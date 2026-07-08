@@ -385,7 +385,7 @@ function TopicGroupPriorityCard({
       type="button"
     >
       <strong>{`${topicGroupStatusLabel(group)} · ${group.prompt}`}</strong>
-      <span>{topicGroupScoreLabel(group, candidateCount)}</span>
+      <span>{`${formatTopicBatchTime(group.created_at)} · ${topicGroupScoreLabel(group, candidateCount)}`}</span>
       <span>{`主题可见 ${group.topic_count} · 补充批次 ${group.supplement_batch_count}`}</span>
       <em>{topicGroupRiskSummary(group)}</em>
     </button>
