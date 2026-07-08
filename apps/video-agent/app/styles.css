@@ -993,6 +993,34 @@ button:focus-visible {
   overflow-y: auto;
 }
 
+.topicGroupSortToggle {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  background: var(--color-surface-muted);
+  padding: 4px;
+}
+
+.topicGroupSortToggle button {
+  min-width: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 7px 8px;
+}
+
+.topicGroupSortToggle button.active {
+  background: var(--color-surface);
+  color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary-soft);
+}
+
 .topicHistoryBatchItem {
   min-height: 72px;
   border: 1px solid var(--color-border);
@@ -1036,6 +1064,11 @@ button:focus-visible {
   font-size: 11px;
   font-style: normal;
   padding: 2px 8px;
+}
+
+.topicGroupPriorityItem {
+  min-height: 108px;
+  align-content: start;
 }
 
 .topicHistoryBatchSummary {

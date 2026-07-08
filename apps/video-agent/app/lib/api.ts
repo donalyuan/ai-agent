@@ -127,6 +127,13 @@ export type ContentTopicStats = {
 export type TopicGenerationBatchStatus = "running" | "succeeded" | "failed";
 export type TopicReviewSnapshotStatus = "succeeded" | "failed";
 export type TopicReviewPriority = "priority" | "backup" | "reject";
+export type TopicGroupSort = "script_priority" | "created_at";
+export type TopicGroupReviewFreshness = "fresh" | "missing" | "stale";
+export type TopicGroupScriptPriorityStatus =
+  | "ready_for_script"
+  | "needs_review"
+  | "needs_supplement"
+  | "defer";
 export type TopicReviewRiskFlag =
   | "too_generic"
   | "duplicate"
@@ -154,6 +161,42 @@ export type ContentTopicListResponse = {
 
 export type TopicGenerationBatchListResponse = {
   batches: TopicGenerationBatchSummary[];
+};
+
+export type TopicGroupScriptPriorityMetrics = {
+  priority_count: number;
+  backup_count: number;
+  reject_count: number;
+  duplicate_count: number;
+  hard_to_script_count: number;
+  off_positioning_count: number;
+  compliance_risk_count: number;
+  ready_candidate_count: number;
+  high_score_topic_count: number;
+};
+
+export type TopicGroupScriptPriority = {
+  status: TopicGroupScriptPriorityStatus;
+  score: number | null;
+  reason: string;
+  metrics: TopicGroupScriptPriorityMetrics;
+  recommended_topic_ids: string[];
+};
+
+export type TopicGroupSummary = {
+  root_batch_id: string;
+  project_id: string;
+  prompt: string;
+  created_at: string;
+  topic_count: number;
+  supplement_batch_count: number;
+  latest_review_snapshot_id: string | null;
+  review_freshness: TopicGroupReviewFreshness;
+  script_priority: TopicGroupScriptPriority;
+};
+
+export type TopicGroupListResponse = {
+  topic_groups: TopicGroupSummary[];
 };
 
 export type TopicReviewItem = {
@@ -414,6 +457,22 @@ export function listTopicGenerationBatches(client: ApiClient, projectId: string)
   return request<TopicGenerationBatchListResponse>(
     client,
     `/api/projects/${projectId}/topic-generation-batches`,
+  );
+}
+
+export function listTopicGroups(
+  client: ApiClient,
+  projectId: string,
+  options: { sort?: TopicGroupSort } = {},
+) {
+  const searchParams = new URLSearchParams();
+  if (options.sort) {
+    searchParams.set("sort", options.sort);
+  }
+  const query = searchParams.toString();
+  return request<TopicGroupListResponse>(
+    client,
+    `/api/projects/${projectId}/topic-groups${query ? `?${query}` : ""}`,
   );
 }
 

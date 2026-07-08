@@ -13,6 +13,7 @@ import {
   listAgentMessages,
   listContentTopics,
   listTopicGenerationBatches,
+  listTopicGroups,
   listProjects,
   listScripts,
   listWorkspaceMenus,
@@ -125,6 +126,34 @@ const topicReviewSnapshot = {
   metadata: {},
   created_at: "2026-07-02T00:30:00Z",
   updated_at: "2026-07-02T00:30:10Z",
+};
+
+const topicGroupSummary = {
+  root_batch_id: topicGenerationBatch.batch_id,
+  project_id: project.project_id,
+  prompt: topicGenerationBatch.prompt,
+  created_at: topicGenerationBatch.created_at,
+  topic_count: 5,
+  supplement_batch_count: 1,
+  latest_review_snapshot_id: topicReviewSnapshot.snapshot_id,
+  review_freshness: "fresh",
+  script_priority: {
+    status: "ready_for_script",
+    score: 86,
+    reason: "存在 3 个无明显风险的优先推荐选题，脚本化路径清晰。",
+    metrics: {
+      priority_count: 4,
+      backup_count: 3,
+      reject_count: 1,
+      duplicate_count: 1,
+      hard_to_script_count: 0,
+      off_positioning_count: 0,
+      compliance_risk_count: 0,
+      ready_candidate_count: 3,
+      high_score_topic_count: 4,
+    },
+    recommended_topic_ids: [contentTopic.topic_id],
+  },
 };
 
 const preparedTopicResponse = {
@@ -424,6 +453,20 @@ describe("video-agent api client", () => {
     );
     expect(result.batches[0].batch_id).toBe(topicGenerationBatch.batch_id);
     expect(result.batches[0].topic_count).toBe(5);
+  });
+
+  it("按脚本优先级请求主题组列表", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ topic_groups: [topicGroupSummary] }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await listTopicGroups(client, project.project_id, { sort: "script_priority" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://api.test/api/projects/${project.project_id}/topic-groups?sort=script_priority`,
+      { headers: { accept: "application/json" } },
+    );
+    expect(result.topic_groups[0].root_batch_id).toBe(topicGenerationBatch.batch_id);
+    expect(result.topic_groups[0].script_priority.status).toBe("ready_for_script");
   });
 
   it("创建主题组评审快照", async () => {

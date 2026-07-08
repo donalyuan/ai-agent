@@ -1,12 +1,16 @@
 use crate::agents::models::{
     ContentTopic, ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatch,
-    TopicGenerationBatchStatus, TopicGenerationBatchSummary, TopicReviewResult,
-    TopicReviewSnapshot, TopicReviewSnapshotStatus,
+    TopicGenerationBatchStatus, TopicGenerationBatchSummary, TopicGroupReviewFreshness,
+    TopicGroupScriptPriority, TopicGroupScriptPriorityMetrics, TopicGroupScriptPriorityStatus,
+    TopicGroupSort, TopicGroupSummary, TopicReviewPriority, TopicReviewResult,
+    TopicReviewRiskFlag, TopicReviewSnapshot, TopicReviewSnapshotStatus,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{postgres::PgRow, PgPool, Row};
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use uuid::Uuid;
 
@@ -148,6 +152,13 @@ pub trait TopicRepository: Send + Sync {
         project_id: Uuid,
         limit: i64,
     ) -> Result<Vec<TopicGenerationBatchSummary>, TopicRepositoryError>;
+
+    async fn list_topic_group_summaries(
+        &self,
+        project_id: Uuid,
+        sort: TopicGroupSort,
+        limit: i64,
+    ) -> Result<Vec<TopicGroupSummary>, TopicRepositoryError>;
 
     async fn create_topic_review_snapshot(
         &self,
@@ -597,6 +608,78 @@ impl TopicRepository for PostgresTopicRepository {
         rows.into_iter().map(batch_summary_from_row).collect()
     }
 
+    async fn list_topic_group_summaries(
+        &self,
+        project_id: Uuid,
+        sort: TopicGroupSort,
+        limit: i64,
+    ) -> Result<Vec<TopicGroupSummary>, TopicRepositoryError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                root.id AS root_batch_id,
+                root.project_id,
+                root.prompt,
+                root.created_at,
+                COUNT(DISTINCT topic.id) AS topic_count,
+                COUNT(DISTINCT supplement.id) AS supplement_batch_count
+            FROM topic_generation_batches root
+            INNER JOIN topic_generation_batches batch
+                ON batch.project_id = root.project_id
+               AND batch.status = 'succeeded'
+               AND (batch.id = root.id OR batch.supplement_of_batch_id = root.id)
+            INNER JOIN content_topics topic
+                ON topic.project_id = root.project_id
+               AND topic.batch_id = batch.id
+               AND topic.deleted_at IS NULL
+            LEFT JOIN topic_generation_batches supplement
+                ON supplement.project_id = root.project_id
+               AND supplement.status = 'succeeded'
+               AND supplement.supplement_of_batch_id = root.id
+            WHERE root.project_id = $1
+              AND root.status = 'succeeded'
+              AND root.supplement_of_batch_id IS NULL
+            GROUP BY root.id, root.project_id, root.prompt, root.created_at
+            ORDER BY root.created_at DESC, root.id DESC
+            "#,
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(TopicRepositoryError::from)?;
+
+        let mut summaries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let group = root_topic_group_from_row(row);
+            let topics = self
+                .list_topics_for_batch_group(project_id, group.root_batch_id)
+                .await?;
+            let latest_snapshot = self
+                .get_latest_topic_review_snapshot(project_id, group.root_batch_id)
+                .await?;
+            let latest_review_snapshot_id = latest_snapshot.as_ref().map(|snapshot| snapshot.id);
+            let review_freshness = topic_group_review_freshness(&topics, latest_snapshot.as_ref());
+            let script_priority =
+                topic_group_script_priority(&topics, latest_snapshot.as_ref(), &review_freshness);
+
+            summaries.push(TopicGroupSummary {
+                root_batch_id: group.root_batch_id,
+                project_id: group.project_id,
+                prompt: group.prompt,
+                created_at: group.created_at,
+                topic_count: group.topic_count,
+                supplement_batch_count: group.supplement_batch_count,
+                latest_review_snapshot_id,
+                review_freshness,
+                script_priority,
+            });
+        }
+
+        sort_topic_group_summaries(&mut summaries, sort);
+        summaries.truncate(limit.clamp(1, 100) as usize);
+        Ok(summaries)
+    }
+
     async fn create_topic_review_snapshot(
         &self,
         input: CreateTopicReviewSnapshotInput,
@@ -683,6 +766,242 @@ impl PostgresTopicRepository {
 
         batch_from_row(row)
     }
+}
+
+struct RootTopicGroupRow {
+    root_batch_id: Uuid,
+    project_id: Uuid,
+    prompt: String,
+    created_at: DateTime<Utc>,
+    topic_count: i64,
+    supplement_batch_count: i64,
+}
+
+fn root_topic_group_from_row(row: PgRow) -> RootTopicGroupRow {
+    RootTopicGroupRow {
+        root_batch_id: row.get("root_batch_id"),
+        project_id: row.get("project_id"),
+        prompt: row.get("prompt"),
+        created_at: row.get::<DateTime<Utc>, _>("created_at"),
+        topic_count: row.get("topic_count"),
+        supplement_batch_count: row.get("supplement_batch_count"),
+    }
+}
+
+fn topic_group_review_freshness(
+    topics: &[ContentTopic],
+    snapshot: Option<&TopicReviewSnapshot>,
+) -> TopicGroupReviewFreshness {
+    let Some(snapshot) = snapshot else {
+        return TopicGroupReviewFreshness::Missing;
+    };
+
+    let current_topic_ids: HashSet<Uuid> = topics.iter().map(|topic| topic.id).collect();
+    let reviewed_topic_ids: HashSet<Uuid> = snapshot
+        .result
+        .topic_reviews
+        .iter()
+        .map(|review| review.topic_id)
+        .collect();
+
+    if current_topic_ids == reviewed_topic_ids {
+        TopicGroupReviewFreshness::Fresh
+    } else {
+        TopicGroupReviewFreshness::Stale
+    }
+}
+
+fn topic_group_script_priority(
+    topics: &[ContentTopic],
+    snapshot: Option<&TopicReviewSnapshot>,
+    freshness: &TopicGroupReviewFreshness,
+) -> TopicGroupScriptPriority {
+    match freshness {
+        TopicGroupReviewFreshness::Missing => {
+            return TopicGroupScriptPriority {
+                status: TopicGroupScriptPriorityStatus::NeedsReview,
+                score: None,
+                reason: "缺少成功主题组评审快照，请先评审当前主题组。".to_string(),
+                metrics: TopicGroupScriptPriorityMetrics::default(),
+                recommended_topic_ids: Vec::new(),
+            };
+        }
+        TopicGroupReviewFreshness::Stale => {
+            return TopicGroupScriptPriority {
+                status: TopicGroupScriptPriorityStatus::NeedsReview,
+                score: None,
+                reason: "评审已过期，请重新评审当前主题组。".to_string(),
+                metrics: TopicGroupScriptPriorityMetrics::default(),
+                recommended_topic_ids: Vec::new(),
+            };
+        }
+        TopicGroupReviewFreshness::Fresh => {}
+    }
+
+    let topic_by_id: HashMap<Uuid, &ContentTopic> =
+        topics.iter().map(|topic| (topic.id, topic)).collect();
+    let mut metrics = TopicGroupScriptPriorityMetrics {
+        high_score_topic_count: topics
+            .iter()
+            .filter(|topic| topic.score.is_some_and(|score| score >= 80.0))
+            .count() as i64,
+        ..TopicGroupScriptPriorityMetrics::default()
+    };
+    let review_items = snapshot
+        .map(|snapshot| snapshot.result.topic_reviews.as_slice())
+        .unwrap_or_default();
+
+    for review in review_items {
+        if !topic_by_id.contains_key(&review.topic_id) {
+            continue;
+        }
+
+        match review.priority {
+            TopicReviewPriority::Priority => metrics.priority_count += 1,
+            TopicReviewPriority::Backup => metrics.backup_count += 1,
+            TopicReviewPriority::Reject => metrics.reject_count += 1,
+        }
+        if review.risk_flags.contains(&TopicReviewRiskFlag::Duplicate) {
+            metrics.duplicate_count += 1;
+        }
+        if review
+            .risk_flags
+            .contains(&TopicReviewRiskFlag::HardToScript)
+        {
+            metrics.hard_to_script_count += 1;
+        }
+        if review
+            .risk_flags
+            .contains(&TopicReviewRiskFlag::OffPositioning)
+        {
+            metrics.off_positioning_count += 1;
+        }
+        if review
+            .risk_flags
+            .contains(&TopicReviewRiskFlag::ComplianceRisk)
+        {
+            metrics.compliance_risk_count += 1;
+        }
+    }
+
+    let mut ready_candidates = review_items
+        .iter()
+        .filter(|review| {
+            topic_by_id.contains_key(&review.topic_id)
+                && review.priority == TopicReviewPriority::Priority
+                && !has_ready_candidate_blocking_risk(&review.risk_flags)
+        })
+        .collect::<Vec<_>>();
+    ready_candidates.sort_by(|left, right| {
+        let left_topic = topic_by_id
+            .get(&left.topic_id)
+            .expect("ready candidate topic should exist");
+        let right_topic = topic_by_id
+            .get(&right.topic_id)
+            .expect("ready candidate topic should exist");
+        let score_order = right_topic
+            .score
+            .unwrap_or(-1.0)
+            .partial_cmp(&left_topic.score.unwrap_or(-1.0))
+            .unwrap_or(Ordering::Equal);
+        score_order
+            .then_with(|| right_topic.created_at.cmp(&left_topic.created_at))
+            .then_with(|| right_topic.id.to_string().cmp(&left_topic.id.to_string()))
+    });
+    metrics.ready_candidate_count = ready_candidates.len() as i64;
+
+    let raw_score = metrics.ready_candidate_count * 22
+        + metrics.priority_count * 8
+        + metrics.high_score_topic_count * 5
+        + metrics.backup_count * 2
+        - metrics.reject_count * 6
+        - metrics.duplicate_count * 5
+        - metrics.hard_to_script_count * 10
+        - metrics.off_positioning_count * 10
+        - metrics.compliance_risk_count * 15;
+    let score = raw_score.clamp(0, 100) as i32;
+    let status = if metrics.ready_candidate_count > 0 {
+        TopicGroupScriptPriorityStatus::ReadyForScript
+    } else if metrics.priority_count > 0 || metrics.backup_count > metrics.reject_count {
+        TopicGroupScriptPriorityStatus::NeedsSupplement
+    } else {
+        TopicGroupScriptPriorityStatus::Defer
+    };
+    let reason = match status {
+        TopicGroupScriptPriorityStatus::ReadyForScript => format!(
+            "存在 {} 个无明显风险的优先推荐选题，脚本化路径清晰。",
+            metrics.ready_candidate_count
+        ),
+        TopicGroupScriptPriorityStatus::NeedsSupplement => {
+            "主题方向有潜力，但当前缺少无明显风险的脚本候选。".to_string()
+        }
+        TopicGroupScriptPriorityStatus::Defer => {
+            "淘汰、重复、偏离定位或脚本化困难信号占主导，暂不建议推进。".to_string()
+        }
+        TopicGroupScriptPriorityStatus::NeedsReview => {
+            "请先完成当前主题组评审。".to_string()
+        }
+    };
+    let recommended_topic_ids = ready_candidates
+        .into_iter()
+        .take(3)
+        .map(|review| review.topic_id)
+        .collect();
+
+    TopicGroupScriptPriority {
+        status,
+        score: Some(score),
+        reason,
+        metrics,
+        recommended_topic_ids,
+    }
+}
+
+fn has_ready_candidate_blocking_risk(risk_flags: &[TopicReviewRiskFlag]) -> bool {
+    risk_flags.iter().any(|risk_flag| {
+        matches!(
+            risk_flag,
+            TopicReviewRiskFlag::Duplicate
+                | TopicReviewRiskFlag::HardToScript
+                | TopicReviewRiskFlag::OffPositioning
+                | TopicReviewRiskFlag::TooGeneric
+                | TopicReviewRiskFlag::ComplianceRisk
+        )
+    })
+}
+
+fn sort_topic_group_summaries(summaries: &mut [TopicGroupSummary], sort: TopicGroupSort) {
+    match sort {
+        TopicGroupSort::CreatedAt => summaries.sort_by(compare_topic_group_created_at),
+        TopicGroupSort::ScriptPriority => summaries.sort_by(|left, right| {
+            topic_group_status_rank(&left.script_priority.status)
+                .cmp(&topic_group_status_rank(&right.script_priority.status))
+                .then_with(|| {
+                    right
+                        .script_priority
+                        .score
+                        .unwrap_or(-1)
+                        .cmp(&left.script_priority.score.unwrap_or(-1))
+                })
+                .then_with(|| compare_topic_group_created_at(left, right))
+        }),
+    }
+}
+
+fn topic_group_status_rank(status: &TopicGroupScriptPriorityStatus) -> i32 {
+    match status {
+        TopicGroupScriptPriorityStatus::ReadyForScript => 0,
+        TopicGroupScriptPriorityStatus::NeedsSupplement => 1,
+        TopicGroupScriptPriorityStatus::Defer => 2,
+        TopicGroupScriptPriorityStatus::NeedsReview => 3,
+    }
+}
+
+fn compare_topic_group_created_at(left: &TopicGroupSummary, right: &TopicGroupSummary) -> Ordering {
+    right
+        .created_at
+        .cmp(&left.created_at)
+        .then_with(|| right.root_batch_id.to_string().cmp(&left.root_batch_id.to_string()))
 }
 
 #[derive(Debug)]

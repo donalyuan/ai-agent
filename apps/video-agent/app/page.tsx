@@ -17,6 +17,8 @@ import {
   ScriptSummary,
   ScriptStyle,
   TopicGenerationBatchSummary,
+  TopicGroupSort,
+  TopicGroupSummary,
   TopicReviewSnapshot,
   WorkspaceMenuNode,
   checkHealth,
@@ -33,6 +35,7 @@ import {
   listScripts,
   listContentTopics,
   listTopicGenerationBatches,
+  listTopicGroups,
   listWorkspaceMenus,
   prepareScriptFromTopic,
   sendAgentMessage,
@@ -140,7 +143,10 @@ export default function Home() {
   const [topics, setTopics] = useState<ContentTopic[]>([]);
   const [topicStats, setTopicStats] = useState<ContentTopicStats>(emptyTopicStats);
   const [topicBatches, setTopicBatches] = useState<TopicGenerationBatchSummary[]>([]);
+  const [topicGroups, setTopicGroups] = useState<TopicGroupSummary[]>([]);
   const [topicBatchesLoaded, setTopicBatchesLoaded] = useState(false);
+  const [topicGroupsLoaded, setTopicGroupsLoaded] = useState(false);
+  const [topicGroupSort, setTopicGroupSort] = useState<TopicGroupSort>("script_priority");
   const [topicBatchViewMode, setTopicBatchViewMode] = useState<"latest" | "batch" | "all">("latest");
   const [contentStrategyView, setContentStrategyView] = useState<ContentStrategyView>("pool");
   const [historyTopicBatchId, setHistoryTopicBatchId] = useState<string | null>(null);
@@ -166,6 +172,7 @@ export default function Home() {
   const [statusError, setStatusError] = useState("");
   const [topicError, setTopicError] = useState("");
   const [topicBatchError, setTopicBatchError] = useState("");
+  const [topicGroupError, setTopicGroupError] = useState("");
   const [topicActionError, setTopicActionError] = useState("");
   const [deletingTopicId, setDeletingTopicId] = useState<string | null>(null);
   const [showTopicForm, setShowTopicForm] = useState(false);
@@ -202,8 +209,13 @@ export default function Home() {
       : topicBatchViewMode === "batch"
         ? topicBatchFilter
         : topicBatches[0]?.batch_id || null;
+  const firstHistoryRootBatchId =
+    topicGroups[0]?.root_batch_id || topicBatchRootEntries(topicBatches)[0]?.batch_id || topicBatches[0]?.batch_id || null;
   const selectedHistoryBatch =
     topicBatches.find((batch) => batch.batch_id === historyTopicBatchId) ||
+    (firstHistoryRootBatchId
+      ? topicBatches.find((batch) => batch.batch_id === firstHistoryRootBatchId)
+      : null) ||
     topicBatchRootEntries(topicBatches)[0] ||
     topicBatches[0] ||
     null;
@@ -402,6 +414,46 @@ export default function Home() {
   useEffect(() => {
     if (!selectedProjectId || selectedMenuKey !== contentStrategyMenuKey) {
       if (!selectedProjectId) {
+        setTopicGroups([]);
+        setTopicGroupsLoaded(false);
+      }
+      return;
+    }
+
+    let active = true;
+
+    async function loadTopicGroups() {
+      setTopicGroupsLoaded(false);
+      setTopicGroupError("");
+
+      try {
+        const response = await listTopicGroups(client, selectedProjectId, { sort: topicGroupSort });
+        if (!active) {
+          return;
+        }
+        setTopicGroups(response.topic_groups);
+      } catch (error) {
+        if (active) {
+          setTopicGroups([]);
+          setTopicGroupError(errorToMessage(error));
+        }
+      } finally {
+        if (active) {
+          setTopicGroupsLoaded(true);
+        }
+      }
+    }
+
+    loadTopicGroups();
+
+    return () => {
+      active = false;
+    };
+  }, [client, selectedProjectId, selectedMenuKey, topicGroupSort]);
+
+  useEffect(() => {
+    if (!selectedProjectId || selectedMenuKey !== contentStrategyMenuKey) {
+      if (!selectedProjectId) {
         setTopics([]);
         setTopicStats(emptyTopicStats);
         setSelectedTopicId(null);
@@ -486,13 +538,14 @@ export default function Home() {
     }
 
     let active = true;
+    const reviewRootBatchId = activeTopicReviewRootBatchId;
 
     async function loadLatestTopicReview() {
       setTopicReviewLoading(true);
       setTopicReviewError("");
 
       try {
-        const snapshot = await getLatestTopicGroupReview(client, activeTopicReviewRootBatchId);
+        const snapshot = await getLatestTopicGroupReview(client, reviewRootBatchId);
         if (active) {
           setTopicReviewSnapshot(snapshot);
         }
@@ -544,6 +597,10 @@ export default function Home() {
     setTopicBatches([]);
     setTopicBatchesLoaded(false);
     setTopicBatchError("");
+    setTopicGroups([]);
+    setTopicGroupsLoaded(false);
+    setTopicGroupError("");
+    setTopicGroupSort("script_priority");
     setDeletingTopicId(null);
     setTopicReviewSnapshot(null);
     setTopicReviewLoading(false);
@@ -686,6 +743,27 @@ export default function Home() {
     return visibleBatches;
   }
 
+  async function refreshTopicGroups(sort: TopicGroupSort = topicGroupSort) {
+    if (!selectedProjectId) {
+      return [];
+    }
+    const response = await listTopicGroups(client, selectedProjectId, { sort });
+    setTopicGroups(response.topic_groups);
+    setTopicGroupsLoaded(true);
+    setTopicGroupError("");
+    return response.topic_groups;
+  }
+
+  async function refreshTopicGroupsSafely(sort: TopicGroupSort = topicGroupSort) {
+    try {
+      return await refreshTopicGroups(sort);
+    } catch (error) {
+      setTopicGroupError(errorToMessage(error));
+      setTopicGroupsLoaded(true);
+      return [];
+    }
+  }
+
   async function refreshProjectScripts() {
     if (!selectedProjectId) {
       return;
@@ -793,6 +871,7 @@ export default function Home() {
     try {
       await deleteContentTopic(client, topic.topic_id);
       const refreshedBatches = await refreshTopicBatches();
+      await refreshTopicGroupsSafely();
       await refreshContentTopics(activeTopicBatchId, refreshedBatches);
     } catch (error) {
       setTopicActionError(errorToMessage(error));
@@ -843,6 +922,7 @@ export default function Home() {
     setHistoryTopicBatchId(newBatchId);
     setTopicBatchViewMode("batch");
     setTopicBatchFilter(newBatchId);
+    await refreshTopicGroupsSafely();
     await refreshContentTopics(newBatchId, refreshedBatches);
   }
 
@@ -860,6 +940,7 @@ export default function Home() {
       const createdSnapshot = await createTopicGroupReview(client, rootBatchId);
       const latestSnapshot = await getLatestTopicGroupReview(client, rootBatchId);
       setTopicReviewSnapshot(latestSnapshot || createdSnapshot);
+      await refreshTopicGroupsSafely();
     } catch (error) {
       setTopicReviewError(errorToMessage(error));
     } finally {
@@ -917,6 +998,7 @@ export default function Home() {
       }
       try {
         await refreshTopicBatches();
+        await refreshTopicGroupsSafely();
       } catch (error) {
         setTopicBatchError(errorToMessage(error));
       }
@@ -1106,8 +1188,10 @@ export default function Home() {
           stats={topicStats}
           activeTopicBatchId={historyActiveTopicBatchId}
           topicBatches={topicBatches}
-          loadingTopicBatches={!topicBatchesLoaded}
-          topicBatchError={topicBatchError}
+          topicGroups={topicGroups}
+          topicGroupSort={topicGroupSort}
+          loadingTopicBatches={!topicBatchesLoaded || !topicGroupsLoaded}
+          topicBatchError={topicBatchError || topicGroupError}
           loading={loadingTopics}
           preparingScript={preparingScript}
           error={topicError}
@@ -1122,6 +1206,7 @@ export default function Home() {
           onReviewTopicGroup={handleReviewTopicGroup}
           onSelectTopicBatch={handleSelectHistoryTopicBatch}
           onSupplementTopicBatch={handleSupplementTopicBatch}
+          onTopicGroupSortChange={setTopicGroupSort}
           onUpdateTopicStatus={handleUpdateTopicStatus}
         />
       ) : selectedMenuKey === contentStrategyMenuKey ? (

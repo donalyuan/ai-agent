@@ -5,6 +5,8 @@ import type {
   ContentTopicStatus,
   Project,
   TopicGenerationBatchSummary,
+  TopicGroupSort,
+  TopicGroupSummary,
   TopicReviewSnapshot,
 } from "../../lib/api";
 import { TopicReviewList } from "./TopicReviewList";
@@ -28,6 +30,8 @@ type TopicHistoryPageProps = {
   stats: ContentTopicStats;
   topicBatchError: string;
   topicBatches: TopicGenerationBatchSummary[];
+  topicGroups: TopicGroupSummary[];
+  topicGroupSort: TopicGroupSort;
   topics: ContentTopic[];
   writesDisabled: boolean;
   onDeleteTopic: (topic: ContentTopic) => void;
@@ -35,6 +39,7 @@ type TopicHistoryPageProps = {
   onReviewTopicGroup: () => Promise<void>;
   onSelectTopicBatch: (batchId: string) => void;
   onSupplementTopicBatch: (batchId: string, content: string) => Promise<void>;
+  onTopicGroupSortChange: (sort: TopicGroupSort) => void;
   onUpdateTopicStatus: (topic: ContentTopic, status: ContentTopicStatus) => void;
 };
 
@@ -53,6 +58,8 @@ export function TopicHistoryPage({
   stats,
   topicBatchError,
   topicBatches,
+  topicGroups,
+  topicGroupSort,
   topics,
   writesDisabled,
   onDeleteTopic,
@@ -60,6 +67,7 @@ export function TopicHistoryPage({
   onReviewTopicGroup,
   onSelectTopicBatch,
   onSupplementTopicBatch,
+  onTopicGroupSortChange,
   onUpdateTopicStatus,
 }: TopicHistoryPageProps) {
   const [supplementDraft, setSupplementDraft] = useState("");
@@ -69,9 +77,15 @@ export function TopicHistoryPage({
     () => topicBatches.filter((batch) => !batch.supplement_of_batch_id),
     [topicBatches],
   );
+  const topicGroupsByRootId = useMemo(
+    () => new Map(topicGroups.map((group) => [group.root_batch_id, group])),
+    [topicGroups],
+  );
+  const displayGroupCount = topicGroups.length || rootBatches.length;
   const selectedBatch =
     topicBatches.find((batch) => batch.batch_id === activeTopicBatchId) || rootBatches[0] || topicBatches[0] || null;
   const rootBatchId = selectedBatch?.supplement_of_batch_id || selectedBatch?.batch_id || null;
+  const selectedTopicGroup = rootBatchId ? topicGroupsByRootId.get(rootBatchId) || null : null;
   const rootBatch = rootBatchId
     ? topicBatches.find((batch) => batch.batch_id === rootBatchId) || selectedBatch
     : null;
@@ -128,11 +142,30 @@ export function TopicHistoryPage({
               <p className="sectionKicker">生成记录</p>
               <h2>历史生成</h2>
             </div>
-            <span>{loadingTopicBatches ? "加载中" : `${rootBatches.length} 组`}</span>
+            <span>{loadingTopicBatches ? "加载中" : `${displayGroupCount} 组`}</span>
+          </div>
+
+          <div aria-label="主题组排序" className="topicGroupSortToggle">
+            <button
+              aria-pressed={topicGroupSort === "script_priority"}
+              className={topicGroupSort === "script_priority" ? "active" : ""}
+              onClick={() => onTopicGroupSortChange("script_priority")}
+              type="button"
+            >
+              脚本优先
+            </button>
+            <button
+              aria-pressed={topicGroupSort === "created_at"}
+              className={topicGroupSort === "created_at" ? "active" : ""}
+              onClick={() => onTopicGroupSortChange("created_at")}
+              type="button"
+            >
+              按时间
+            </button>
           </div>
 
           {topicBatchError ? <p className="errorText" role="alert">{topicBatchError}</p> : null}
-          {!loadingTopicBatches && !topicBatchError && !rootBatches.length ? (
+          {!loadingTopicBatches && !topicBatchError && !displayGroupCount ? (
             <div className="emptyState">
               <strong>还没有历史生成</strong>
               <span>通过选题 Agent 生成候选后，这里会按批次归档。</span>
@@ -140,24 +173,33 @@ export function TopicHistoryPage({
           ) : null}
 
           <div className="topicHistoryBatchList">
-            {rootBatches.map((batch) => (
-              <button
-                aria-pressed={rootBatchId === batch.batch_id}
-                className={
-                  rootBatchId === batch.batch_id
-                    ? "topicHistoryBatchItem selected"
-                    : "topicHistoryBatchItem"
-                }
-                key={batch.batch_id}
-                onClick={() => onSelectTopicBatch(batch.batch_id)}
-                type="button"
-              >
-                <strong>{batch.prompt}</strong>
-                <span>
-                  {`${formatTopicBatchTime(batch.created_at)} · ${batch.topic_count} 条 · ${topicBatchStatusLabels[batch.status]}`}
-                </span>
-              </button>
-            ))}
+            {topicGroups.length
+              ? topicGroups.map((group) => (
+                  <TopicGroupPriorityCard
+                    group={group}
+                    key={group.root_batch_id}
+                    selected={rootBatchId === group.root_batch_id}
+                    onSelect={onSelectTopicBatch}
+                  />
+                ))
+              : rootBatches.map((batch) => (
+                  <button
+                    aria-pressed={rootBatchId === batch.batch_id}
+                    className={
+                      rootBatchId === batch.batch_id
+                        ? "topicHistoryBatchItem selected"
+                        : "topicHistoryBatchItem"
+                    }
+                    key={batch.batch_id}
+                    onClick={() => onSelectTopicBatch(batch.batch_id)}
+                    type="button"
+                  >
+                    <strong>{batch.prompt}</strong>
+                    <span>
+                      {`${formatTopicBatchTime(batch.created_at)} · ${batch.topic_count} 条 · ${topicBatchStatusLabels[batch.status]}`}
+                    </span>
+                  </button>
+                ))}
           </div>
         </aside>
 
@@ -175,6 +217,9 @@ export function TopicHistoryPage({
               <span>{`原始生成：${rootBatch ? formatTopicBatchTime(rootBatch.created_at) : "-"}`}</span>
               <span>{`生成批次：${1 + relatedSupplementBatches.length}`}</span>
               <span>{`主题可见：${topics.length}`}</span>
+              {selectedTopicGroup?.script_priority.score !== undefined ? (
+                <span>{scriptPrioritySummary(selectedTopicGroup)}</span>
+              ) : null}
               <span>{selectedBatch.supplement_of_batch_id ? "当前选中：补充批次" : "当前选中：原始批次"}</span>
               {selectedBatch.supplement_of_batch_id && rootBatch ? (
                 <span>{`补充自：${rootBatch.prompt}`}</span>
@@ -320,6 +365,70 @@ function errorToMessage(error: unknown) {
     return error.message;
   }
   return "补充生成失败";
+}
+
+function TopicGroupPriorityCard({
+  group,
+  selected,
+  onSelect,
+}: {
+  group: TopicGroupSummary;
+  selected: boolean;
+  onSelect: (batchId: string) => void;
+}) {
+  const candidateCount = group.script_priority.recommended_topic_ids.length;
+  return (
+    <button
+      aria-pressed={selected}
+      className={selected ? "topicHistoryBatchItem topicGroupPriorityItem selected" : "topicHistoryBatchItem topicGroupPriorityItem"}
+      onClick={() => onSelect(group.root_batch_id)}
+      type="button"
+    >
+      <strong>{`${topicGroupStatusLabel(group)} · ${group.prompt}`}</strong>
+      <span>{topicGroupScoreLabel(group, candidateCount)}</span>
+      <span>{`主题可见 ${group.topic_count} · 补充批次 ${group.supplement_batch_count}`}</span>
+      <em>{topicGroupRiskSummary(group)}</em>
+    </button>
+  );
+}
+
+function topicGroupStatusLabel(group: TopicGroupSummary) {
+  if (group.script_priority.status === "needs_review") {
+    return group.review_freshness === "stale" ? "需重新评审" : "待评审";
+  }
+  if (group.script_priority.status === "ready_for_script") {
+    return "建议立刻出脚本";
+  }
+  if (group.script_priority.status === "needs_supplement") {
+    return "需补充";
+  }
+  return "暂缓";
+}
+
+function topicGroupScoreLabel(group: TopicGroupSummary, candidateCount: number) {
+  if (group.script_priority.score === null) {
+    const freshnessText = group.review_freshness === "stale" ? "评审已过期" : "缺少评审";
+    return `${freshnessText} · ${group.topic_count} 条选题`;
+  }
+  return `${group.script_priority.score} 分 · ${candidateCount} 个候选 · ${group.script_priority.metrics.priority_count} 个优先`;
+}
+
+function topicGroupRiskSummary(group: TopicGroupSummary) {
+  const metrics = group.script_priority.metrics;
+  const risks = [
+    metrics.duplicate_count ? `重复 ${metrics.duplicate_count}` : "",
+    metrics.hard_to_script_count ? `脚本化难 ${metrics.hard_to_script_count}` : "",
+    metrics.off_positioning_count ? `偏离定位 ${metrics.off_positioning_count}` : "",
+    metrics.compliance_risk_count ? `合规风险 ${metrics.compliance_risk_count}` : "",
+  ].filter(Boolean);
+  return risks.length ? risks.join(" · ") : "风险低";
+}
+
+function scriptPrioritySummary(group: TopicGroupSummary) {
+  if (group.script_priority.score === null) {
+    return topicGroupStatusLabel(group);
+  }
+  return `脚本优先：${group.script_priority.score} 分`;
 }
 
 function MetricCard({

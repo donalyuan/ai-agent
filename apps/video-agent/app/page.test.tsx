@@ -15,6 +15,7 @@ import type {
   ScriptDetail,
   ScriptListResponse,
   TopicGenerationBatchListResponse,
+  TopicGroupListResponse,
   TopicReviewSnapshot,
   WorkspaceMenuListResponse,
 } from "./lib/api";
@@ -32,6 +33,7 @@ vi.mock("./lib/api", async (importOriginal) => {
     generateScript: vi.fn(),
     listContentTopics: vi.fn(),
     listTopicGenerationBatches: vi.fn(),
+    listTopicGroups: vi.fn(),
     createTopicGroupReview: vi.fn(),
     getLatestTopicGroupReview: vi.fn(),
     createContentTopic: vi.fn(),
@@ -349,6 +351,74 @@ const topicReviewSnapshot: TopicReviewSnapshot = {
   updated_at: "2026-07-07T09:00:15Z",
 };
 
+const readyTopicGroup = {
+  root_batch_id: previousTopicBatch.batch_id,
+  project_id: project.project_id,
+  prompt: previousTopicBatch.prompt,
+  created_at: previousTopicBatch.created_at,
+  topic_count: 7,
+  supplement_batch_count: 1,
+  latest_review_snapshot_id: topicReviewSnapshot.snapshot_id,
+  review_freshness: "fresh" as const,
+  script_priority: {
+    status: "ready_for_script" as const,
+    score: 86,
+    reason: "存在 3 个无明显风险的优先推荐选题，脚本化路径清晰。",
+    metrics: {
+      priority_count: 4,
+      backup_count: 3,
+      reject_count: 1,
+      duplicate_count: 1,
+      hard_to_script_count: 0,
+      off_positioning_count: 0,
+      compliance_risk_count: 0,
+      ready_candidate_count: 3,
+      high_score_topic_count: 4,
+    },
+    recommended_topic_ids: [approvedTopic.topic_id],
+  },
+};
+
+const missingReviewTopicGroup = {
+  root_batch_id: latestTopicBatch.batch_id,
+  project_id: project.project_id,
+  prompt: latestTopicBatch.prompt,
+  created_at: latestTopicBatch.created_at,
+  topic_count: 5,
+  supplement_batch_count: 0,
+  latest_review_snapshot_id: null,
+  review_freshness: "missing" as const,
+  script_priority: {
+    status: "needs_review" as const,
+    score: null,
+    reason: "缺少成功主题组评审快照，请先评审当前主题组。",
+    metrics: {
+      priority_count: 0,
+      backup_count: 0,
+      reject_count: 0,
+      duplicate_count: 0,
+      hard_to_script_count: 0,
+      off_positioning_count: 0,
+      compliance_risk_count: 0,
+      ready_candidate_count: 0,
+      high_score_topic_count: 0,
+    },
+    recommended_topic_ids: [],
+  },
+};
+
+const staleReviewTopicGroup = {
+  ...missingReviewTopicGroup,
+  root_batch_id: previousTopicBatch.batch_id,
+  prompt: previousTopicBatch.prompt,
+  latest_review_snapshot_id: topicReviewSnapshot.snapshot_id,
+  review_freshness: "stale" as const,
+  script_priority: {
+    ...missingReviewTopicGroup.script_priority,
+    reason: "评审已过期，请重新评审当前主题组。",
+  },
+};
+
 const topicListResponse: ContentTopicListResponse = {
   topics: [ideaTopic, approvedTopic, archivedTopic],
   stats: { total: 3, idea: 1, approved: 1, scripted: 0, archived: 1 },
@@ -597,6 +667,10 @@ function mockTopicBatches(response: TopicGenerationBatchListResponse = { batches
   vi.mocked(api.listTopicGenerationBatches).mockResolvedValue(response);
 }
 
+function mockTopicGroups(response: TopicGroupListResponse = { topic_groups: [] }) {
+  vi.mocked(api.listTopicGroups).mockResolvedValue(response);
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -623,6 +697,7 @@ describe("video-agent 视频工作台页面", () => {
     mockScripts({ scripts: [], total: 0, limit: 20, offset: 0 });
     mockTopics({ topics: [], stats: { total: 0, idea: 0, approved: 0, scripted: 0, archived: 0 } });
     mockTopicBatches();
+    mockTopicGroups();
     vi.mocked(api.getScript).mockResolvedValue(scriptDetail);
     vi.mocked(api.generateScript).mockResolvedValue(topicGeneratedScript);
     vi.mocked(api.createContentTopic).mockResolvedValue(ideaTopic);
@@ -1141,6 +1216,50 @@ describe("video-agent 视频工作台页面", () => {
     expect(supplementColumn.querySelectorAll(".topicHistorySupplementSectionHeader").length).toBeGreaterThanOrEqual(2);
     expect(within(topicColumn).getByRole("article", { name: `历史选题：${ideaTopic.title}` })).toBeInTheDocument();
     expect(within(supplementColumn).getByRole("region", { name: "补充选题" })).toBeInTheDocument();
+  });
+
+  it("历史生成页默认按脚本产出优先级展示主题组", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockTopicBatches({ batches: [latestTopicBatch, supplementTopicBatch, previousTopicBatch] });
+    mockTopicGroups({ topic_groups: [readyTopicGroup, missingReviewTopicGroup] });
+    mockTopics(topicListResponse);
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "历史生成" }));
+    const history = await screen.findByRole("region", { name: "历史生成列表页" });
+    const batchColumn = within(history).getByRole("complementary", { name: "历史生成批次" });
+    const groupButtons = within(batchColumn).getAllByRole("button", {
+      name: /AI/,
+    });
+
+    expect(within(batchColumn).getByRole("button", { name: "脚本优先" })).toHaveAttribute("aria-pressed", "true");
+    expect(groupButtons[0]).toHaveTextContent("建议立刻出脚本");
+    expect(groupButtons[0]).toHaveTextContent(previousTopicBatch.prompt);
+    expect(groupButtons[0]).toHaveTextContent("86 分");
+    expect(groupButtons[0]).toHaveTextContent("1 个候选");
+    expect(groupButtons[1]).toHaveTextContent("待评审");
+    expect(api.listTopicGroups).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+      sort: "script_priority",
+    });
+  });
+
+  it("历史生成页标记缺失或过期评审主题组为需评审", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockTopicBatches({ batches: [latestTopicBatch, previousTopicBatch] });
+    mockTopicGroups({ topic_groups: [staleReviewTopicGroup, missingReviewTopicGroup] });
+    mockTopics(topicListResponse);
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "历史生成" }));
+    const history = await screen.findByRole("region", { name: "历史生成列表页" });
+
+    expect(within(history).getByRole("button", { name: /需重新评审/ })).toHaveTextContent("评审已过期");
+    expect(within(history).getByRole("button", { name: /待评审/ })).toHaveTextContent("缺少评审");
+    expect(within(history).getByRole("button", { name: "评审当前主题组" })).toBeEnabled();
   });
 
   it("历史生成页按同一主题展示原始批次和补充批次选题", async () => {

@@ -218,6 +218,66 @@ pub struct TopicGenerationBatchSummary {
     pub topic_count: i64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicGroupSort {
+    #[default]
+    ScriptPriority,
+    CreatedAt,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicGroupReviewFreshness {
+    Fresh,
+    Missing,
+    Stale,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicGroupScriptPriorityStatus {
+    ReadyForScript,
+    NeedsReview,
+    NeedsSupplement,
+    Defer,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TopicGroupScriptPriorityMetrics {
+    pub priority_count: i64,
+    pub backup_count: i64,
+    pub reject_count: i64,
+    pub duplicate_count: i64,
+    pub hard_to_script_count: i64,
+    pub off_positioning_count: i64,
+    pub compliance_risk_count: i64,
+    pub ready_candidate_count: i64,
+    pub high_score_topic_count: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TopicGroupScriptPriority {
+    pub status: TopicGroupScriptPriorityStatus,
+    pub score: Option<i32>,
+    pub reason: String,
+    pub metrics: TopicGroupScriptPriorityMetrics,
+    pub recommended_topic_ids: Vec<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TopicGroupSummary {
+    pub root_batch_id: Uuid,
+    pub project_id: Uuid,
+    pub prompt: String,
+    pub created_at: DateTime<Utc>,
+    pub topic_count: i64,
+    pub supplement_batch_count: i64,
+    pub latest_review_snapshot_id: Option<Uuid>,
+    pub review_freshness: TopicGroupReviewFreshness,
+    pub script_priority: TopicGroupScriptPriority,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TopicReviewSnapshotStatus {

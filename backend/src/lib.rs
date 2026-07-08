@@ -31,10 +31,11 @@ use crate::agents::models::{
     CreateContentTopicRequest, CreateProjectRequest, GenerateScriptRequest,
     PrepareScriptFromTopicRequest, PrepareScriptFromTopicResponse, ProjectListResponse,
     ProjectResponse, ScriptListFilter, ScriptListResponse, ScriptResponse, SendAgentMessageRequest,
-    TopicGenerationBatchListResponse, TopicGenerationBatchSummaryResponse,
-    TopicReviewSnapshotResponse, TopicScriptRequestPreview, UpdateContentTopicRequest,
-    UpdateContentTopicStatusRequest, UpdateScriptStatusRequest, UpdateScriptStatusResponse,
-    WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
+    TopicGenerationBatchListResponse, TopicGenerationBatchSummaryResponse, TopicGroupListQuery,
+    TopicGroupListResponse, TopicGroupSummaryResponse, TopicReviewSnapshotResponse,
+    TopicScriptRequestPreview, UpdateContentTopicRequest, UpdateContentTopicStatusRequest,
+    UpdateScriptStatusRequest, UpdateScriptStatusResponse, WorkspaceMenuListResponse,
+    WorkspaceMenuNodeResponse,
 };
 
 pub mod agents;
@@ -306,6 +307,10 @@ pub fn build_app_with_state(state: AppState) -> Router {
             get(list_topic_generation_batches),
         )
         .route(
+            "/api/projects/:project_id/topic-groups",
+            get(list_topic_groups),
+        )
+        .route(
             "/api/topic-groups/:root_batch_id/reviews",
             post(create_topic_group_review),
         )
@@ -536,6 +541,25 @@ async fn list_topic_generation_batches(
         batches: batches
             .into_iter()
             .map(TopicGenerationBatchSummaryResponse::from)
+            .collect(),
+    }))
+}
+
+async fn list_topic_groups(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    Query(query): Query<TopicGroupListQuery>,
+) -> Result<Json<TopicGroupListResponse>, ScriptApiError> {
+    ensure_project_exists(&state, project_id).await?;
+    let repository = state.topic_repository()?;
+    let topic_groups = repository
+        .list_topic_group_summaries(project_id, query.sort, 20)
+        .await?;
+
+    Ok(Json(TopicGroupListResponse {
+        topic_groups: topic_groups
+            .into_iter()
+            .map(TopicGroupSummaryResponse::from)
             .collect(),
     }))
 }

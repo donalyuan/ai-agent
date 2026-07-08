@@ -1,7 +1,8 @@
 use super::{
     ContentTopic, ContentTopicSource, ContentTopicStatus, Scene, Script, ScriptStatus,
-    ScriptSummary, TopicGenerationBatchStatus, TopicGenerationBatchSummary, TopicReviewResult,
-    TopicReviewSnapshot, TopicReviewSnapshotStatus,
+    ScriptSummary, TopicGenerationBatchStatus, TopicGenerationBatchSummary,
+    TopicGroupReviewFreshness, TopicGroupScriptPriority, TopicGroupSort, TopicGroupSummary,
+    TopicReviewResult, TopicReviewSnapshot, TopicReviewSnapshotStatus,
 };
 use crate::agents::conversation::{
     AgentConversation, AgentConversationStatus, AgentMessage, AgentMessageRole, AgentRunRecord,
@@ -274,6 +275,46 @@ impl From<TopicGenerationBatchSummary> for TopicGenerationBatchSummaryResponse {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TopicGenerationBatchListResponse {
     pub batches: Vec<TopicGenerationBatchSummaryResponse>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct TopicGroupListQuery {
+    #[serde(default)]
+    pub sort: TopicGroupSort,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TopicGroupSummaryResponse {
+    pub root_batch_id: Uuid,
+    pub project_id: Uuid,
+    pub prompt: String,
+    pub created_at: DateTime<Utc>,
+    pub topic_count: i64,
+    pub supplement_batch_count: i64,
+    pub latest_review_snapshot_id: Option<Uuid>,
+    pub review_freshness: TopicGroupReviewFreshness,
+    pub script_priority: TopicGroupScriptPriority,
+}
+
+impl From<TopicGroupSummary> for TopicGroupSummaryResponse {
+    fn from(summary: TopicGroupSummary) -> Self {
+        Self {
+            root_batch_id: summary.root_batch_id,
+            project_id: summary.project_id,
+            prompt: summary.prompt,
+            created_at: summary.created_at,
+            topic_count: summary.topic_count,
+            supplement_batch_count: summary.supplement_batch_count,
+            latest_review_snapshot_id: summary.latest_review_snapshot_id,
+            review_freshness: summary.review_freshness,
+            script_priority: summary.script_priority,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TopicGroupListResponse {
+    pub topic_groups: Vec<TopicGroupSummaryResponse>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
