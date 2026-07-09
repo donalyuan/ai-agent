@@ -128,6 +128,45 @@ export type ContentTopic = {
   updated_at: string;
 };
 
+export type MaterialType = "video" | "image" | "audio" | "subtitle";
+export type MaterialStatus = "active" | "archived";
+export type MaterialStatusFilter = MaterialStatus | "all";
+
+export type Material = {
+  material_id: string;
+  project_id: string;
+  material_type: MaterialType;
+  file_url: string;
+  thumbnail_url: string | null;
+  file_name: string;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  usage_count: number;
+  status: MaterialStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MaterialPayload = {
+  material_type: MaterialType;
+  file_url: string;
+  thumbnail_url?: string | null;
+  file_name: string;
+  tags: string[];
+  metadata: Record<string, unknown>;
+};
+
+export type MaterialListResponse = {
+  materials: Material[];
+};
+
+export type MaterialFilters = {
+  material_type?: MaterialType | "all";
+  status?: MaterialStatusFilter;
+  q?: string;
+  tag?: string;
+};
+
 export type ContentTopicSnapshot = {
   topic_id: string;
   title: string;
@@ -542,6 +581,68 @@ export function listContentTopics(
     client,
     `/api/projects/${projectId}/topics${query ? `?${query}` : ""}`,
   );
+}
+
+export function listMaterials(
+  client: ApiClient,
+  projectId: string,
+  filters: MaterialFilters = {},
+) {
+  const searchParams = new URLSearchParams();
+  if (filters.material_type && filters.material_type !== "all") {
+    searchParams.set("type", filters.material_type);
+  }
+  if (filters.status && filters.status !== "all") {
+    searchParams.set("status", filters.status);
+  }
+  if (filters.q?.trim()) {
+    searchParams.set("q", filters.q.trim());
+  }
+  if (filters.tag?.trim()) {
+    searchParams.set("tag", filters.tag.trim());
+  }
+  const query = searchParams.toString();
+  return request<MaterialListResponse>(
+    client,
+    `/api/projects/${projectId}/materials${query ? `?${query}` : ""}`,
+  );
+}
+
+export function createMaterial(
+  client: ApiClient,
+  projectId: string,
+  payload: MaterialPayload,
+) {
+  return request<Material>(client, `/api/projects/${projectId}/materials`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function getMaterial(client: ApiClient, materialId: string) {
+  return request<Material>(client, `/api/materials/${materialId}`);
+}
+
+export function updateMaterial(
+  client: ApiClient,
+  materialId: string,
+  payload: MaterialPayload,
+) {
+  return request<Material>(client, `/api/materials/${materialId}`, {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function updateMaterialStatus(
+  client: ApiClient,
+  materialId: string,
+  status: MaterialStatus,
+) {
+  return request<Material>(client, `/api/materials/${materialId}/status`, {
+    method: "PUT",
+    body: { status },
+  });
 }
 
 export function listTopicGenerationBatches(client: ApiClient, projectId: string) {

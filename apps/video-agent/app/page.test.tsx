@@ -11,6 +11,7 @@ import type {
   AgentRun,
   ContentTopic,
   ContentTopicListResponse,
+  Material,
   ProjectListResponse,
   ScriptDetail,
   ScriptListResponse,
@@ -20,6 +21,29 @@ import type {
   TopicReviewSnapshot,
   WorkspaceMenuListResponse,
 } from "./lib/api";
+
+vi.mock("react-konva", async () => {
+  const React = await import("react");
+  const MockNode = ({
+    children,
+    className,
+    text,
+  }: {
+    children?: React.ReactNode;
+    className?: string;
+    text?: string;
+  }) => React.createElement("div", className ? { className } : null, children ?? text ?? null);
+  return {
+    Stage: MockNode,
+    Layer: MockNode,
+    Group: MockNode,
+    Rect: MockNode,
+    Text: MockNode,
+    Image: MockNode,
+    Circle: MockNode,
+    Line: MockNode,
+  };
+});
 
 vi.mock("./lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./lib/api")>();
@@ -33,6 +57,7 @@ vi.mock("./lib/api", async (importOriginal) => {
     getScript: vi.fn(),
     generateScript: vi.fn(),
     listContentTopics: vi.fn(),
+    listMaterials: vi.fn(),
     listTopicGenerationBatches: vi.fn(),
     listTopicGroups: vi.fn(),
     createTopicGroupReview: vi.fn(),
@@ -40,7 +65,11 @@ vi.mock("./lib/api", async (importOriginal) => {
     getLatestTopicGroupReview: vi.fn(),
     getLatestTopicQualityEvaluation: vi.fn(),
     createContentTopic: vi.fn(),
+    createMaterial: vi.fn(),
     deleteContentTopic: vi.fn(),
+    getMaterial: vi.fn(),
+    updateMaterial: vi.fn(),
+    updateMaterialStatus: vi.fn(),
     updateContentTopic: vi.fn(),
     updateContentTopicStatus: vi.fn(),
     updateProjectStrategyProfile: vi.fn(),
@@ -227,6 +256,26 @@ const contentStrategyWorkspaceMenus: WorkspaceMenuListResponse = {
       ],
     },
     menuNode("material-management", "素材管理", false, "planned", 30),
+    menuNode("production", "作品生产", false, "planned", 40),
+    menuNode("publishing", "发布运营", false, "planned", 50),
+    menuNode("analytics", "数据分析", false, "planned", 60),
+    menuNode("workflow-tasks", "工作流任务", false, "planned", 70),
+  ],
+};
+
+const materialWorkspaceMenus: WorkspaceMenuListResponse = {
+  menus: [
+    ...contentStrategyWorkspaceMenus.menus.slice(0, 2),
+    {
+      ...menuNode("material-management", "素材管理", true, "active", 30),
+      children: [
+        {
+          ...menuNode("material-library", "素材库", true, "active", 10),
+          menu_type: "page",
+          module_key: "materials.library",
+        },
+      ],
+    },
     menuNode("production", "作品生产", false, "planned", 40),
     menuNode("publishing", "发布运营", false, "planned", 50),
     menuNode("analytics", "数据分析", false, "planned", 60),
@@ -542,6 +591,31 @@ const topicGeneratedScript: ScriptDetail = {
   updated_at: "2026-07-02T00:30:00Z",
 };
 
+const subtitleMaterial: Material = {
+  material_id: "abababab-abab-4aba-8aba-abababababab",
+  project_id: project.project_id,
+  material_type: "subtitle",
+  file_url: "https://cdn.example.com/subtitles/demo.vtt",
+  thumbnail_url: null,
+  file_name: "demo.vtt",
+  tags: ["字幕", "中英双语"],
+  metadata: {
+    language: "zh-CN",
+    subtitle_format: "vtt",
+    source_note: "人工整理",
+  },
+  usage_count: 0,
+  status: "active",
+  created_at: "2026-07-09T00:00:00Z",
+  updated_at: "2026-07-09T00:00:00Z",
+};
+
+const archivedSubtitleMaterial: Material = {
+  ...subtitleMaterial,
+  status: "archived",
+  updated_at: "2026-07-09T00:10:00Z",
+};
+
 const conversation: AgentConversation = {
   conversation_id: "55555555-5555-4555-8555-555555555555",
   project_id: project.project_id,
@@ -730,7 +804,11 @@ function mockScripts(response: ScriptListResponse) {
 }
 
 function mockTopics(response: ContentTopicListResponse = topicListResponse) {
-  vi.mocked(api.listContentTopics).mockResolvedValue(response);
+    vi.mocked(api.listContentTopics).mockResolvedValue(response);
+}
+
+function mockMaterials(materials: Material[] = []) {
+  vi.mocked(api.listMaterials).mockResolvedValue({ materials });
 }
 
 function mockTopicBatches(response: TopicGenerationBatchListResponse = { batches: [] }) {
@@ -775,11 +853,15 @@ describe("video-agent 视频工作台页面", () => {
     vi.mocked(api.getScript).mockResolvedValue(scriptDetail);
     vi.mocked(api.generateScript).mockResolvedValue(topicGeneratedScript);
     vi.mocked(api.createContentTopic).mockResolvedValue(ideaTopic);
+    vi.mocked(api.createMaterial).mockResolvedValue(subtitleMaterial);
     vi.mocked(api.deleteContentTopic).mockResolvedValue({
       topic_id: ideaTopic.topic_id,
       deleted_at: "2026-07-07T10:00:00Z",
     });
     vi.mocked(api.updateContentTopic).mockResolvedValue(ideaTopic);
+    vi.mocked(api.getMaterial).mockResolvedValue(subtitleMaterial);
+    vi.mocked(api.updateMaterial).mockResolvedValue(subtitleMaterial);
+    vi.mocked(api.updateMaterialStatus).mockResolvedValue(archivedSubtitleMaterial);
     vi.mocked(api.updateContentTopicStatus).mockResolvedValue({ ...ideaTopic, status: "approved" });
     vi.mocked(api.prepareScriptFromTopic).mockResolvedValue(preparedTopic);
     vi.mocked(api.createAgentConversation).mockResolvedValue(conversation);
@@ -801,6 +883,7 @@ describe("video-agent 视频工作台页面", () => {
       draft_summary: "草稿偏向 AI 工具教程、避坑和真实案例。",
     });
     vi.mocked(api.updateProjectStrategyProfile).mockResolvedValue(project);
+    mockMaterials();
   });
 
   it("展示 VEDIO-AGENT 品牌、中文标题和业务流程菜单", async () => {
@@ -831,6 +914,134 @@ describe("video-agent 视频工作台页面", () => {
     expect(within(menu).getByRole("button", { name: /脚本创作/ })).toBeEnabled();
     expect(within(menu).getByRole("button", { name: /内容策略/ })).toBeEnabled();
     expect(within(menu).getByRole("button", { name: /素材管理/ })).toBeDisabled();
+  });
+
+  it("从工作台菜单打开素材库画布空状态", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockMaterials([]);
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+
+    expect(await screen.findByRole("heading", { name: "素材库" })).toBeInTheDocument();
+    expect(screen.getByText("还没有素材")).toBeInTheDocument();
+    expect(screen.getByLabelText("素材画布")).toBeInTheDocument();
+    expect(screen.getByLabelText("素材资产浮层")).toBeInTheDocument();
+    expect(screen.getByLabelText("素材详情浮层")).toBeInTheDocument();
+    expect(api.listMaterials).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+      material_type: "all",
+      status: "active",
+      q: "",
+      tag: "",
+    });
+  });
+
+  it("素材库空状态点击开始登记后进入新建状态并聚焦名称", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockMaterials([]);
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "开始登记" }));
+
+    expect(screen.getByText("正在登记新素材")).toBeInTheDocument();
+    expect(screen.getByText("填写右侧表单后保存到当前账号素材库。")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByLabelText("素材名称")).toHaveFocus();
+    });
+  });
+
+  it("素材库画布展示字幕素材、资产浮层、详情浮层和底部工具栏", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockMaterials([subtitleMaterial]);
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+
+    expect(await screen.findByRole("heading", { name: "素材库" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /demo.vtt/ })).toBeInTheDocument();
+    expect(screen.getAllByText("字幕").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByLabelText("素材 URL")).toHaveValue(subtitleMaterial.file_url);
+    expect(screen.getByLabelText("画布工具栏")).toBeInTheDocument();
+    expect(screen.queryByText("Assets")).not.toBeInTheDocument();
+    expect(screen.queryByText("Detail")).not.toBeInTheDocument();
+    expect(screen.queryByText("语义检索")).not.toBeInTheDocument();
+    expect(screen.queryByText("分镜候选")).not.toBeInTheDocument();
+    expect(screen.queryByText("素材清单确认")).not.toBeInTheDocument();
+  });
+
+  it("素材库可新增素材并选中新素材", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockMaterials([]);
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "新增素材" }));
+    fireEvent.change(screen.getByLabelText("素材名称"), { target: { value: "demo.vtt" } });
+    fireEvent.change(screen.getByLabelText("素材 URL"), {
+      target: { value: "https://cdn.example.com/subtitles/demo.vtt" },
+    });
+    fireEvent.click(screen.getByLabelText("类型：字幕"));
+    fireEvent.change(screen.getByLabelText("标签"), { target: { value: "字幕, 中英双语" } });
+    fireEvent.change(screen.getByLabelText("字幕语言"), { target: { value: "zh-CN" } });
+    fireEvent.change(screen.getByLabelText("字幕格式"), { target: { value: "vtt" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存素材" }));
+
+    await waitFor(() => {
+      expect(api.createMaterial).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+        material_type: "subtitle",
+        file_url: "https://cdn.example.com/subtitles/demo.vtt",
+        thumbnail_url: null,
+        file_name: "demo.vtt",
+        tags: ["字幕", "中英双语"],
+        metadata: {
+          language: "zh-CN",
+          subtitle_format: "vtt",
+        },
+      });
+    });
+    expect(await screen.findByRole("button", { name: /demo.vtt/ })).toBeInTheDocument();
+  });
+
+  it("素材库可归档、查看归档并恢复素材", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockMaterials([subtitleMaterial]);
+    vi.mocked(api.updateMaterialStatus)
+      .mockResolvedValueOnce(archivedSubtitleMaterial)
+      .mockResolvedValueOnce(subtitleMaterial);
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /demo.vtt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "归档素材" }));
+
+    await waitFor(() => {
+      expect(api.updateMaterialStatus).toHaveBeenCalledWith(
+        expect.anything(),
+        subtitleMaterial.material_id,
+        "archived",
+      );
+    });
+    expect(screen.getByText("还没有素材")).toBeInTheDocument();
+
+    vi.mocked(api.listMaterials).mockResolvedValueOnce({ materials: [archivedSubtitleMaterial] });
+    fireEvent.click(screen.getByRole("button", { name: "已归档" }));
+    expect(await screen.findByRole("button", { name: /demo.vtt/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /demo.vtt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复素材" }));
+
+    await waitFor(() => {
+      expect(api.updateMaterialStatus).toHaveBeenLastCalledWith(
+        expect.anything(),
+        subtitleMaterial.material_id,
+        "active",
+      );
+    });
   });
 
   it("菜单加载失败时不回退旧智能体菜单", async () => {

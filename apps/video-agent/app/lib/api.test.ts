@@ -10,10 +10,12 @@ import {
   getApiBaseUrl,
   getLatestTopicQualityEvaluation,
   getLatestTopicGroupReview,
+  getMaterial,
   getScript,
   getScriptAgentTurnMetadata,
   listAgentMessages,
   listContentTopics,
+  listMaterials,
   listTopicGenerationBatches,
   listTopicGroups,
   listProjects,
@@ -21,11 +23,15 @@ import {
   listWorkspaceMenus,
   prepareScriptFromTopic,
   sendAgentMessage,
+  createMaterial,
   updateContentTopic,
   updateContentTopicStatus,
+  updateMaterial,
+  updateMaterialStatus,
   updateProjectStrategyProfile,
   updateScriptStatus,
 } from "./api";
+import type { MaterialPayload } from "./api";
 
 const strategyProfile = {
   target_audience: "内容运营负责人",
@@ -102,6 +108,36 @@ const contentTopicPayload = {
   score: contentTopic.score,
   score_reason: contentTopic.score_reason,
   tags: contentTopic.tags,
+};
+
+const material = {
+  material_id: "abababab-abab-4aba-8aba-abababababab",
+  project_id: project.project_id,
+  material_type: "subtitle",
+  file_url: "https://cdn.example.com/subtitles/demo.vtt",
+  thumbnail_url: "https://cdn.example.com/covers/demo.jpg",
+  file_name: "demo.vtt",
+  tags: ["字幕", "中英双语"],
+  metadata: {
+    language: "zh-CN",
+    subtitle_format: "vtt",
+  },
+  usage_count: 0,
+  status: "active",
+  created_at: "2026-07-09T00:00:00Z",
+  updated_at: "2026-07-09T00:00:00Z",
+} as const;
+
+const materialPayload: MaterialPayload = {
+  material_type: "subtitle",
+  file_url: "https://cdn.example.com/subtitles/demo.vtt",
+  thumbnail_url: "https://cdn.example.com/covers/demo.jpg",
+  file_name: "demo.vtt",
+  tags: ["字幕", "中英双语"],
+  metadata: {
+    language: "zh-CN",
+    subtitle_format: "vtt",
+  },
 };
 
 const topicGenerationBatch = {
@@ -563,6 +599,87 @@ describe("video-agent api client", () => {
     );
     expect(result.stats.idea).toBe(1);
     expect(result.topics[0].title).toBe(contentTopic.title);
+  });
+
+  it("请求素材列表时带类型、状态、关键词和标签筛选", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ materials: [material] }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await listMaterials(client, project.project_id, {
+      material_type: "subtitle",
+      status: "archived",
+      q: "demo",
+      tag: "字幕",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://api.test/api/projects/${project.project_id}/materials?type=subtitle&status=archived&q=demo&tag=%E5%AD%97%E5%B9%95`,
+      { headers: { accept: "application/json" } },
+    );
+    expect(result.materials[0].material_id).toBe(material.material_id);
+  });
+
+  it("创建、读取、编辑素材并更新状态", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(material, { status: 201 }))
+      .mockResolvedValueOnce(jsonResponse(material))
+      .mockResolvedValueOnce(jsonResponse({ ...material, file_name: "demo-updated.vtt" }))
+      .mockResolvedValueOnce(jsonResponse({ ...material, status: "archived" }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const created = await createMaterial(client, project.project_id, materialPayload);
+    const detail = await getMaterial(client, material.material_id);
+    const updated = await updateMaterial(client, material.material_id, {
+      ...materialPayload,
+      file_name: "demo-updated.vtt",
+    });
+    const archived = await updateMaterialStatus(client, material.material_id, "archived");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `http://api.test/api/projects/${project.project_id}/materials`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(materialPayload),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `http://api.test/api/materials/${material.material_id}`,
+      { headers: { accept: "application/json" } },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      `http://api.test/api/materials/${material.material_id}`,
+      {
+        method: "PUT",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ ...materialPayload, file_name: "demo-updated.vtt" }),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      `http://api.test/api/materials/${material.material_id}/status`,
+      {
+        method: "PUT",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "archived" }),
+      },
+    );
+    expect(created.material_id).toBe(material.material_id);
+    expect(detail.file_name).toBe("demo.vtt");
+    expect(updated.file_name).toBe("demo-updated.vtt");
+    expect(archived.status).toBe("archived");
   });
 
   it("请求选题生成批次列表", async () => {

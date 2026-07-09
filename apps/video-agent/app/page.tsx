@@ -10,6 +10,10 @@ import {
   ContentTopicSource,
   ContentTopicStats,
   ContentTopicStatus,
+  Material,
+  MaterialStatus,
+  MaterialStatusFilter,
+  MaterialType,
   PrepareScriptFromTopicResponse,
   Project,
   ScriptDetail,
@@ -26,14 +30,17 @@ import {
   createAgentConversation,
   createApiClient,
   createContentTopic,
+  createMaterial,
   createTopicGroupReview,
   deleteContentTopic,
   generateStrategyProfileDraft,
   generateScript,
   getLatestTopicQualityEvaluation,
   getLatestTopicGroupReview,
+  getMaterial,
   getScript,
   getScriptAgentTurnMetadata,
+  listMaterials,
   listProjects,
   listScripts,
   listContentTopics,
@@ -44,6 +51,8 @@ import {
   sendAgentMessage,
   updateContentTopic,
   updateContentTopicStatus,
+  updateMaterial,
+  updateMaterialStatus,
   updateProjectStrategyProfile,
   updateScriptStatus,
 } from "./lib/api";
@@ -66,11 +75,20 @@ import {
 } from "./pages/content-strategy/topicModel";
 import { ScriptCreationPage } from "./pages/script-creation/ScriptCreationPage";
 import { upsertSummary } from "./pages/script-creation/scriptModel";
+import { MaterialLibraryPage } from "./pages/material-library/MaterialLibraryPage";
+import {
+  defaultMaterialForm,
+  materialPayloadFromForm,
+  materialToForm,
+  type MaterialFormState,
+} from "./pages/material-library/materialModel";
 
 const contentStrategyMenuKey = "content-strategy";
 const accountStrategyMenuKey = "account-strategy";
 const topicHistoryMenuKey = "topic-history";
 const topicGeneratorMenuKey = "topic-generator";
+const materialManagementMenuKey = "material-management";
+const materialLibraryMenuKey = "material-library";
 const scriptCreationMenuKey = "script-creation";
 const scriptGeneratorMenuKey = "script-generator";
 const defaultMenuKey = contentStrategyMenuKey;
@@ -157,6 +175,25 @@ export default function Home() {
   const [selectedScript, setSelectedScript] = useState<ScriptDetail | null>(null);
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(null);
   const [topics, setTopics] = useState<ContentTopic[]>([]);
+  const [materials, setMaterials] = useState<Material[]>([]);
+  const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(null);
+  const [loadingMaterials, setLoadingMaterials] = useState(false);
+  const [materialError, setMaterialError] = useState("");
+  const [materialActionError, setMaterialActionError] = useState("");
+  const [savingMaterial, setSavingMaterial] = useState(false);
+  const [creatingMaterial, setCreatingMaterial] = useState(false);
+  const [materialFilters, setMaterialFilters] = useState<{
+    material_type: MaterialType | "all";
+    status: MaterialStatusFilter;
+    q: string;
+    tag: string;
+  }>({
+    material_type: "all",
+    status: "active",
+    q: "",
+    tag: "",
+  });
+  const [materialForm, setMaterialForm] = useState<MaterialFormState>(defaultMaterialForm);
   const [topicStats, setTopicStats] = useState<ContentTopicStats>(emptyTopicStats);
   const [topicBatches, setTopicBatches] = useState<TopicGenerationBatchSummary[]>([]);
   const [topicGroups, setTopicGroups] = useState<TopicGroupSummary[]>([]);
@@ -263,6 +300,8 @@ export default function Home() {
       ? topicBatchRootId(activeTopicBatchId, topicBatches)
       : null;
   const selectedTopic = topics.find((topic) => topic.topic_id === selectedTopicId) || null;
+  const selectedMaterial =
+    materials.find((material) => material.material_id === selectedMaterialId) || null;
   const writesDisabled = apiAvailable === false;
   const selectedSubMenuKey =
     selectedMenuKey === contentStrategyMenuKey
@@ -273,6 +312,8 @@ export default function Home() {
         : topicGeneratorMenuKey
       : selectedMenuKey === scriptCreationMenuKey
         ? scriptGeneratorMenuKey
+        : selectedMenuKey === materialManagementMenuKey
+          ? materialLibraryMenuKey
         : null;
 
   useEffect(() => {
@@ -670,6 +711,61 @@ export default function Home() {
   ]);
 
   useEffect(() => {
+    if (!selectedProjectId || selectedMenuKey !== materialManagementMenuKey) {
+      if (!selectedProjectId) {
+        setMaterials([]);
+        setSelectedMaterialId(null);
+        setMaterialForm(defaultMaterialForm);
+      }
+      return;
+    }
+
+    let active = true;
+
+    async function loadProjectMaterials() {
+      setLoadingMaterials(true);
+      setMaterialError("");
+
+      try {
+        const response = await listMaterials(client, selectedProjectId, materialFilters);
+        if (!active) {
+          return;
+        }
+        setMaterials(response.materials);
+        let nextSelected =
+          response.materials.find((material) => material.material_id === selectedMaterialId) ||
+          response.materials[0] ||
+          null;
+        setSelectedMaterialId((currentMaterialId) => {
+          const currentMaterial = response.materials.find(
+            (material) => material.material_id === currentMaterialId,
+          );
+          if (currentMaterial) {
+            nextSelected = currentMaterial;
+            return currentMaterialId;
+          }
+          return response.materials[0]?.material_id || null;
+        });
+        setMaterialForm(nextSelected ? materialToForm(nextSelected) : defaultMaterialForm);
+      } catch (error) {
+        if (active) {
+          setMaterialError(errorToMessage(error));
+        }
+      } finally {
+        if (active) {
+          setLoadingMaterials(false);
+        }
+      }
+    }
+
+    loadProjectMaterials();
+
+    return () => {
+      active = false;
+    };
+  }, [client, materialFilters, selectedMenuKey, selectedProjectId]);
+
+  useEffect(() => {
     selectedProjectIdRef.current = selectedProjectId;
     setAgentConversationId(null);
     setAgentMessages([]);
@@ -703,6 +799,14 @@ export default function Home() {
     setTopicQualityEvaluation(null);
     setTopicQualityLoading(false);
     setTopicQualityError("");
+    setMaterials([]);
+    setSelectedMaterialId(null);
+    setMaterialError("");
+    setMaterialActionError("");
+    setSavingMaterial(false);
+    setCreatingMaterial(false);
+    setMaterialFilters({ material_type: "all", status: "active", q: "", tag: "" });
+    setMaterialForm(defaultMaterialForm);
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -768,6 +872,10 @@ export default function Home() {
     }
     if (menuKey === scriptGeneratorMenuKey) {
       setSelectedMenuKey(scriptCreationMenuKey);
+      return;
+    }
+    if (menuKey === materialLibraryMenuKey) {
+      setSelectedMenuKey(materialManagementMenuKey);
     }
   }
 
@@ -775,6 +883,114 @@ export default function Home() {
     setHistoryTopicBatchId(batchId);
     setTopicBatchFilter(batchId);
     setTopicBatchViewMode("batch");
+  }
+
+  async function handleSelectMaterial(materialId: string) {
+    setSelectedMaterialId(materialId);
+    setCreatingMaterial(false);
+    setMaterialActionError("");
+    const localMaterial = materials.find((material) => material.material_id === materialId);
+    if (localMaterial) {
+      setMaterialForm(materialToForm(localMaterial));
+      return;
+    }
+
+    try {
+      const material = await getMaterial(client, materialId);
+      setMaterials((currentMaterials) => {
+        const withoutMaterial = currentMaterials.filter(
+          (currentMaterial) => currentMaterial.material_id !== material.material_id,
+        );
+        return [material, ...withoutMaterial];
+      });
+      setMaterialForm(materialToForm(material));
+    } catch (error) {
+      setMaterialActionError(errorToMessage(error));
+    }
+  }
+
+  function handleNewMaterial() {
+    setSelectedMaterialId(null);
+    setCreatingMaterial(true);
+    setMaterialActionError("");
+    setMaterialForm(defaultMaterialForm);
+  }
+
+  async function handleSaveMaterial() {
+    if (!selectedProjectId) {
+      setMaterialActionError("请先选择账号");
+      return;
+    }
+
+    const payload = materialPayloadFromForm(materialForm);
+    if (!payload.file_name) {
+      setMaterialActionError("素材名称不能为空");
+      return;
+    }
+    if (!payload.file_url) {
+      setMaterialActionError("素材 URL 不能为空");
+      return;
+    }
+
+    setSavingMaterial(true);
+    setMaterialActionError("");
+
+    try {
+      const savedMaterial = selectedMaterialId
+        ? await updateMaterial(client, selectedMaterialId, payload)
+        : await createMaterial(client, selectedProjectId, payload);
+      setMaterials((currentMaterials) => {
+        const withoutSaved = currentMaterials.filter(
+          (material) => material.material_id !== savedMaterial.material_id,
+        );
+        return [savedMaterial, ...withoutSaved];
+      });
+      setSelectedMaterialId(savedMaterial.material_id);
+      setCreatingMaterial(false);
+      setMaterialForm(materialToForm(savedMaterial));
+    } catch (error) {
+      setMaterialActionError(errorToMessage(error));
+    } finally {
+      setSavingMaterial(false);
+    }
+  }
+
+  async function handleUpdateMaterialStatus(status: MaterialStatus) {
+    if (!selectedMaterial || selectedMaterial.status === status) {
+      return;
+    }
+
+    setSavingMaterial(true);
+    setMaterialActionError("");
+
+    try {
+      const updatedMaterial = await updateMaterialStatus(
+        client,
+        selectedMaterial.material_id,
+        status,
+      );
+      const shouldRemainVisible =
+        materialFilters.status === "all" || materialFilters.status === updatedMaterial.status;
+      setMaterials((currentMaterials) => {
+        const withoutUpdated = currentMaterials.filter(
+          (material) => material.material_id !== updatedMaterial.material_id,
+        );
+        return shouldRemainVisible ? [updatedMaterial, ...withoutUpdated] : withoutUpdated;
+      });
+      if (shouldRemainVisible) {
+        setSelectedMaterialId(updatedMaterial.material_id);
+        setCreatingMaterial(false);
+        setMaterialForm(materialToForm(updatedMaterial));
+      } else {
+        setSelectedMaterialId(null);
+        setCreatingMaterial(false);
+        setMaterialForm(defaultMaterialForm);
+      }
+    } catch (error) {
+      setMaterialActionError(errorToMessage(error));
+    } finally {
+      setSavingMaterial(false);
+    }
   }
 
   function handleNewScript() {
@@ -1470,6 +1686,24 @@ export default function Home() {
           onPrepareScript={handlePrepareScriptFromTopic}
           setAgentDraft={setTopicAgentDraft}
           onSubmitAgentMessage={handleSendTopicAgentMessage}
+        />
+      ) : selectedMenuKey === materialManagementMenuKey ? (
+        <MaterialLibraryPage
+          actionError={materialActionError}
+          error={materialError}
+          filters={materialFilters}
+          form={materialForm}
+          creatingMaterial={creatingMaterial}
+          loading={loadingMaterials}
+          materials={materials}
+          saving={savingMaterial}
+          selectedMaterial={selectedMaterial}
+          onFilterChange={setMaterialFilters}
+          onFormChange={setMaterialForm}
+          onNewMaterial={handleNewMaterial}
+          onSaveMaterial={handleSaveMaterial}
+          onSelectMaterial={handleSelectMaterial}
+          onUpdateStatus={handleUpdateMaterialStatus}
         />
       ) : (
         <ScriptCreationPage

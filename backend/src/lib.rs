@@ -10,7 +10,8 @@ use chrono::{DateTime, Utc};
 use novex_model::{LLMError, LLMJsonSchema, LLMPrompt, OpenAIClient, OpenAIConfig};
 use repositories::{
     ConversationRepository, ConversationRepositoryError, CreateContentTopicInput,
-    CreateProjectInput, PostgresConversationRepository, PostgresProjectRepository,
+    CreateProjectInput, MaterialRepository, MaterialRepositoryError,
+    PostgresConversationRepository, PostgresMaterialRepository, PostgresProjectRepository,
     PostgresScriptRepository, PostgresTopicRepository, PostgresWorkspaceMenuRepository,
     ProjectRepository, ProjectRepositoryError, ScriptRepositoryError, TopicRepository,
     TopicRepositoryError, UpdateContentTopicInput, UpdateProjectStrategyProfileInput,
@@ -30,15 +31,16 @@ use crate::agents::models::{
     AgentMessageResponse, AgentRunResponse, AgentTurnResponseBody, ContentTopicFilter,
     ContentTopicListResponse, ContentTopicResponse, ContentTopicStatsResponse, ContentTopicStatus,
     CreateAgentConversationRequest, CreateContentTopicRequest, CreateProjectRequest,
-    GenerateScriptRequest, PrepareScriptFromTopicRequest, PrepareScriptFromTopicResponse,
-    ProjectListResponse, ProjectResponse, ScriptListFilter, ScriptListResponse, ScriptResponse,
-    SendAgentMessageRequest, StrategyProfileDraftRequest, StrategyProfileDraftResponse,
-    TopicGenerationBatchListResponse, TopicGenerationBatchSummaryResponse, TopicGroupListQuery,
-    TopicGroupListResponse, TopicGroupSummaryResponse, TopicQualityEvaluationResponse,
-    TopicReviewSnapshotResponse, TopicScriptRequestPreview, UpdateContentTopicRequest,
-    UpdateContentTopicStatusRequest, UpdateProjectStrategyProfileRequest,
-    UpdateScriptStatusRequest, UpdateScriptStatusResponse, WorkspaceMenuListResponse,
-    WorkspaceMenuNodeResponse,
+    GenerateScriptRequest, MaterialListQuery, MaterialListResponse, MaterialPayloadRequest,
+    MaterialResponse, MaterialStatusRequest, PrepareScriptFromTopicRequest,
+    PrepareScriptFromTopicResponse, ProjectListResponse, ProjectResponse, ScriptListFilter,
+    ScriptListResponse, ScriptResponse, SendAgentMessageRequest, StrategyProfileDraftRequest,
+    StrategyProfileDraftResponse, TopicGenerationBatchListResponse,
+    TopicGenerationBatchSummaryResponse, TopicGroupListQuery, TopicGroupListResponse,
+    TopicGroupSummaryResponse, TopicQualityEvaluationResponse, TopicReviewSnapshotResponse,
+    TopicScriptRequestPreview, UpdateContentTopicRequest, UpdateContentTopicStatusRequest,
+    UpdateProjectStrategyProfileRequest, UpdateScriptStatusRequest, UpdateScriptStatusResponse,
+    WorkspaceMenuListResponse, WorkspaceMenuNodeResponse,
 };
 
 pub mod agents;
@@ -169,6 +171,15 @@ impl AppState {
             .ok_or_else(|| ScriptApiError::State("database pool is not configured".to_string()))?;
 
         Ok(PostgresTopicRepository::new(pool))
+    }
+
+    fn material_repository(&self) -> Result<PostgresMaterialRepository, ScriptApiError> {
+        let pool = self
+            .pg_pool
+            .clone()
+            .ok_or_else(|| ScriptApiError::State("database pool is not configured".to_string()))?;
+
+        Ok(PostgresMaterialRepository::new(pool))
     }
 
     fn agent_runtime(&self) -> Result<AgentRuntime, ScriptApiError> {
@@ -323,6 +334,18 @@ pub fn build_app_with_state(state: AppState) -> Router {
         .route(
             "/api/projects/:project_id/topics",
             get(list_topics).post(create_topic),
+        )
+        .route(
+            "/api/projects/:project_id/materials",
+            get(list_materials).post(create_material),
+        )
+        .route(
+            "/api/materials/:material_id",
+            get(get_material).put(update_material),
+        )
+        .route(
+            "/api/materials/:material_id/status",
+            put(update_material_status),
         )
         .route(
             "/api/projects/:project_id/topic-generation-batches",
@@ -793,6 +816,82 @@ async fn list_topics(
     }))
 }
 
+async fn create_material(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    ValidJson(request): ValidJson<MaterialPayloadRequest>,
+) -> Result<(StatusCode, Json<MaterialResponse>), ScriptApiError> {
+    ensure_project_exists(&state, project_id).await?;
+    let input = request
+        .into_create_input(project_id)
+        .map_err(ScriptApiError::MaterialValidation)?;
+    let material = state.material_repository()?.create_material(input).await?;
+
+    Ok((StatusCode::CREATED, Json(MaterialResponse::from(material))))
+}
+
+async fn list_materials(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    Query(query): Query<MaterialListQuery>,
+) -> Result<Json<MaterialListResponse>, ScriptApiError> {
+    ensure_project_exists(&state, project_id).await?;
+    let filter = query
+        .into_filter()
+        .map_err(ScriptApiError::MaterialValidation)?;
+    let materials = state
+        .material_repository()?
+        .list_materials(project_id, filter)
+        .await?;
+
+    Ok(Json(MaterialListResponse {
+        materials: materials.into_iter().map(MaterialResponse::from).collect(),
+    }))
+}
+
+async fn get_material(
+    State(state): State<AppState>,
+    Path(material_id): Path<Uuid>,
+) -> Result<Json<MaterialResponse>, ScriptApiError> {
+    let material = state
+        .material_repository()?
+        .get_material(material_id)
+        .await?;
+
+    Ok(Json(MaterialResponse::from(material)))
+}
+
+async fn update_material(
+    State(state): State<AppState>,
+    Path(material_id): Path<Uuid>,
+    ValidJson(request): ValidJson<MaterialPayloadRequest>,
+) -> Result<Json<MaterialResponse>, ScriptApiError> {
+    let repository = state.material_repository()?;
+    let current = repository.get_material(material_id).await?;
+    let input = request
+        .into_update_input(current.project_id)
+        .map_err(ScriptApiError::MaterialValidation)?;
+    let material = repository.update_material(material_id, input).await?;
+
+    Ok(Json(MaterialResponse::from(material)))
+}
+
+async fn update_material_status(
+    State(state): State<AppState>,
+    Path(material_id): Path<Uuid>,
+    ValidJson(request): ValidJson<MaterialStatusRequest>,
+) -> Result<Json<MaterialResponse>, ScriptApiError> {
+    let status = request
+        .parse_status()
+        .map_err(ScriptApiError::MaterialValidation)?;
+    let material = state
+        .material_repository()?
+        .update_material_status(material_id, status)
+        .await?;
+
+    Ok(Json(MaterialResponse::from(material)))
+}
+
 async fn list_topic_generation_batches(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
@@ -1205,10 +1304,12 @@ enum ScriptApiError {
     Agent(ScriptAgentError),
     AgentRuntime(AgentRuntimeError),
     ProjectRepository(ProjectRepositoryError),
+    MaterialRepository(MaterialRepositoryError),
     ConversationRepository(ConversationRepositoryError),
     TopicRepository(TopicRepositoryError),
     WorkspaceMenuRepository(WorkspaceMenuRepositoryError),
     ProjectValidation(String),
+    MaterialValidation(String),
     ConversationValidation(String),
     TopicValidation(String),
     StrategyDraftLlm(LLMError),
@@ -1225,6 +1326,12 @@ impl From<ScriptAgentError> for ScriptApiError {
 impl From<ProjectRepositoryError> for ScriptApiError {
     fn from(error: ProjectRepositoryError) -> Self {
         Self::ProjectRepository(error)
+    }
+}
+
+impl From<MaterialRepositoryError> for ScriptApiError {
+    fn from(error: MaterialRepositoryError) -> Self {
+        Self::MaterialRepository(error)
     }
 }
 
@@ -1263,6 +1370,9 @@ impl IntoResponse for ScriptApiError {
             Self::ProjectRepository(error) => {
                 project_repository_error_response(error).into_response()
             }
+            Self::MaterialRepository(error) => {
+                material_repository_error_response(error).into_response()
+            }
             Self::ConversationRepository(error) => {
                 conversation_repository_error_response(error).into_response()
             }
@@ -1273,6 +1383,9 @@ impl IntoResponse for ScriptApiError {
             )
                 .into_response(),
             Self::ProjectValidation(message) => {
+                (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+            }
+            Self::MaterialValidation(message) => {
                 (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
             }
             Self::ConversationValidation(message) => {
@@ -1347,6 +1460,25 @@ fn project_repository_error_response(
         ProjectRepositoryError::Storage(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "项目存储失败", "details": message })),
+        ),
+    }
+}
+
+fn material_repository_error_response(
+    error: MaterialRepositoryError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match error {
+        MaterialRepositoryError::MaterialNotFound(material_id) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "素材不存在", "material_id": material_id })),
+        ),
+        MaterialRepositoryError::ProjectNotFound(project_id) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "项目不存在", "project_id": project_id })),
+        ),
+        MaterialRepositoryError::Storage(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "素材存储失败", "details": message })),
         ),
     }
 }

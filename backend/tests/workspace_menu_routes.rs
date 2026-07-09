@@ -208,7 +208,22 @@ async fn workspace_menu_route_returns_visible_sorted_tree() {
         .iter()
         .find(|menu| menu["menu_key"] == "material-management")
         .expect("material management menu should exist");
-    assert_eq!(material_menu["children"], json!([]));
+    assert_eq!(material_menu["is_enabled"], true);
+    assert_eq!(material_menu["status"], "active");
+    assert_eq!(material_menu["metadata"], json!({ "phase": 3 }));
+    assert_eq!(material_menu["children"][0]["menu_key"], "material-library");
+    assert_eq!(material_menu["children"][0]["label"], "素材库");
+    assert_eq!(
+        material_menu["children"][0]["route_path"],
+        "/materials/library"
+    );
+    assert_eq!(material_menu["children"][0]["menu_type"], "page");
+    assert_eq!(
+        material_menu["children"][0]["module_key"],
+        "materials.library"
+    );
+    assert_eq!(material_menu["children"][0]["is_enabled"], true);
+    assert_eq!(material_menu["children"][0]["status"], "active");
 
     let body_text = body.to_string();
     assert!(!body_text.contains("material-search"));

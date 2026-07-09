@@ -366,6 +366,24 @@ const contentStrategyWorkspaceMenus = [
   menuNode("workflow-tasks", "工作流任务", false, "planned", 70),
 ];
 
+const materialWorkspaceMenus = [
+  ...contentStrategyWorkspaceMenus.slice(0, 2),
+  {
+    ...menuNode("material-management", "素材管理", true, "active", 30),
+    children: [
+      {
+        ...menuNode("material-library", "素材库", true, "active", 10),
+        menu_type: "page",
+        module_key: "materials.library",
+      },
+    ],
+  },
+  menuNode("production", "作品生产", false, "planned", 40),
+  menuNode("publishing", "发布运营", false, "planned", 50),
+  menuNode("analytics", "数据分析", false, "planned", 60),
+  menuNode("workflow-tasks", "工作流任务", false, "planned", 70),
+];
+
 const ideaTopic = {
   topic_id: "44444444-4444-4444-8444-444444444444",
   project_id: projectId,
@@ -550,6 +568,21 @@ const topicScriptDetail = {
     },
   ],
   updated_at: "2026-07-02T00:30:00Z",
+};
+
+const subtitleMaterial = {
+  material_id: "abababab-abab-4aba-8aba-abababababab",
+  project_id: projectId,
+  material_type: "subtitle",
+  file_url: "https://cdn.example.com/subtitles/demo.vtt",
+  thumbnail_url: null,
+  file_name: "demo.vtt",
+  tags: ["字幕", "中英双语"],
+  metadata: { language: "zh-CN", subtitle_format: "vtt" },
+  usage_count: 0,
+  status: "active",
+  created_at: "2026-07-09T00:00:00Z",
+  updated_at: "2026-07-09T00:00:00Z",
 };
 
 function menuNode(menuKey: string, label: string, isEnabled: boolean, status: string, sortOrder: number) {
@@ -886,6 +919,34 @@ async function mockEmptyContentStrategyWorkflow(page: Page) {
       contentType: "application/json",
       json: { scripts: [], total: 0, limit: 20, offset: 0 },
     });
+  });
+}
+
+async function mockMaterialLibraryWorkflow(page: Page) {
+  await page.unroute(/\/api\/video-workspace\/menus$/);
+  await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { menus: materialWorkspaceMenus } });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/topic-generation-batches$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { batches: [] } });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/topic-groups(\\?.*)?$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { topic_groups: [] } });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/topics(\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: { topics: [], stats: { total: 0, idea: 0, approved: 0, scripted: 0, archived: 0 } },
+    });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/scripts(\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: { scripts: [], total: 0, limit: 20, offset: 0 },
+    });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/materials(\\?.*)?$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { materials: [subtitleMaterial] } });
   });
 }
 
@@ -1277,4 +1338,46 @@ test("内容策略空选题池布局贴近原型顶部", async ({ page }) => {
   expect(filtersTop).toBeLessThanOrEqual(180);
   expect(emptyTop).toBeLessThanOrEqual(260);
   expect(emptyHeight).toBeLessThanOrEqual(150);
+});
+
+test("素材库画布展示第一版素材管理闭环", async ({ page }) => {
+  await mockMaterialLibraryWorkflow(page);
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "视频工作台菜单" }).getByRole("button", { name: /素材管理/ }).click();
+
+  await expect(page.getByRole("heading", { name: "素材库" })).toBeVisible();
+  const headingInset = await page.locator(".materialLibraryPage").evaluate((pageElement) => {
+    const pageRect = pageElement.getBoundingClientRect();
+    const headingRect = pageElement.querySelector("h1")?.getBoundingClientRect();
+    return headingRect ? Math.round(headingRect.left - pageRect.left) : null;
+  });
+  expect(headingInset).not.toBeNull();
+  expect(headingInset!).toBeGreaterThanOrEqual(16);
+  await expect(page.getByLabel("素材画布")).toBeVisible();
+  await expect(page.getByLabel("素材资产浮层")).toBeVisible();
+  await expect(page.getByLabel("素材详情浮层")).toBeVisible();
+  await expect(page.getByLabel("画布工具栏")).toBeVisible();
+  await expect(page.locator(".materialCanvasWorkspace canvas")).toBeVisible();
+  const canvasCoverage = await page.locator(".materialCanvasWorkspace").evaluate((workspace) => {
+    const workspaceRect = workspace.getBoundingClientRect();
+    const canvasRect = workspace.querySelector("canvas")?.getBoundingClientRect();
+    const detailRect = workspace.querySelector(".materialDetailPanel")?.getBoundingClientRect();
+    return canvasRect && detailRect
+      ? {
+          canvasRightGap: Math.round(workspaceRect.right - canvasRect.right),
+          canvasBottomGap: Math.round(workspaceRect.bottom - canvasRect.bottom),
+          detailCoveredByCanvas: canvasRect.right >= detailRect.right - 1,
+        }
+      : null;
+  });
+  expect(canvasCoverage).not.toBeNull();
+  expect(canvasCoverage!.canvasRightGap).toBeLessThanOrEqual(2);
+  expect(canvasCoverage!.canvasBottomGap).toBeLessThanOrEqual(2);
+  expect(canvasCoverage!.detailCoveredByCanvas).toBe(true);
+  await expect(page.getByRole("button", { name: /demo\.vtt/ })).toBeVisible();
+  await expect(page.getByText("字幕").first()).toBeVisible();
+  await expect(page.getByLabel("素材 URL")).toBeVisible();
+  await expect(page.getByText("语义检索")).toHaveCount(0);
+  await expect(page.getByText("分镜候选")).toHaveCount(0);
+  await expect(page.getByText("素材清单确认")).toHaveCount(0);
 });

@@ -184,6 +184,7 @@ async fn migrations_create_video_agent_core_schema() {
 
     for index in [
         "idx_materials_project",
+        "idx_materials_project_status_updated",
         "idx_scripts_project",
         "idx_scenes_script",
         "idx_generation_tasks_status",
@@ -210,6 +211,35 @@ async fn migrations_create_video_agent_core_schema() {
         );
     }
 
+    assert!(
+        column_exists(&test_pool, "materials", "status").await,
+        "materials.status should exist"
+    );
+    assert!(
+        constraint_exists(&test_pool, "materials", "materials_status_check").await,
+        "materials.status should be constrained"
+    );
+    let material_project_id = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO projects (id, name, positioning, description)
+        VALUES ($1, '测试账号', '', '')
+        "#,
+    )
+    .bind(material_project_id)
+    .execute(&test_pool)
+    .await
+    .expect("project fixture should be inserted");
+    sqlx::query(
+        r#"
+        INSERT INTO materials (project_id, material_type, file_url, file_name)
+        VALUES ($1, 'subtitle', 'https://cdn.example.com/subtitles/demo.vtt', 'demo.vtt')
+        "#,
+    )
+    .bind(material_project_id)
+    .execute(&test_pool)
+    .await
+    .expect("subtitle material should be accepted");
     assert!(
         constraint_exists(&test_pool, "scripts", "scripts_status_check").await,
         "scripts.status should be constrained to known states"
@@ -357,6 +387,40 @@ async fn migrations_create_video_agent_core_schema() {
     .expect("content strategy seed query should run");
     assert_eq!(content_strategy, (true, "active".to_string()));
 
+    let material_management = sqlx::query_as::<_, (bool, String)>(
+        r#"
+        SELECT is_enabled, status
+        FROM video_workspace_menus
+        WHERE menu_key = 'material-management'
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .expect("material management seed query should run");
+    assert_eq!(material_management, (true, "active".to_string()));
+
+    let material_library = sqlx::query_as::<_, (String, String, bool, String)>(
+        r#"
+        SELECT child.menu_key, child.label, child.is_enabled, child.status
+        FROM video_workspace_menus child
+        JOIN video_workspace_menus parent ON parent.id = child.parent_id
+        WHERE parent.menu_key = 'material-management'
+          AND child.menu_key = 'material-library'
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .expect("material library child menu seed query should run");
+    assert_eq!(
+        material_library,
+        (
+            "material-library".to_string(),
+            "素材库".to_string(),
+            true,
+            "active".to_string()
+        )
+    );
+
     let content_strategy_children = sqlx::query_as::<_, (String, String, bool, String)>(
         r#"
         SELECT child.menu_key, child.label, child.is_enabled, child.status
@@ -409,7 +473,7 @@ async fn migrations_create_video_agent_core_schema() {
     .fetch_one(&test_pool)
     .await
     .expect("planned menu seed query should run");
-    assert_eq!(planned_top_level_count, 5);
+    assert_eq!(planned_top_level_count, 4);
 
     let script_child_count = sqlx::query_scalar::<_, i64>(
         r#"
