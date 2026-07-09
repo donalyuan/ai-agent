@@ -451,6 +451,7 @@ describe("getApiBaseUrl", () => {
     } else {
       process.env.NEXT_PUBLIC_API_BASE_URL = originalValue;
     }
+    vi.unstubAllGlobals();
   });
 
   it("默认使用本地 API 端口", () => {
@@ -459,8 +460,23 @@ describe("getApiBaseUrl", () => {
     expect(getApiBaseUrl()).toBe("http://localhost:18180");
   });
 
+  it("未配置环境变量时使用当前页面内网 hostname 派生 API 端口", () => {
+    delete process.env.NEXT_PUBLIC_API_BASE_URL;
+    vi.stubGlobal("location", new URL("http://10.1.31.7:18183/"));
+
+    expect(getApiBaseUrl()).toBe("http://10.1.31.7:18180");
+  });
+
+  it("未配置环境变量时使用当前页面回环 hostname 派生 API 端口", () => {
+    delete process.env.NEXT_PUBLIC_API_BASE_URL;
+    vi.stubGlobal("location", new URL("http://127.0.0.1:18183/"));
+
+    expect(getApiBaseUrl()).toBe("http://127.0.0.1:18180");
+  });
+
   it("使用环境变量覆盖，并移除结尾斜杠", () => {
     process.env.NEXT_PUBLIC_API_BASE_URL = "http://api.example.test/";
+    vi.stubGlobal("location", new URL("http://10.1.31.7:18183/"));
 
     expect(getApiBaseUrl()).toBe("http://api.example.test");
   });

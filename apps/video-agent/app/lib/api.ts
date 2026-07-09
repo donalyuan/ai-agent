@@ -482,8 +482,20 @@ export class ApiError extends Error {
   }
 }
 
+const defaultApiPort = "18180";
+const localApiBaseUrl = `http://localhost:${defaultApiPort}`;
+
+function getDefaultApiBaseUrl() {
+  const currentLocation = globalThis.location;
+  if (currentLocation?.protocol && currentLocation.hostname) {
+    return `${currentLocation.protocol}//${currentLocation.hostname}:${defaultApiPort}`;
+  }
+
+  return localApiBaseUrl;
+}
+
 export function getApiBaseUrl() {
-  return (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:18180").replace(/\/+$/, "");
+  return (process.env.NEXT_PUBLIC_API_BASE_URL || getDefaultApiBaseUrl()).replace(/\/+$/, "");
 }
 
 export function createApiClient(options: Partial<ApiClient> = {}): ApiClient {

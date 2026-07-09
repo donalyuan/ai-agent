@@ -98,7 +98,6 @@ services:
     volumes:
       - ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/apps/video-agent:/app
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:18180
       NEXT_PUBLIC_WORKER_BASE_URL: http://localhost:18181
     depends_on:
       ai-agent-api:

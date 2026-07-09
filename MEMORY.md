@@ -63,6 +63,7 @@
 - 当前服务端口：API `18180->8080`，Video Worker `18181->8081`，Admin `18182->3000`，Video Agent 工作台 `18183->3000`
 - Compose 服务名：`ai-agent-api`、`ai-agent-video-worker`、`ai-agent-admin`、`ai-agent-video-agent`
 - 本项目服务容器内工作目录统一为 `/app`
+- `apps/video-agent` 本地开发默认不再通过 Compose 注入 `NEXT_PUBLIC_API_BASE_URL=http://localhost:18180`；浏览器端未显式配置 `NEXT_PUBLIC_API_BASE_URL` 时，按当前页面 `hostname` 派生同机 API 地址 `<protocol>//<hostname>:18180`，以支持 `http://<本机内网IP>:18183` 访问工作台并请求同机 API。
 
 ### 六大Agent
 1. **选题Agent**: 热点分析 + 爆款选题生成
