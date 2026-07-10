@@ -167,6 +167,84 @@ export type MaterialFilters = {
   tag?: string;
 };
 
+export type AssetGenerationProvider = "gpt-image-2" | "jimeng";
+export type AssetGenerationTaskType = "image_candidates" | "video_draft" | "video_generation";
+export type AssetGenerationTaskStatus =
+  | "draft"
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed";
+export type SceneAssetCandidateType = "image" | "video";
+export type SceneAssetCandidateSource = "existing_material" | "ai_generated" | "video_task";
+export type SceneAssetCandidateStatus = "candidate" | "selected" | "rejected" | "failed";
+
+export type AssetGenerationRequestPayload = {
+  provider: AssetGenerationProvider;
+  image_candidates_per_scene: number;
+  use_reference_materials: boolean;
+};
+
+export type AssetGenerationPlanResponse = {
+  script_id: string;
+  scene_count: number;
+  image_candidate_count: number;
+  max_image_candidate_count: number;
+  provider: AssetGenerationProvider;
+  enabled_providers: AssetGenerationProvider[];
+  reference_material_count: number;
+  video_task_count: number;
+  can_create: boolean;
+  warnings: string[];
+};
+
+export type AssetGenerationTask = {
+  task_id: string;
+  project_id: string;
+  script_id: string | null;
+  scene_id: string | null;
+  provider: AssetGenerationProvider;
+  task_type: AssetGenerationTaskType;
+  status: AssetGenerationTaskStatus;
+  candidate_count: number;
+  reference_material_ids: string[];
+  params: Record<string, unknown>;
+  result: Record<string, unknown>;
+  error_message: string | null;
+  retry_count: number;
+  dismissed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AssetGenerationTaskListResponse = {
+  script_id: string;
+  tasks: AssetGenerationTask[];
+};
+
+export type SceneAssetCandidate = {
+  candidate_id: string;
+  project_id: string;
+  script_id: string;
+  scene_id: string;
+  material_id: string | null;
+  candidate_type: SceneAssetCandidateType;
+  source: SceneAssetCandidateSource;
+  status: SceneAssetCandidateStatus;
+  rank: number;
+  generation_task_id: string | null;
+  metadata: Record<string, unknown>;
+  file_url: string | null;
+  thumbnail_url: string | null;
+  file_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SceneAssetCandidateListResponse = {
+  candidates: SceneAssetCandidate[];
+};
+
 export type ContentTopicSnapshot = {
   topic_id: string;
   title: string;
@@ -617,7 +695,10 @@ export function listMaterials(
   return request<MaterialListResponse>(
     client,
     `/api/projects/${projectId}/materials${query ? `?${query}` : ""}`,
-  );
+  ).then((response) => ({
+    ...response,
+    materials: response.materials.map((material) => normalizeMaterialUrls(client, material)),
+  }));
 }
 
 export function createMaterial(
@@ -628,11 +709,13 @@ export function createMaterial(
   return request<Material>(client, `/api/projects/${projectId}/materials`, {
     method: "POST",
     body: payload,
-  });
+  }).then((material) => normalizeMaterialUrls(client, material));
 }
 
 export function getMaterial(client: ApiClient, materialId: string) {
-  return request<Material>(client, `/api/materials/${materialId}`);
+  return request<Material>(client, `/api/materials/${materialId}`).then((material) =>
+    normalizeMaterialUrls(client, material),
+  );
 }
 
 export function updateMaterial(
@@ -643,7 +726,7 @@ export function updateMaterial(
   return request<Material>(client, `/api/materials/${materialId}`, {
     method: "PUT",
     body: payload,
-  });
+  }).then((material) => normalizeMaterialUrls(client, material));
 }
 
 export function updateMaterialStatus(
@@ -654,6 +737,98 @@ export function updateMaterialStatus(
   return request<Material>(client, `/api/materials/${materialId}/status`, {
     method: "PUT",
     body: { status },
+  }).then((material) => normalizeMaterialUrls(client, material));
+}
+
+export function getAssetGenerationPlan(
+  client: ApiClient,
+  scriptId: string,
+  payload: AssetGenerationRequestPayload,
+) {
+  return request<AssetGenerationPlanResponse>(
+    client,
+    `/api/scripts/${scriptId}/asset-generation-plan`,
+    {
+      method: "POST",
+      body: payload,
+    },
+  );
+}
+
+export function createAssetGenerationTasks(
+  client: ApiClient,
+  scriptId: string,
+  payload: AssetGenerationRequestPayload,
+) {
+  return request<AssetGenerationTaskListResponse>(
+    client,
+    `/api/scripts/${scriptId}/asset-generation-tasks`,
+    {
+      method: "POST",
+      body: payload,
+    },
+  );
+}
+
+export function listAssetGenerationTasks(client: ApiClient, scriptId: string) {
+  return request<AssetGenerationTaskListResponse>(
+    client,
+    `/api/scripts/${scriptId}/asset-generation-tasks`,
+  );
+}
+
+export function listAssetCandidates(client: ApiClient, scriptId: string) {
+  return request<SceneAssetCandidateListResponse>(
+    client,
+    `/api/scripts/${scriptId}/asset-candidates`,
+  ).then((response) => ({
+    ...response,
+    candidates: response.candidates.map((candidate) => normalizeCandidateUrls(client, candidate)),
+  }));
+}
+
+export function selectAssetCandidate(client: ApiClient, sceneId: string, candidateId: string) {
+  return request<SceneAssetCandidate>(
+    client,
+    `/api/scenes/${sceneId}/asset-candidates/${candidateId}/select`,
+    {
+      method: "PUT",
+    },
+  ).then((candidate) => normalizeCandidateUrls(client, candidate));
+}
+
+export function rejectAssetCandidate(client: ApiClient, sceneId: string, candidateId: string) {
+  return request<SceneAssetCandidate>(
+    client,
+    `/api/scenes/${sceneId}/asset-candidates/${candidateId}/reject`,
+    {
+      method: "PUT",
+    },
+  ).then((candidate) => normalizeCandidateUrls(client, candidate));
+}
+
+export function createSceneAssetGenerationTask(
+  client: ApiClient,
+  sceneId: string,
+  payload: AssetGenerationRequestPayload,
+  idempotencyKey: string,
+) {
+  return request<AssetGenerationTask>(client, `/api/scenes/${sceneId}/asset-generation-tasks`, {
+    method: "POST",
+    body: payload,
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+export function confirmAssetGenerationTask(client: ApiClient, taskId: string) {
+  return request<AssetGenerationTask>(client, `/api/asset-generation-tasks/${taskId}/confirm`, {
+    method: "POST",
+  });
+}
+
+export function dismissAssetGenerationTask(client: ApiClient, taskId: string) {
+  return request<AssetGenerationTask>(client, `/api/asset-generation-tasks/${taskId}/dismiss`, {
+    method: "POST",
   });
 }
 
@@ -833,9 +1008,16 @@ function getScriptAgentIntent(value: unknown): ScriptAgentIntent {
 async function request<T>(
   client: ApiClient,
   path: string,
-  options: { method?: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown } = {},
+  options: {
+    method?: "GET" | "POST" | "PUT" | "DELETE";
+    body?: unknown;
+    headers?: Record<string, string>;
+  } = {},
 ): Promise<T> {
-  const headers: HeadersInit = { accept: "application/json" };
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    ...options.headers,
+  };
   const init: RequestInit = { headers };
 
   if (options.method) {
@@ -855,6 +1037,32 @@ async function request<T>(
   }
 
   return body as T;
+}
+
+function normalizeMaterialUrls(client: ApiClient, material: Material): Material {
+  return {
+    ...material,
+    file_url: resolveApiAssetUrl(client, material.file_url) || material.file_url,
+    thumbnail_url: resolveApiAssetUrl(client, material.thumbnail_url),
+  };
+}
+
+function normalizeCandidateUrls(
+  client: ApiClient,
+  candidate: SceneAssetCandidate,
+): SceneAssetCandidate {
+  return {
+    ...candidate,
+    file_url: resolveApiAssetUrl(client, candidate.file_url),
+    thumbnail_url: resolveApiAssetUrl(client, candidate.thumbnail_url),
+  };
+}
+
+function resolveApiAssetUrl(client: ApiClient, value: string | null): string | null {
+  if (!value?.startsWith("/assets/")) {
+    return value;
+  }
+  return `${client.baseUrl}${value}`;
 }
 
 async function parseJson(response: Response): Promise<unknown> {

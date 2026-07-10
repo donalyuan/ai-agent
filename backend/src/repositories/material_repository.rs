@@ -326,6 +326,40 @@ impl MaterialRepository for PostgresMaterialRepository {
         material_id: Uuid,
         status: MaterialStatus,
     ) -> Result<Material, MaterialRepositoryError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(MaterialRepositoryError::from)?;
+        sqlx::query("SELECT id FROM materials WHERE id = $1 FOR UPDATE")
+            .bind(material_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(MaterialRepositoryError::from)?
+            .ok_or(MaterialRepositoryError::MaterialNotFound(material_id))?;
+
+        if status == MaterialStatus::Archived {
+            let is_selected = sqlx::query_scalar::<_, bool>(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM scene_asset_candidates
+                    WHERE material_id = $1
+                      AND status = 'selected'
+                )
+                "#,
+            )
+            .bind(material_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(MaterialRepositoryError::from)?;
+            if is_selected {
+                return Err(MaterialRepositoryError::MaterialInUseAsSelectedCandidate(
+                    material_id,
+                ));
+            }
+        }
+
         let row = sqlx::query(
             r#"
             UPDATE materials
@@ -338,10 +372,15 @@ impl MaterialRepository for PostgresMaterialRepository {
         )
         .bind(material_id)
         .bind(status.as_str())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await
         .map_err(MaterialRepositoryError::from)?
         .ok_or(MaterialRepositoryError::MaterialNotFound(material_id))?;
+
+        transaction
+            .commit()
+            .await
+            .map_err(MaterialRepositoryError::from)?;
 
         material_from_row(row)
     }
@@ -432,6 +471,7 @@ impl std::error::Error for MaterialParseError {}
 pub enum MaterialRepositoryError {
     MaterialNotFound(Uuid),
     ProjectNotFound(Uuid),
+    MaterialInUseAsSelectedCandidate(Uuid),
     Storage(String),
 }
 
@@ -449,6 +489,12 @@ impl fmt::Display for MaterialRepositoryError {
             }
             Self::ProjectNotFound(project_id) => {
                 write!(formatter, "project not found: {project_id}")
+            }
+            Self::MaterialInUseAsSelectedCandidate(material_id) => {
+                write!(
+                    formatter,
+                    "material is selected by scene candidate: {material_id}"
+                )
             }
             Self::Storage(message) => write!(formatter, "material storage error: {message}"),
         }

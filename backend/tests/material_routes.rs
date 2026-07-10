@@ -96,6 +96,8 @@ fn app_state(test_url: String, pool: PgPool) -> AppState {
             openai_timeout_seconds: 5,
             openai_reasoning_effort: Some("low".to_string()),
             openai_max_output_tokens: 3000,
+            asset_storage_root: "/app/storage/assets".to_string(),
+            asset_generation_providers: vec!["gpt-image-2".to_string(), "jimeng".to_string()],
         },
         pool,
         None,

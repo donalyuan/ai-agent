@@ -1,3 +1,4 @@
+pub mod asset_generation_repository;
 pub mod conversation_repository;
 pub mod material_repository;
 pub mod project_repository;
@@ -5,6 +6,13 @@ pub mod script_repository;
 pub mod topic_repository;
 pub mod workspace_menu_repository;
 
+pub use asset_generation_repository::{
+    AssetCandidateSource, AssetCandidateStatus, AssetCandidateType, AssetGenerationParseError,
+    AssetGenerationProvider, AssetGenerationRepository, AssetGenerationRepositoryError,
+    AssetGenerationTask, AssetGenerationTaskStatus, AssetGenerationTaskType,
+    CreateAssetCandidateInput, CreateAssetGenerationTaskInput, PostgresAssetGenerationRepository,
+    SceneAssetCandidate,
+};
 pub use conversation_repository::{
     ConversationRepository, ConversationRepositoryError, PostgresConversationRepository,
 };

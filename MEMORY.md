@@ -47,6 +47,9 @@
 - 已建立第一版通用对话 Agent Runtime 后端基座：`agent_conversations` / `agent_messages` 承载连续对话，单轮消息继续写入 `agent_runs` / `agent_steps`，脚本 Agent 已接入对话式分镜修改能力；后续选题、素材、视频、发布、优化 Agent 应接入同一 Runtime/adapter 接口，不得各自实现孤立聊天逻辑。当前未实现前端聊天面板，`apps/video-agent` UI 接入仍需先走 Pencil 原型确认
 - 用户已确认新的脚本创作产品约定：脚本生成也应走脚本 Agent 对话入口；后续 `apps/video-agent` 不应在右侧并列保留独立“生成脚本”大表单和“脚本 Agent 对话”输入框，而应使用单一脚本 Agent 对话承载无脚本时生成脚本、有脚本时修改脚本。该改造通过 OpenSpec change `conversational-script-generation` 推进，前端实现前仍需更新 `docs/prototypes/video-agent/video-agent.pen` 并获得确认
 - 脚本智能体详情展示已选定“时间轴对照视图”：左侧表达分镜顺序和节奏节点，右侧并排展示旁白与画面指令；后续实现不要回退成纯卡片流或纯表格
+- 用户已确认素材 Agent 下一步规划采用“旧素材复用优先 + AI 图片自动生成 + AI 视频人工二次确认”边界：AI 图片默认每分镜 3 张候选、可调整为 1-4 张，未选候选也进入素材库并标记来源；旧人物/IP 素材可作为参考图；生成图片必须落到自管素材存储后再写入 `materials.file_url`；第一版图片供应商为 `gpt-image-2` 和即梦，用户可选择供应商，失败不得自动跨供应商重试。后续“大模型管理”归 `admin/` 平台控制面，不放在视频工作台；视频工作台只消费已启用供应商、默认模型和限额配置。
+- 2026-07-10 `gpt-image-2` 真实调用仍不可用：使用独立 `OPENAI_IMAGE_KEY` 和 `OPENAI_IMAGE_BASE_URL=https://api.zeekai.cc` 对 `/v1/images/generations` 执行一次 `n=1`、无重试的 SSE 请求，服务端返回 `HTTP 403 permission_error: Image generation is not enabled for this group`，未生成图片；后续不得继续盲目重试或开启 Worker，必须先在 ZeekAI 确认该 Key 所属分组已启用图片生成，再做一次受控验证。不得在记忆、日志或回复中记录真实 Key。
+- 用户已确认素材生成应作为 `素材管理 / 素材生成` 独立二级入口，不放在 `脚本创作 / 脚本生成` 页面；页面文案中 `Agent` 仍作为产品名称保留，只去掉 `Topic Source`、独立 `Agent`、`素材 Agent` 这类说明性小标题。
 - Video Agent 前端工作台当前仅覆盖桌面端运营后台，不涉及移动端原型、移动端适配或移动端验收；后续如需要移动端，应单独提出 OpenSpec change
 
 ### 架构原则

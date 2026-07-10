@@ -58,6 +58,25 @@ async fn index_exists(pool: &PgPool, index_name: &str) -> bool {
     .expect("index existence query should run")
 }
 
+async fn unique_partial_index_predicate(pool: &PgPool, index_name: &str) -> Option<String> {
+    sqlx::query_as::<_, (bool, Option<String>)>(
+        r#"
+        SELECT index_info.indisunique,
+               pg_get_expr(index_info.indpred, index_info.indrelid) AS predicate
+        FROM pg_index index_info
+        JOIN pg_class index_class ON index_class.oid = index_info.indexrelid
+        JOIN pg_namespace namespace ON namespace.oid = index_class.relnamespace
+        WHERE namespace.nspname = 'public'
+          AND index_class.relname = $1
+        "#,
+    )
+    .bind(index_name)
+    .fetch_optional(pool)
+    .await
+    .expect("index metadata query should run")
+    .and_then(|(is_unique, predicate)| if is_unique { predicate } else { None })
+}
+
 async fn column_exists(pool: &PgPool, table_name: &str, column_name: &str) -> bool {
     sqlx::query_scalar::<_, bool>(
         r#"
@@ -175,6 +194,9 @@ async fn migrations_create_video_agent_core_schema() {
         "viral_videos",
         "content_strategies",
         "video_workspace_menus",
+        "asset_generation_tasks",
+        "asset_generation_task_requests",
+        "scene_asset_candidates",
     ] {
         assert!(
             table_exists(&test_pool, table).await,
@@ -204,6 +226,13 @@ async fn migrations_create_video_agent_core_schema() {
         "idx_topic_quality_evaluations_status",
         "idx_scripts_topic",
         "idx_video_workspace_menus_parent_sort",
+        "idx_asset_generation_tasks_project_created",
+        "idx_asset_generation_tasks_status",
+        "idx_asset_generation_tasks_visible_script",
+        "asset_generation_tasks_one_in_flight_image_per_scene",
+        "idx_asset_generation_task_requests_task",
+        "idx_scene_asset_candidates_script_scene_rank",
+        "scene_asset_candidates_one_selected_per_scene",
     ] {
         assert!(
             index_exists(&test_pool, index).await,
@@ -216,8 +245,152 @@ async fn migrations_create_video_agent_core_schema() {
         "materials.status should exist"
     );
     assert!(
+        column_exists(&test_pool, "asset_generation_tasks", "dismissed_at").await,
+        "asset_generation_tasks.dismissed_at should preserve soft-dismiss audit state"
+    );
+    assert!(
         constraint_exists(&test_pool, "materials", "materials_status_check").await,
         "materials.status should be constrained"
+    );
+    assert!(
+        constraint_exists(&test_pool, "materials", "materials_id_project_unique").await,
+        "materials should expose id/project composite key for asset candidate integrity"
+    );
+    assert!(
+        constraint_exists(&test_pool, "scripts", "scripts_id_project_unique").await,
+        "scripts should expose id/project composite key for asset candidate integrity"
+    );
+    assert!(
+        constraint_exists(&test_pool, "scenes", "scenes_id_script_unique").await,
+        "scenes should expose id/script composite key for asset candidate integrity"
+    );
+    let selected_candidate_index_predicate =
+        unique_partial_index_predicate(&test_pool, "scene_asset_candidates_one_selected_per_scene")
+            .await
+            .expect("selected candidate index should be unique and partial");
+    assert!(
+        selected_candidate_index_predicate.contains("selected"),
+        "selected candidate unique index should only cover selected status, got {selected_candidate_index_predicate}"
+    );
+    let in_flight_scene_task_predicate = unique_partial_index_predicate(
+        &test_pool,
+        "asset_generation_tasks_one_in_flight_image_per_scene",
+    )
+    .await
+    .expect("in-flight scene image task index should be unique and partial");
+    assert!(
+        in_flight_scene_task_predicate.contains("image_candidates")
+            && in_flight_scene_task_predicate.contains("pending")
+            && in_flight_scene_task_predicate.contains("processing"),
+        "in-flight scene image task index should cover pending and processing image tasks, got {in_flight_scene_task_predicate}"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "asset_generation_tasks",
+            "asset_generation_tasks_provider_check"
+        )
+        .await,
+        "asset generation task provider should be constrained"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "asset_generation_tasks",
+            "asset_generation_tasks_type_check"
+        )
+        .await,
+        "asset generation task type should be constrained"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "asset_generation_tasks",
+            "asset_generation_tasks_status_check"
+        )
+        .await,
+        "asset generation task status should be constrained"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "asset_generation_tasks",
+            "asset_generation_tasks_candidate_count_check"
+        )
+        .await,
+        "asset generation task candidate count should be constrained"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "asset_generation_tasks",
+            "asset_generation_tasks_retry_count_check"
+        )
+        .await,
+        "asset generation task retry count should be constrained"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "scene_asset_candidates",
+            "scene_asset_candidates_script_project_fk"
+        )
+        .await,
+        "scene asset candidates should keep script and project consistent"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "scene_asset_candidates",
+            "scene_asset_candidates_scene_script_fk"
+        )
+        .await,
+        "scene asset candidates should keep scene and script consistent"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "scene_asset_candidates",
+            "scene_asset_candidates_material_project_fk"
+        )
+        .await,
+        "scene asset candidates should keep material and project consistent"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "scene_asset_candidates",
+            "scene_asset_candidates_type_check"
+        )
+        .await,
+        "scene asset candidate type should be constrained"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "scene_asset_candidates",
+            "scene_asset_candidates_source_check"
+        )
+        .await,
+        "scene asset candidate source should be constrained"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "scene_asset_candidates",
+            "scene_asset_candidates_status_check"
+        )
+        .await,
+        "scene asset candidate status should be constrained"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "scene_asset_candidates",
+            "scene_asset_candidates_rank_check"
+        )
+        .await,
+        "scene asset candidate rank should be constrained"
     );
     let material_project_id = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
     sqlx::query(
@@ -399,26 +572,37 @@ async fn migrations_create_video_agent_core_schema() {
     .expect("material management seed query should run");
     assert_eq!(material_management, (true, "active".to_string()));
 
-    let material_library = sqlx::query_as::<_, (String, String, bool, String)>(
+    let material_children = sqlx::query_as::<_, (String, String, bool, String, String)>(
         r#"
-        SELECT child.menu_key, child.label, child.is_enabled, child.status
+        SELECT child.menu_key, child.label, child.is_enabled, child.status, child.module_key
         FROM video_workspace_menus child
         JOIN video_workspace_menus parent ON parent.id = child.parent_id
         WHERE parent.menu_key = 'material-management'
-          AND child.menu_key = 'material-library'
+          AND child.menu_key IN ('material-library', 'asset-generation')
+        ORDER BY child.sort_order ASC
         "#,
     )
-    .fetch_one(&test_pool)
+    .fetch_all(&test_pool)
     .await
-    .expect("material library child menu seed query should run");
+    .expect("material child menu seed query should run");
     assert_eq!(
-        material_library,
-        (
-            "material-library".to_string(),
-            "素材库".to_string(),
-            true,
-            "active".to_string()
-        )
+        material_children,
+        vec![
+            (
+                "material-library".to_string(),
+                "素材库".to_string(),
+                true,
+                "active".to_string(),
+                "materials.library".to_string(),
+            ),
+            (
+                "asset-generation".to_string(),
+                "素材生成".to_string(),
+                true,
+                "active".to_string(),
+                "materials.asset-generation".to_string(),
+            ),
+        ]
     );
 
     let content_strategy_children = sqlx::query_as::<_, (String, String, bool, String)>(
@@ -491,6 +675,43 @@ async fn migrations_create_video_agent_core_schema() {
     assert_eq!(script_child_count, 1);
 
     test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn runtime_postgres_connection_applies_pending_migrations_before_serving() {
+    let base_url = database_url();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let database_name = format!("video_agent_runtime_migration_test_{}", suffix);
+    let admin_url = with_database_name(&base_url, "postgres");
+    let test_url = with_database_name(&base_url, &database_name);
+
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&admin_url)
+        .await
+        .expect("admin database should be reachable");
+    let database_name = create_database(&admin_pool, &admin_url, &database_name).await;
+
+    let runtime_pool = novex_api::connect_runtime_pg_pool(&test_url, 1)
+        .await
+        .expect("runtime postgres connection should apply pending migrations");
+
+    assert!(table_exists(&runtime_pool, "asset_generation_tasks").await);
+    assert!(
+        column_exists(&runtime_pool, "asset_generation_tasks", "dismissed_at").await,
+        "runtime connection should apply the failed-task dismissal migration"
+    );
+    let dismissal_migration_applied = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM _sqlx_migrations WHERE version = 20260710030000 AND success)",
+    )
+    .fetch_one(&runtime_pool)
+    .await
+    .expect("runtime migration history should be readable");
+    assert!(dismissal_migration_applied);
+
+    runtime_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
     admin_pool.close().await;
 }

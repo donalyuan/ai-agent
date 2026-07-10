@@ -142,6 +142,8 @@ async fn run_real_script_generation(
                 openai_timeout_seconds: 120,
                 openai_reasoning_effort: reasoning_effort,
                 openai_max_output_tokens: max_output_tokens,
+                asset_storage_root: "/app/storage/assets".to_string(),
+                asset_generation_providers: vec!["gpt-image-2".to_string(), "jimeng".to_string()],
             },
             test_pool,
             None,

@@ -317,7 +317,22 @@ const workspaceMenus = [
       },
     ],
   },
-  menuNode("material-management", "素材管理", false, "planned", 30),
+  {
+    ...menuNode("material-management", "素材管理", true, "active", 30),
+    children: [
+      {
+        ...menuNode("material-library", "素材库", true, "active", 10),
+        menu_type: "page",
+        module_key: "materials.library",
+      },
+      {
+        ...menuNode("asset-generation", "素材生成", true, "active", 20),
+        agent_key: "material-generation-agent",
+        menu_type: "page",
+        module_key: "materials.asset-generation",
+      },
+    ],
+  },
   menuNode("production", "作品生产", false, "planned", 40),
   menuNode("publishing", "发布运营", false, "planned", 50),
   menuNode("analytics", "数据分析", false, "planned", 60),
@@ -359,7 +374,22 @@ const contentStrategyWorkspaceMenus = [
       },
     ],
   },
-  menuNode("material-management", "素材管理", false, "planned", 30),
+  {
+    ...menuNode("material-management", "素材管理", true, "active", 30),
+    children: [
+      {
+        ...menuNode("material-library", "素材库", true, "active", 10),
+        menu_type: "page",
+        module_key: "materials.library",
+      },
+      {
+        ...menuNode("asset-generation", "素材生成", true, "active", 20),
+        agent_key: "material-generation-agent",
+        menu_type: "page",
+        module_key: "materials.asset-generation",
+      },
+    ],
+  },
   menuNode("production", "作品生产", false, "planned", 40),
   menuNode("publishing", "发布运营", false, "planned", 50),
   menuNode("analytics", "数据分析", false, "planned", 60),
@@ -375,6 +405,12 @@ const materialWorkspaceMenus = [
         ...menuNode("material-library", "素材库", true, "active", 10),
         menu_type: "page",
         module_key: "materials.library",
+      },
+      {
+        ...menuNode("asset-generation", "素材生成", true, "active", 20),
+        agent_key: "material-generation-agent",
+        menu_type: "page",
+        module_key: "materials.asset-generation",
       },
     ],
   },
@@ -585,6 +621,135 @@ const subtitleMaterial = {
   updated_at: "2026-07-09T00:00:00Z",
 };
 
+const assetGenerationPayload = {
+  provider: "gpt-image-2",
+  image_candidates_per_scene: 3,
+  use_reference_materials: true,
+};
+
+const assetGenerationPlan = {
+  script_id: scriptId,
+  scene_count: scriptDetail.scenes.length,
+  image_candidate_count: scriptDetail.scenes.length * assetGenerationPayload.image_candidates_per_scene,
+  max_image_candidate_count: 48,
+  provider: assetGenerationPayload.provider,
+  enabled_providers: ["gpt-image-2", "jimeng"],
+  reference_material_count: 1,
+  video_task_count: scriptDetail.scenes.length,
+  can_create: true,
+  warnings: [],
+};
+
+const imageAssetGenerationTask = {
+  task_id: "17171717-1717-4717-8717-171717171717",
+  project_id: projectId,
+  script_id: scriptId,
+  scene_id: null,
+  provider: assetGenerationPayload.provider,
+  task_type: "image_candidates",
+  status: "pending",
+  candidate_count: assetGenerationPlan.image_candidate_count,
+  reference_material_ids: ["24242424-2424-4242-8242-242424242424"],
+  params: { image_candidates_per_scene: assetGenerationPayload.image_candidates_per_scene },
+  result: {},
+  error_message: null,
+  retry_count: 0,
+  dismissed_at: null,
+  created_at: "2026-07-09T00:30:00Z",
+  updated_at: "2026-07-09T00:30:00Z",
+};
+
+const failedAssetGenerationTask = {
+  ...imageAssetGenerationTask,
+  task_id: "25252525-2525-4525-8525-252525252525",
+  scene_id: scriptDetail.scenes[0].scene_id,
+  status: "failed",
+  candidate_count: assetGenerationPayload.image_candidates_per_scene,
+  error_message: "图片供应商返回生成失败",
+  created_at: "2026-07-09T00:35:00Z",
+  updated_at: "2026-07-09T00:36:00Z",
+};
+
+const videoDraftAssetGenerationTask = {
+  ...imageAssetGenerationTask,
+  task_id: "18181818-1818-4818-8818-181818181818",
+  scene_id: scriptDetail.scenes[0].scene_id,
+  task_type: "video_draft",
+  status: "draft",
+  candidate_count: 0,
+  params: { requires_manual_confirmation: true },
+};
+
+const selectedPrimaryAssetCandidate = {
+  candidate_id: "19191919-1919-4919-8919-191919191919",
+  project_id: projectId,
+  script_id: scriptId,
+  scene_id: scriptDetail.scenes[0].scene_id,
+  material_id: "24242424-2424-4242-8242-242424242424",
+  candidate_type: "image",
+  source: "existing_material",
+  status: "selected",
+  rank: 0,
+  generation_task_id: null,
+  metadata: { role: "primary" },
+  file_url: "https://cdn.example.com/materials/current-primary.png",
+  thumbnail_url: "https://cdn.example.com/materials/current-primary-thumb.png",
+  file_name: "current-primary.png",
+  created_at: "2026-07-09T00:31:00Z",
+  updated_at: "2026-07-09T00:31:00Z",
+};
+
+const aiImageAssetCandidate = {
+  ...selectedPrimaryAssetCandidate,
+  candidate_id: "20202020-2020-4020-8020-202020202020",
+  material_id: "21212121-2121-4121-8121-212121212121",
+  source: "ai_generated",
+  status: "candidate",
+  rank: 1,
+  generation_task_id: imageAssetGenerationTask.task_id,
+  file_url: "https://cdn.example.com/assets/generated/images/task/scene-1.png",
+  thumbnail_url: "https://cdn.example.com/assets/generated/images/task/scene-1.png",
+  file_name: "scene-1.png",
+};
+
+const additionalAiImageAssetCandidates = [2, 3].map((rank) => ({
+  ...aiImageAssetCandidate,
+  candidate_id: `${rank}0202020-2020-4020-8020-20202020202${rank}`,
+  material_id: `${rank}1212121-2121-4121-8121-21212121212${rank}`,
+  rank,
+  file_url: `https://cdn.example.com/assets/generated/images/task/scene-${rank}.png`,
+  thumbnail_url: `https://cdn.example.com/assets/generated/images/task/scene-${rank}.png`,
+  file_name: `scene-${rank}.png`,
+}));
+
+const videoTaskAssetCandidate = {
+  ...selectedPrimaryAssetCandidate,
+  candidate_id: "23232323-2323-4232-8232-232323232323",
+  material_id: null,
+  candidate_type: "video",
+  source: "video_task",
+  status: "candidate",
+  rank: 10000,
+  generation_task_id: videoDraftAssetGenerationTask.task_id,
+  file_url: null,
+  thumbnail_url: null,
+  file_name: null,
+  metadata: { requires_manual_confirmation: true },
+};
+
+const failedAssetCandidate = {
+  ...aiImageAssetCandidate,
+  candidate_id: "26262626-2626-4626-8626-262626262626",
+  material_id: null,
+  status: "failed",
+  rank: 2,
+  generation_task_id: failedAssetGenerationTask.task_id,
+  file_url: null,
+  thumbnail_url: null,
+  file_name: null,
+  metadata: { error_message: "图片供应商返回生成失败" },
+};
+
 function menuNode(menuKey: string, label: string, isEnabled: boolean, status: string, sortOrder: number) {
   return {
     menu_id: `00000000-0000-4000-8000-${String(sortOrder).padStart(12, "0")}`,
@@ -696,6 +861,133 @@ async function mockEmptyScriptGeneration(page: Page) {
       },
     });
   });
+}
+
+function buildScriptAssetCandidates(selectedCandidateId: string, includeFailedTask = true) {
+  const candidates = [
+    {
+      ...selectedPrimaryAssetCandidate,
+      status:
+        selectedCandidateId === selectedPrimaryAssetCandidate.candidate_id ? "selected" : "candidate",
+    },
+    {
+      ...aiImageAssetCandidate,
+      status: selectedCandidateId === aiImageAssetCandidate.candidate_id ? "selected" : "candidate",
+    },
+    ...additionalAiImageAssetCandidates,
+    videoTaskAssetCandidate,
+  ];
+  return includeFailedTask ? [...candidates, failedAssetCandidate] : candidates;
+}
+
+async function mockScriptAssetWorkflow(page: Page) {
+  let assetGenerationPlanRequestCount = 0;
+  let assetGenerationTasksRequestCount = 0;
+  let assetCandidatesRequestCount = 0;
+  let selectAssetCandidateRequestCount = 0;
+  let confirmAssetGenerationTaskRequestCount = 0;
+  let dismissAssetGenerationTaskRequestCount = 0;
+  let selectedCandidateId = selectedPrimaryAssetCandidate.candidate_id;
+  let failedTaskDismissed = false;
+
+  await page.route(new RegExp(`/api/scripts/${scriptId}/asset-generation-plan(?:\\?.*)?$`), async (route) => {
+    assetGenerationPlanRequestCount += 1;
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual(assetGenerationPayload);
+    await route.fulfill({ contentType: "application/json", json: assetGenerationPlan });
+  });
+  await page.route(
+    new RegExp(`/api/scripts/${scriptId}/asset-generation-tasks(?:\\?.*)?$`),
+    async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          contentType: "application/json",
+          json: {
+            script_id: scriptId,
+            tasks: [
+              imageAssetGenerationTask,
+              videoDraftAssetGenerationTask,
+              ...(failedTaskDismissed ? [] : [failedAssetGenerationTask]),
+            ],
+          },
+        });
+        return;
+      }
+
+      assetGenerationTasksRequestCount += 1;
+      expect(route.request().method()).toBe("POST");
+      expect(route.request().postDataJSON()).toEqual(assetGenerationPayload);
+      await route.fulfill({
+        contentType: "application/json",
+        status: 201,
+        json: {
+          script_id: scriptId,
+          tasks: [
+            imageAssetGenerationTask,
+            videoDraftAssetGenerationTask,
+            ...(failedTaskDismissed ? [] : [failedAssetGenerationTask]),
+          ],
+        },
+      });
+    },
+  );
+  await page.route(new RegExp(`/api/scripts/${scriptId}/asset-candidates(?:\\?.*)?$`), async (route) => {
+    assetCandidatesRequestCount += 1;
+    await route.fulfill({
+      contentType: "application/json",
+      json: { candidates: buildScriptAssetCandidates(selectedCandidateId, !failedTaskDismissed) },
+    });
+  });
+  await page.route(
+    new RegExp(
+      `/api/scenes/${scriptDetail.scenes[0].scene_id}/asset-candidates/${aiImageAssetCandidate.candidate_id}/select$`,
+    ),
+    async (route) => {
+      selectAssetCandidateRequestCount += 1;
+      selectedCandidateId = aiImageAssetCandidate.candidate_id;
+      expect(route.request().method()).toBe("PUT");
+      await route.fulfill({
+        contentType: "application/json",
+        json: { ...aiImageAssetCandidate, status: "selected" },
+      });
+    },
+  );
+  await page.route(
+    new RegExp(`/api/asset-generation-tasks/${failedAssetGenerationTask.task_id}/dismiss$`),
+    async (route) => {
+      dismissAssetGenerationTaskRequestCount += 1;
+      failedTaskDismissed = true;
+      expect(route.request().method()).toBe("POST");
+      await route.fulfill({
+        contentType: "application/json",
+        json: { ...failedAssetGenerationTask, dismissed_at: "2026-07-10T00:00:00Z" },
+      });
+    },
+  );
+  await page.route(
+    new RegExp(`/api/asset-generation-tasks/${videoDraftAssetGenerationTask.task_id}/confirm$`),
+    async (route) => {
+      confirmAssetGenerationTaskRequestCount += 1;
+      expect(route.request().method()).toBe("POST");
+      await route.fulfill({
+        contentType: "application/json",
+        json: {
+          ...videoDraftAssetGenerationTask,
+          task_type: "video_generation",
+          status: "pending",
+        },
+      });
+    },
+  );
+
+  return {
+    assetGenerationPlanRequestCount: () => assetGenerationPlanRequestCount,
+    assetGenerationTasksRequestCount: () => assetGenerationTasksRequestCount,
+    assetCandidatesRequestCount: () => assetCandidatesRequestCount,
+    selectAssetCandidateRequestCount: () => selectAssetCandidateRequestCount,
+    confirmAssetGenerationTaskRequestCount: () => confirmAssetGenerationTaskRequestCount,
+    dismissAssetGenerationTaskRequestCount: () => dismissAssetGenerationTaskRequestCount,
+  };
 }
 
 async function mockContentStrategyWorkflow(page: Page) {
@@ -961,7 +1253,7 @@ test("video-agent 桌面工作台使用业务菜单并保留脚本创作闭环",
   for (const label of ["内容策略", "脚本创作", "素材管理", "作品生产", "发布运营", "数据分析", "工作流任务"]) {
     await expect(workspaceMenu.getByText(label)).toBeVisible();
   }
-  for (const label of ["选题智能体", "脚本智能体", "素材智能体", "视频智能体", "发布智能体", "优化智能体"]) {
+  for (const label of ["选题 Agent", "脚本 Agent", "素材智能体", "视频智能体", "发布智能体", "优化智能体"]) {
     await expect(workspaceMenu.getByText(label)).toHaveCount(0);
   }
   await expect(workspaceMenu.getByRole("button", { name: /内容策略/ })).toHaveClass(/active/);
@@ -969,7 +1261,7 @@ test("video-agent 桌面工作台使用业务菜单并保留脚本创作闭环",
   await workspaceMenu.getByRole("button", { name: /脚本创作/ }).click();
   await expect(workspaceMenu.getByRole("button", { name: /脚本创作/ })).toHaveClass(/active/);
   await expect(workspaceMenu.getByRole("button", { name: /内容策略/ })).toBeEnabled();
-  await expect(workspaceMenu.getByRole("button", { name: /素材管理/ })).toBeDisabled();
+  await expect(workspaceMenu.getByRole("button", { name: /素材管理/ })).toBeEnabled();
 
   await expect(page.getByRole("heading", { name: "项目上下文" })).toHaveCount(0);
   await expect(page.getByLabel("项目名称")).toHaveCount(0);
@@ -990,6 +1282,7 @@ test("video-agent 桌面工作台使用业务菜单并保留脚本创作闭环",
   await expect(page.getByRole("heading", { name: "画面指令" }).first()).toBeVisible();
   await expect(page.getByText("传统程序员每天要写大量重复代码。")).toBeVisible();
   await expect(page.getByText("程序员盯着屏幕，快速切换多个代码文件。"));
+  await expect(page.getByRole("region", { name: "脚本详情素材候选" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "新建脚本" }).click();
   await expect(page.getByRole("heading", { name: "选择脚本后查看分镜" })).toBeVisible();
@@ -1034,6 +1327,56 @@ test("空脚本列表时通过脚本 Agent 对话生成脚本并打开时间轴�
   await expect(page.getByText("时间轴对照视图")).toBeVisible();
   await expect(page.getByText("AI 工作流从清晰描述任务开始。")).toBeVisible();
   await expect(page.getByText("屏幕展示用户输入脚本需求。")).toBeVisible();
+});
+
+test("素材生成页支持生成选择主素材并确认生成视频", async ({ page }) => {
+  await mockExistingScriptWorkflow(page);
+  const assetWorkflow = await mockScriptAssetWorkflow(page);
+  await page.goto("/");
+  const workspaceMenu = page.getByRole("navigation", { name: "视频工作台菜单" });
+  await workspaceMenu.getByRole("button", { name: /素材管理/ }).click();
+  await workspaceMenu.getByRole("button", { name: "素材生成" }).click();
+
+  await expect(page.getByRole("heading", { name: "脚本详情素材候选" })).toBeVisible();
+  const panel = await page.getByRole("region", { name: "脚本详情素材候选" });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("分镜列表")).toBeVisible();
+  await expect(panel.getByText("候选素材")).toBeVisible();
+  await expect(panel.getByText("生成设置与任务")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "gpt-image-2" })).toHaveClass(/selected/);
+  await expect(panel.getByRole("button", { name: "即梦" })).toBeVisible();
+  await expect(panel.getByText("2 分镜 × 3 = 6 张图片候选")).toBeVisible();
+  await expect(panel.getByText("单次最多 48 张")).toBeVisible();
+  await expect(panel.getByText("当前主素材")).toBeVisible();
+  await expect(panel.getByText("AI 图片候选")).toBeVisible();
+  await expect(panel.getByText("AI 视频二次确认")).toBeVisible();
+  await expect(panel.getByText(scriptDetail.scenes[0].narration)).toBeVisible();
+  await expect(panel.getByText(scriptDetail.scenes[0].visual_description)).toBeVisible();
+  await expect(panel.getByRole("button", { name: "生成素材候选" })).toHaveCount(0);
+  await expect.poll(() => assetWorkflow.assetGenerationPlanRequestCount()).toBeGreaterThan(0);
+  await expect.poll(() => assetWorkflow.assetCandidatesRequestCount()).toBeGreaterThan(0);
+
+  await page.getByRole("button", { name: "生成素材候选" }).click();
+  await expect.poll(() => assetWorkflow.assetGenerationTasksRequestCount()).toBe(1);
+  await expect(panel.getByText("scene-1.png")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "选择为主素材" }).first()).toBeVisible();
+
+  await panel.getByRole("button", { name: "选择为主素材" }).first().click();
+  await expect.poll(() => assetWorkflow.selectAssetCandidateRequestCount()).toBe(1);
+  await expect(panel.getByText("当前主素材")).toBeVisible();
+  await expect(panel.getByText("scene-1.png")).toBeVisible();
+
+  await panel.getByRole("button", { name: "确认生成视频" }).first().click();
+  await expect.poll(() => assetWorkflow.confirmAssetGenerationTaskRequestCount()).toBe(1);
+
+  await panel.getByRole("button", { name: "清理失败任务" }).click();
+  const dismissDialog = page.getByRole("dialog", { name: "清理失败任务？" });
+  await expect(dismissDialog).toBeVisible();
+  await expect(dismissDialog.getByText(/不会重新调用供应商，也不会产生额外费用/)).toBeVisible();
+  await dismissDialog.getByRole("button", { name: "确认清理" }).click();
+  await expect.poll(() => assetWorkflow.dismissAssetGenerationTaskRequestCount()).toBe(1);
+  await expect(panel.getByRole("button", { name: "清理失败任务" })).toHaveCount(0);
+  await expect(dismissDialog).toHaveCount(0);
 });
 
 test("内容策略页从已确认选题确认参数并生成脚本", async ({ page }) => {

@@ -31,10 +31,12 @@ services:
       - "18180:8080"
     volumes:
       - ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}:/app
+      - ai-agent-generated-assets:/app/storage/assets
     environment:
       AI_AGENT_ENV: development
       DATABASE_URL: postgres://postgres:postgres@biga-postgres:5432/video_agent
       REDIS_URL: redis://bs-redis:6379/2
+      ASSET_STORAGE_ROOT: /app/storage/assets
     depends_on:
       ai-agent-db-init:
         condition: service_completed_successfully
@@ -54,14 +56,21 @@ services:
     container_name: ai-agent-video-worker
     working_dir: /app
     command: uvicorn video_worker.main:app --host 0.0.0.0 --port 8081 --reload
+    env_file:
+      - path: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/.env
+        required: false
     ports:
       - "18181:8081"
     volumes:
       - ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/services/video-worker:/app
+      - ai-agent-generated-assets:/app/storage/assets
     environment:
       AI_AGENT_ENV: development
       DATABASE_URL: postgres://postgres:postgres@biga-postgres:5432/video_agent
       REDIS_URL: redis://bs-redis:6379/2
+      ASSET_GENERATION_WORKER_ENABLED: "${ASSET_GENERATION_WORKER_ENABLED:-false}"
+      ASSET_STORAGE_ROOT: /app/storage/assets
+      ASSET_PUBLIC_PREFIX: /assets
     depends_on:
       ai-agent-db-init:
         condition: service_completed_successfully
@@ -102,3 +111,6 @@ services:
     depends_on:
       ai-agent-api:
         condition: service_healthy
+
+volumes:
+  ai-agent-generated-assets:

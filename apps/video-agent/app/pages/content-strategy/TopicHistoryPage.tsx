@@ -177,7 +177,7 @@ export function TopicHistoryPage({
           {!loadingTopicBatches && !topicBatchError && !displayGroupCount ? (
             <div className="emptyState">
               <strong>还没有历史生成</strong>
-              <span>通过选题 Agent 生成候选后，这里会按批次归档。</span>
+              <span>通过选题 Agent生成候选后，这里会按批次归档。</span>
             </div>
           ) : null}
 

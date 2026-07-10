@@ -6,6 +6,9 @@ import {
   AgentMessage,
   ApiClient,
   ApiError,
+  AssetGenerationPlanResponse,
+  AssetGenerationProvider,
+  AssetGenerationTask,
   ContentTopic,
   ContentTopicSource,
   ContentTopicStats,
@@ -16,6 +19,7 @@ import {
   MaterialType,
   PrepareScriptFromTopicResponse,
   Project,
+  SceneAssetCandidate,
   ScriptDetail,
   ScriptStatus,
   ScriptSummary,
@@ -27,19 +31,26 @@ import {
   TopicReviewSnapshot,
   WorkspaceMenuNode,
   checkHealth,
+  confirmAssetGenerationTask,
   createAgentConversation,
   createApiClient,
+  createAssetGenerationTasks,
   createContentTopic,
   createMaterial,
+  createSceneAssetGenerationTask,
   createTopicGroupReview,
   deleteContentTopic,
+  dismissAssetGenerationTask,
   generateStrategyProfileDraft,
   generateScript,
+  getAssetGenerationPlan,
   getLatestTopicQualityEvaluation,
   getLatestTopicGroupReview,
   getMaterial,
   getScript,
   getScriptAgentTurnMetadata,
+  listAssetCandidates,
+  listAssetGenerationTasks,
   listMaterials,
   listProjects,
   listScripts,
@@ -48,7 +59,9 @@ import {
   listTopicGroups,
   listWorkspaceMenus,
   prepareScriptFromTopic,
+  rejectAssetCandidate,
   sendAgentMessage,
+  selectAssetCandidate,
   updateContentTopic,
   updateContentTopicStatus,
   updateMaterial,
@@ -74,7 +87,13 @@ import {
   type TopicFormState,
 } from "./pages/content-strategy/topicModel";
 import { ScriptCreationPage } from "./pages/script-creation/ScriptCreationPage";
+import {
+  assetGenerationPayload,
+  mergeUpdatedCandidate,
+  upsertAssetTask,
+} from "./pages/script-creation/assetModel";
 import { upsertSummary } from "./pages/script-creation/scriptModel";
+import { AssetGenerationPage } from "./pages/asset-generation/AssetGenerationPage";
 import { MaterialLibraryPage } from "./pages/material-library/MaterialLibraryPage";
 import {
   defaultMaterialForm,
@@ -89,6 +108,7 @@ const topicHistoryMenuKey = "topic-history";
 const topicGeneratorMenuKey = "topic-generator";
 const materialManagementMenuKey = "material-management";
 const materialLibraryMenuKey = "material-library";
+const assetGenerationMenuKey = "asset-generation";
 const scriptCreationMenuKey = "script-creation";
 const scriptGeneratorMenuKey = "script-generator";
 const defaultMenuKey = contentStrategyMenuKey;
@@ -166,6 +186,15 @@ function accountStrategyFormsEqual(left: AccountStrategyFormState, right: Accoun
   );
 }
 
+function createIdempotencyKey() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+}
+
 export default function Home() {
   const client = useMemo(() => createApiClient(), []);
   const [apiAvailable, setApiAvailable] = useState<boolean | null>(null);
@@ -174,6 +203,19 @@ export default function Home() {
   const [scripts, setScripts] = useState<ScriptSummary[]>([]);
   const [selectedScript, setSelectedScript] = useState<ScriptDetail | null>(null);
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(null);
+  const [assetCandidates, setAssetCandidates] = useState<SceneAssetCandidate[]>([]);
+  const [assetTasks, setAssetTasks] = useState<AssetGenerationTask[]>([]);
+  const [assetPlan, setAssetPlan] = useState<AssetGenerationPlanResponse | null>(null);
+  const [assetProvider, setAssetProvider] = useState<AssetGenerationProvider>("gpt-image-2");
+  const [assetCandidateCount, setAssetCandidateCount] = useState(3);
+  const [useReferenceMaterials, setUseReferenceMaterials] = useState(true);
+  const [selectedAssetSceneId, setSelectedAssetSceneId] = useState<string | null>(null);
+  const [loadingAssetPlan, setLoadingAssetPlan] = useState(false);
+  const [loadingAssetCandidates, setLoadingAssetCandidates] = useState(false);
+  const [assetActionInProgress, setAssetActionInProgress] = useState(false);
+  const [assetError, setAssetError] = useState("");
+  const [assetTaskToDismissId, setAssetTaskToDismissId] = useState<string | null>(null);
+  const [dismissingAssetTaskId, setDismissingAssetTaskId] = useState<string | null>(null);
   const [topics, setTopics] = useState<ContentTopic[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(null);
@@ -216,6 +258,8 @@ export default function Home() {
   const [topicBatchFilter, setTopicBatchFilter] = useState<string | null>(null);
   const [workspaceMenus, setWorkspaceMenus] = useState<WorkspaceMenuNode[]>([]);
   const [selectedMenuKey, setSelectedMenuKey] = useState(defaultMenuKey);
+  const [selectedMaterialSubMenuKey, setSelectedMaterialSubMenuKey] = useState(materialLibraryMenuKey);
+  const [selectedScriptSubMenuKey, setSelectedScriptSubMenuKey] = useState(scriptGeneratorMenuKey);
   const [statusFilter, setStatusFilter] = useState<"all" | ScriptStatus>("all");
   const [loadingMenus, setLoadingMenus] = useState(true);
   const [loadingProjects, setLoadingProjects] = useState(true);
@@ -265,6 +309,9 @@ export default function Home() {
   const selectedScriptIdRef = useRef<string | null>(null);
   const selectedProjectIdRef = useRef("");
   const preserveAgentConversationRef = useRef<string | null>(null);
+  const sceneRegenerationInFlightRef = useRef(false);
+  const sceneRegenerationIdempotencyKeysRef = useRef(new Map<string, string>());
+  const assetTaskDismissalInFlightRef = useRef(false);
 
   const selectedProject = projects.find((project) => project.project_id === selectedProjectId);
   const savedAccountStrategyForm = useMemo(
@@ -302,6 +349,10 @@ export default function Home() {
   const selectedTopic = topics.find((topic) => topic.topic_id === selectedTopicId) || null;
   const selectedMaterial =
     materials.find((material) => material.material_id === selectedMaterialId) || null;
+  const currentAssetPayload = useMemo(
+    () => assetGenerationPayload(assetProvider, assetCandidateCount, useReferenceMaterials),
+    [assetCandidateCount, assetProvider, useReferenceMaterials],
+  );
   const writesDisabled = apiAvailable === false;
   const selectedSubMenuKey =
     selectedMenuKey === contentStrategyMenuKey
@@ -311,9 +362,9 @@ export default function Home() {
         ? topicHistoryMenuKey
         : topicGeneratorMenuKey
       : selectedMenuKey === scriptCreationMenuKey
-        ? scriptGeneratorMenuKey
+        ? selectedScriptSubMenuKey
         : selectedMenuKey === materialManagementMenuKey
-          ? materialLibraryMenuKey
+          ? selectedMaterialSubMenuKey
         : null;
 
   useEffect(() => {
@@ -766,6 +817,167 @@ export default function Home() {
   }, [client, materialFilters, selectedMenuKey, selectedProjectId]);
 
   useEffect(() => {
+    if (
+      !selectedScript ||
+      selectedMenuKey !== materialManagementMenuKey ||
+      selectedMaterialSubMenuKey !== assetGenerationMenuKey
+    ) {
+      setAssetCandidates([]);
+      setAssetTasks([]);
+      setAssetPlan(null);
+      setSelectedAssetSceneId(null);
+      setLoadingAssetCandidates(false);
+      setLoadingAssetPlan(false);
+      setAssetError("");
+      setAssetTaskToDismissId(null);
+      setDismissingAssetTaskId(null);
+      assetTaskDismissalInFlightRef.current = false;
+      return;
+    }
+
+    let active = true;
+    const script = selectedScript;
+    const firstSceneId =
+      [...script.scenes].sort((left, right) => left.sequence - right.sequence)[0]?.scene_id || null;
+
+    setSelectedAssetSceneId((currentSceneId) =>
+      script.scenes.some((scene) => scene.scene_id === currentSceneId)
+        ? currentSceneId
+        : firstSceneId,
+    );
+    setAssetTasks([]);
+    setAssetTaskToDismissId(null);
+    setDismissingAssetTaskId(null);
+    assetTaskDismissalInFlightRef.current = false;
+
+    async function loadAssetState() {
+      setLoadingAssetCandidates(true);
+      setAssetError("");
+
+      try {
+        const [candidateResponse, taskResponse] = await Promise.all([
+          listAssetCandidates(client, script.script_id),
+          listAssetGenerationTasks(client, script.script_id),
+        ]);
+        if (active) {
+          setAssetCandidates(candidateResponse.candidates);
+          setAssetTasks(taskResponse.tasks);
+        }
+      } catch (error) {
+        if (active) {
+          setAssetCandidates([]);
+          setAssetTasks([]);
+          setAssetError(errorToMessage(error));
+        }
+      } finally {
+        if (active) {
+          setLoadingAssetCandidates(false);
+        }
+      }
+    }
+
+    loadAssetState();
+
+    return () => {
+      active = false;
+    };
+  }, [client, selectedMaterialSubMenuKey, selectedMenuKey, selectedScript]);
+
+  useEffect(() => {
+    const scriptId = selectedScript?.script_id;
+    const hasInFlightImageTask = assetTasks.some(
+      (task) =>
+        task.task_type === "image_candidates" &&
+        (task.status === "pending" || task.status === "processing"),
+    );
+    if (
+      !scriptId ||
+      selectedMenuKey !== materialManagementMenuKey ||
+      selectedMaterialSubMenuKey !== assetGenerationMenuKey ||
+      !hasInFlightImageTask
+    ) {
+      return;
+    }
+    const activeScriptId = scriptId;
+
+    let active = true;
+    let polling = false;
+    async function pollAssetState() {
+      if (polling) {
+        return;
+      }
+      polling = true;
+      try {
+        const [candidateResponse, taskResponse] = await Promise.all([
+          listAssetCandidates(client, activeScriptId),
+          listAssetGenerationTasks(client, activeScriptId),
+        ]);
+        if (active && selectedScriptIdRef.current === activeScriptId) {
+          setAssetCandidates(candidateResponse.candidates);
+          setAssetTasks(taskResponse.tasks);
+        }
+      } catch (error) {
+        if (active && selectedScriptIdRef.current === activeScriptId) {
+          setAssetError(errorToMessage(error));
+        }
+      } finally {
+        polling = false;
+      }
+    }
+
+    const intervalId = window.setInterval(pollAssetState, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [assetTasks, client, selectedMaterialSubMenuKey, selectedMenuKey, selectedScript]);
+
+  useEffect(() => {
+    if (
+      !selectedScript ||
+      selectedMenuKey !== materialManagementMenuKey ||
+      selectedMaterialSubMenuKey !== assetGenerationMenuKey
+    ) {
+      setAssetPlan(null);
+      setLoadingAssetPlan(false);
+      return;
+    }
+
+    let active = true;
+    const script = selectedScript;
+
+    async function loadAssetPlan() {
+      setLoadingAssetPlan(true);
+      setAssetError("");
+
+      try {
+        const plan = await getAssetGenerationPlan(client, script.script_id, currentAssetPayload);
+        if (active) {
+          setAssetPlan(plan);
+          if (plan.enabled_providers.length && !plan.enabled_providers.includes(assetProvider)) {
+            setAssetProvider(plan.enabled_providers[0]);
+          }
+        }
+      } catch (error) {
+        if (active) {
+          setAssetPlan(null);
+          setAssetError(errorToMessage(error));
+        }
+      } finally {
+        if (active) {
+          setLoadingAssetPlan(false);
+        }
+      }
+    }
+
+    loadAssetPlan();
+
+    return () => {
+      active = false;
+    };
+  }, [assetProvider, client, currentAssetPayload, selectedMaterialSubMenuKey, selectedMenuKey, selectedScript]);
+
+  useEffect(() => {
     selectedProjectIdRef.current = selectedProjectId;
     setAgentConversationId(null);
     setAgentMessages([]);
@@ -799,6 +1011,17 @@ export default function Home() {
     setTopicQualityEvaluation(null);
     setTopicQualityLoading(false);
     setTopicQualityError("");
+    setAssetCandidates([]);
+    setAssetTasks([]);
+    setAssetPlan(null);
+    setAssetProvider("gpt-image-2");
+    setAssetCandidateCount(3);
+    setUseReferenceMaterials(true);
+    setSelectedAssetSceneId(null);
+    setLoadingAssetPlan(false);
+    setLoadingAssetCandidates(false);
+    setAssetActionInProgress(false);
+    setAssetError("");
     setMaterials([]);
     setSelectedMaterialId(null);
     setMaterialError("");
@@ -852,6 +1075,9 @@ export default function Home() {
     if (menuKey === contentStrategyMenuKey) {
       setContentStrategyView("pool");
     }
+    if (menuKey === scriptCreationMenuKey) {
+      setSelectedScriptSubMenuKey(scriptGeneratorMenuKey);
+    }
   }
 
   function handleSelectWorkspaceSubMenu(menuKey: string) {
@@ -872,10 +1098,17 @@ export default function Home() {
     }
     if (menuKey === scriptGeneratorMenuKey) {
       setSelectedMenuKey(scriptCreationMenuKey);
+      setSelectedScriptSubMenuKey(scriptGeneratorMenuKey);
       return;
     }
     if (menuKey === materialLibraryMenuKey) {
       setSelectedMenuKey(materialManagementMenuKey);
+      setSelectedMaterialSubMenuKey(materialLibraryMenuKey);
+      return;
+    }
+    if (menuKey === assetGenerationMenuKey) {
+      setSelectedMenuKey(materialManagementMenuKey);
+      setSelectedMaterialSubMenuKey(assetGenerationMenuKey);
     }
   }
 
@@ -1031,6 +1264,159 @@ export default function Home() {
       setStatusError(errorToMessage(error));
     } finally {
       setUpdatingStatus(false);
+    }
+  }
+
+  async function refreshAssetCandidates(scriptId: string) {
+    setLoadingAssetCandidates(true);
+
+    try {
+      const response = await listAssetCandidates(client, scriptId);
+      if (selectedScriptIdRef.current === scriptId) {
+        setAssetCandidates(response.candidates);
+      }
+    } catch (error) {
+      if (selectedScriptIdRef.current === scriptId) {
+        setAssetError(errorToMessage(error));
+      }
+    } finally {
+      if (selectedScriptIdRef.current === scriptId) {
+        setLoadingAssetCandidates(false);
+      }
+    }
+  }
+
+  async function handleCreateAssetGenerationTasks() {
+    if (!selectedScript) {
+      return;
+    }
+
+    const scriptId = selectedScript.script_id;
+    setAssetActionInProgress(true);
+    setAssetError("");
+
+    try {
+      const response = await createAssetGenerationTasks(client, scriptId, currentAssetPayload);
+      if (selectedScriptIdRef.current === scriptId) {
+        setAssetTasks(response.tasks);
+      }
+      await refreshAssetCandidates(scriptId);
+    } catch (error) {
+      if (selectedScriptIdRef.current === scriptId) {
+        setAssetError(errorToMessage(error));
+      }
+    } finally {
+      if (selectedScriptIdRef.current === scriptId) {
+        setAssetActionInProgress(false);
+      }
+    }
+  }
+
+  async function handleSelectAssetCandidate(sceneId: string, candidateId: string) {
+    setAssetActionInProgress(true);
+    setAssetError("");
+
+    try {
+      const updatedCandidate = await selectAssetCandidate(client, sceneId, candidateId);
+      setAssetCandidates((currentCandidates) =>
+        mergeUpdatedCandidate(currentCandidates, updatedCandidate),
+      );
+    } catch (error) {
+      setAssetError(errorToMessage(error));
+    } finally {
+      setAssetActionInProgress(false);
+    }
+  }
+
+  async function handleRejectAssetCandidate(sceneId: string, candidateId: string) {
+    setAssetActionInProgress(true);
+    setAssetError("");
+
+    try {
+      const updatedCandidate = await rejectAssetCandidate(client, sceneId, candidateId);
+      setAssetCandidates((currentCandidates) =>
+        mergeUpdatedCandidate(currentCandidates, updatedCandidate),
+      );
+    } catch (error) {
+      setAssetError(errorToMessage(error));
+    } finally {
+      setAssetActionInProgress(false);
+    }
+  }
+
+  async function handleRegenerateSceneAsset(sceneId: string) {
+    if (sceneRegenerationInFlightRef.current) {
+      return;
+    }
+    sceneRegenerationInFlightRef.current = true;
+    setAssetActionInProgress(true);
+    setAssetError("");
+    const idempotencyKey =
+      sceneRegenerationIdempotencyKeysRef.current.get(sceneId) || createIdempotencyKey();
+    sceneRegenerationIdempotencyKeysRef.current.set(sceneId, idempotencyKey);
+
+    try {
+      const task = await createSceneAssetGenerationTask(
+        client,
+        sceneId,
+        currentAssetPayload,
+        idempotencyKey,
+      );
+      sceneRegenerationIdempotencyKeysRef.current.delete(sceneId);
+      setAssetTasks((currentTasks) => upsertAssetTask(currentTasks, task));
+    } catch (error) {
+      setAssetError(errorToMessage(error));
+    } finally {
+      sceneRegenerationInFlightRef.current = false;
+      setAssetActionInProgress(false);
+    }
+  }
+
+  async function handleConfirmAssetGenerationTask(taskId: string) {
+    setAssetActionInProgress(true);
+    setAssetError("");
+
+    try {
+      const task = await confirmAssetGenerationTask(client, taskId);
+      setAssetTasks((currentTasks) => upsertAssetTask(currentTasks, task));
+    } catch (error) {
+      setAssetError(errorToMessage(error));
+    } finally {
+      setAssetActionInProgress(false);
+    }
+  }
+
+  async function handleDismissAssetGenerationTask() {
+    if (!selectedScript || !assetTaskToDismissId || assetTaskDismissalInFlightRef.current) {
+      return;
+    }
+
+    const scriptId = selectedScript.script_id;
+    const taskId = assetTaskToDismissId;
+    assetTaskDismissalInFlightRef.current = true;
+    setDismissingAssetTaskId(taskId);
+    setAssetError("");
+
+    try {
+      await dismissAssetGenerationTask(client, taskId);
+      const [candidateResponse, taskResponse] = await Promise.all([
+        listAssetCandidates(client, scriptId),
+        listAssetGenerationTasks(client, scriptId),
+      ]);
+      if (selectedScriptIdRef.current === scriptId) {
+        setAssetCandidates(candidateResponse.candidates);
+        setAssetTasks(taskResponse.tasks);
+        setAssetTaskToDismissId(null);
+      }
+    } catch (error) {
+      if (selectedScriptIdRef.current === scriptId) {
+        setAssetError(errorToMessage(error));
+      }
+    } finally {
+      assetTaskDismissalInFlightRef.current = false;
+      if (selectedScriptIdRef.current === scriptId) {
+        setDismissingAssetTaskId(null);
+      }
     }
   }
 
@@ -1686,6 +2072,51 @@ export default function Home() {
           onPrepareScript={handlePrepareScriptFromTopic}
           setAgentDraft={setTopicAgentDraft}
           onSubmitAgentMessage={handleSendTopicAgentMessage}
+        />
+      ) : selectedMenuKey === materialManagementMenuKey && selectedMaterialSubMenuKey === assetGenerationMenuKey ? (
+        <AssetGenerationPage
+          assetCandidatePanel={
+            selectedScript
+              ? {
+                  actionInProgress: assetActionInProgress,
+                  dismissingTaskId: dismissingAssetTaskId,
+                  candidates: assetCandidates,
+                  candidateCount: assetCandidateCount,
+                  error: assetError,
+                  loadingCandidates: loadingAssetCandidates,
+                  loadingPlan: loadingAssetPlan,
+                  plan: assetPlan,
+                  provider: assetProvider,
+                  selectedSceneId: selectedAssetSceneId,
+                  tasks: assetTasks,
+                  taskToDismissId: assetTaskToDismissId,
+                  useReferenceMaterials,
+                  onCandidateCountChange: setAssetCandidateCount,
+                  onConfirmVideoTask: handleConfirmAssetGenerationTask,
+                  onCancelDismissTask: () => setAssetTaskToDismissId(null),
+                  onConfirmDismissTask: handleDismissAssetGenerationTask,
+                  onGenerateCandidates: handleCreateAssetGenerationTasks,
+                  onProviderChange: setAssetProvider,
+                  onRegenerateScene: handleRegenerateSceneAsset,
+                  onRequestDismissTask: setAssetTaskToDismissId,
+                  onRejectCandidate: handleRejectAssetCandidate,
+                  onSelectCandidate: handleSelectAssetCandidate,
+                  onSelectScene: setSelectedAssetSceneId,
+                  onUseReferenceMaterialsChange: setUseReferenceMaterials,
+                }
+              : null
+          }
+          loadingProjects={loadingProjects}
+          loadingScriptDetail={loadingScriptDetail}
+          loadingScripts={loadingScripts}
+          project={selectedProject}
+          scriptError={scriptError}
+          scripts={scripts}
+          selectedProjectId={selectedProjectId}
+          selectedScript={selectedScript}
+          selectedScriptId={selectedScriptId}
+          writesDisabled={writesDisabled}
+          onOpenScript={handleOpenScript}
         />
       ) : selectedMenuKey === materialManagementMenuKey ? (
         <MaterialLibraryPage

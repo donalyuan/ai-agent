@@ -96,6 +96,8 @@ fn app_state(test_url: String, pool: PgPool) -> AppState {
             openai_timeout_seconds: 5,
             openai_reasoning_effort: Some("low".to_string()),
             openai_max_output_tokens: 3000,
+            asset_storage_root: "/app/storage/assets".to_string(),
+            asset_generation_providers: vec!["gpt-image-2".to_string(), "jimeng".to_string()],
         },
         pool,
         None,
@@ -224,6 +226,23 @@ async fn workspace_menu_route_returns_visible_sorted_tree() {
     );
     assert_eq!(material_menu["children"][0]["is_enabled"], true);
     assert_eq!(material_menu["children"][0]["status"], "active");
+    assert_eq!(material_menu["children"][1]["menu_key"], "asset-generation");
+    assert_eq!(material_menu["children"][1]["label"], "素材生成");
+    assert_eq!(
+        material_menu["children"][1]["route_path"],
+        "/materials/generation"
+    );
+    assert_eq!(material_menu["children"][1]["menu_type"], "page");
+    assert_eq!(
+        material_menu["children"][1]["module_key"],
+        "materials.asset-generation"
+    );
+    assert_eq!(
+        material_menu["children"][1]["agent_key"],
+        "material-generation-agent"
+    );
+    assert_eq!(material_menu["children"][1]["is_enabled"], true);
+    assert_eq!(material_menu["children"][1]["status"], "active");
 
     let body_text = body.to_string();
     assert!(!body_text.contains("material-search"));

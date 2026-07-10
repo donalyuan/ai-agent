@@ -6,7 +6,10 @@ import type {
   ScriptStatus,
   ScriptSummary,
 } from "../../lib/api";
-import { topicSourceLabels } from "../content-strategy/topicModel";
+import {
+  getTopicContentTypeLabel,
+  topicSourceLabels,
+} from "../content-strategy/topicModel";
 import { formatDate, statusClassNames, statusLabels, statusOptions } from "./scriptModel";
 
 type ScriptCreationPageProps = {
@@ -201,7 +204,6 @@ function ScriptAgentConversationPanel({
     <section aria-label="脚本 Agent 对话" className="sidePanel agentChatPanel">
       <div className="panelHeader">
         <div>
-          <p className="sectionKicker">Agent</p>
           <h2>脚本 Agent 对话</h2>
         </div>
         <span className={ready ? "agentChatState ready" : "agentChatState"}>{stateLabel}</span>
@@ -214,7 +216,7 @@ function ScriptAgentConversationPanel({
         {messages.length ? (
           messages.map((message) => (
             <article className={`agentMessage ${message.role}`} key={message.message_id}>
-              <span>{message.role === "user" ? "你" : "Agent"}</span>
+              <span>{message.role === "user" ? "你" : "智能体"}</span>
               <p>{message.content}</p>
             </article>
           ))
@@ -269,7 +271,7 @@ function ScriptDetailView({
       <div className="detailEmpty">
         <p className="sectionKicker">时间轴对照视图</p>
         <h2>选择脚本后查看分镜</h2>
-        <span>通过脚本 Agent 生成脚本或从左侧列表选择脚本后，这里会展示旁白与画面指令。</span>
+        <span>通过脚本 Agent生成脚本或从左侧列表选择脚本后，这里会展示旁白与画面指令。</span>
       </div>
     );
   }
@@ -309,13 +311,12 @@ function ScriptDetailView({
       {script.topic_snapshot ? (
         <section className="sourceTopicPanel">
           <div>
-            <p className="sectionKicker">Topic Source</p>
             <h3>来源选题</h3>
           </div>
           <strong>{script.topic_snapshot.title}</strong>
           <p>{script.topic_snapshot.angle}</p>
           <div className="topicDetailMeta">
-            <span>{script.topic_snapshot.content_type}</span>
+            <span>{getTopicContentTypeLabel(script.topic_snapshot.content_type)}</span>
             <span>{topicSourceLabels[script.topic_snapshot.source]}</span>
             {script.topic_snapshot.score !== null ? (
               <span>{Math.round(script.topic_snapshot.score)} 分</span>

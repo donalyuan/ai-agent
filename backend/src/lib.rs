@@ -1,7 +1,7 @@
 use agents::{LLMClient, ScriptAgentError, ScriptAgentService, ScriptGenerationMode};
 use axum::{
     extract::{rejection::JsonRejection, FromRequest, Path, Query, State},
-    http::{header, HeaderValue, Method, StatusCode},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::IntoResponse,
     routing::{get, post, put},
     Json, Router,
@@ -9,31 +9,38 @@ use axum::{
 use chrono::{DateTime, Utc};
 use novex_model::{LLMError, LLMJsonSchema, LLMPrompt, OpenAIClient, OpenAIConfig};
 use repositories::{
-    ConversationRepository, ConversationRepositoryError, CreateContentTopicInput,
-    CreateProjectInput, MaterialRepository, MaterialRepositoryError,
-    PostgresConversationRepository, PostgresMaterialRepository, PostgresProjectRepository,
-    PostgresScriptRepository, PostgresTopicRepository, PostgresWorkspaceMenuRepository,
-    ProjectRepository, ProjectRepositoryError, ScriptRepositoryError, TopicRepository,
-    TopicRepositoryError, UpdateContentTopicInput, UpdateProjectStrategyProfileInput,
-    WorkspaceMenuRepositoryError,
+    AssetCandidateSource, AssetCandidateType, AssetGenerationRepository,
+    AssetGenerationRepositoryError, AssetGenerationTaskStatus, AssetGenerationTaskType,
+    ConversationRepository, ConversationRepositoryError, CreateAssetCandidateInput,
+    CreateAssetGenerationTaskInput, CreateContentTopicInput, CreateProjectInput,
+    MaterialListFilter, MaterialRepository, MaterialRepositoryError, MaterialStatusFilter,
+    MaterialType, PostgresAssetGenerationRepository, PostgresConversationRepository,
+    PostgresMaterialRepository, PostgresProjectRepository, PostgresScriptRepository,
+    PostgresTopicRepository, PostgresWorkspaceMenuRepository, ProjectRepository,
+    ProjectRepositoryError, ScriptRepositoryError, TopicRepository, TopicRepositoryError,
+    UpdateContentTopicInput, UpdateProjectStrategyProfileInput, WorkspaceMenuRepositoryError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 use crate::agents::conversation::CreateAgentConversationInput;
 use crate::agents::conversational_runtime::{AgentRuntime, AgentRuntimeError, AgentTurnRequest};
 use crate::agents::models::{
     AccountStrategyProfileRequest, AgentConversationResponse, AgentMessageListResponse,
-    AgentMessageResponse, AgentRunResponse, AgentTurnResponseBody, ContentTopicFilter,
-    ContentTopicListResponse, ContentTopicResponse, ContentTopicStatsResponse, ContentTopicStatus,
+    AgentMessageResponse, AgentRunResponse, AgentTurnResponseBody, AssetGenerationPlanRequest,
+    AssetGenerationPlanResponse, AssetGenerationTaskListResponse, AssetGenerationTaskRequest,
+    AssetGenerationTaskResponse, ContentTopicFilter, ContentTopicListResponse,
+    ContentTopicResponse, ContentTopicStatsResponse, ContentTopicStatus,
     CreateAgentConversationRequest, CreateContentTopicRequest, CreateProjectRequest,
     GenerateScriptRequest, MaterialListQuery, MaterialListResponse, MaterialPayloadRequest,
     MaterialResponse, MaterialStatusRequest, PrepareScriptFromTopicRequest,
-    PrepareScriptFromTopicResponse, ProjectListResponse, ProjectResponse, ScriptListFilter,
+    PrepareScriptFromTopicResponse, ProjectListResponse, ProjectResponse,
+    SceneAssetCandidateListResponse, SceneAssetCandidateResponse, ScriptListFilter,
     ScriptListResponse, ScriptResponse, SendAgentMessageRequest, StrategyProfileDraftRequest,
     StrategyProfileDraftResponse, TopicGenerationBatchListResponse,
     TopicGenerationBatchSummaryResponse, TopicGroupListQuery, TopicGroupListResponse,
@@ -57,6 +64,8 @@ pub struct AppConfig {
     pub openai_timeout_seconds: u64,
     pub openai_reasoning_effort: Option<String>,
     pub openai_max_output_tokens: u32,
+    pub asset_storage_root: String,
+    pub asset_generation_providers: Vec<String>,
 }
 
 impl AppConfig {
@@ -89,7 +98,30 @@ impl AppConfig {
                 .and_then(|value| value.parse().ok())
                 .filter(|value| *value > 0)
                 .unwrap_or(3000),
+            asset_storage_root: std::env::var("ASSET_STORAGE_ROOT")
+                .unwrap_or_else(|_| "/app/storage/assets".to_string()),
+            asset_generation_providers: parse_asset_generation_providers(
+                std::env::var("ASSET_GENERATION_PROVIDERS")
+                    .unwrap_or_else(|_| "gpt-image-2,jimeng".to_string())
+                    .as_str(),
+            ),
         }
+    }
+}
+
+fn parse_asset_generation_providers(value: &str) -> Vec<String> {
+    let providers: Vec<String> = value
+        .split(',')
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+        .filter(|provider| repositories::AssetGenerationProvider::try_from(*provider).is_ok())
+        .map(ToString::to_string)
+        .collect();
+
+    if providers.is_empty() {
+        vec!["gpt-image-2".to_string(), "jimeng".to_string()]
+    } else {
+        providers
     }
 }
 
@@ -180,6 +212,17 @@ impl AppState {
             .ok_or_else(|| ScriptApiError::State("database pool is not configured".to_string()))?;
 
         Ok(PostgresMaterialRepository::new(pool))
+    }
+
+    fn asset_generation_repository(
+        &self,
+    ) -> Result<PostgresAssetGenerationRepository, ScriptApiError> {
+        let pool = self
+            .pg_pool
+            .clone()
+            .ok_or_else(|| ScriptApiError::State("database pool is not configured".to_string()))?;
+
+        Ok(PostgresAssetGenerationRepository::new(pool))
     }
 
     fn agent_runtime(&self) -> Result<AgentRuntime, ScriptApiError> {
@@ -316,7 +359,11 @@ pub fn build_app_with_state(state: AppState) -> Router {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([header::ACCEPT, header::CONTENT_TYPE]);
+        .allow_headers([
+            header::ACCEPT,
+            header::CONTENT_TYPE,
+            HeaderName::from_static("idempotency-key"),
+        ]);
 
     Router::new()
         .route("/health", get(health))
@@ -385,6 +432,42 @@ pub fn build_app_with_state(state: AppState) -> Router {
         .route("/api/scripts/:script_id", get(get_script))
         .route("/api/projects/:project_id/scripts", get(list_scripts))
         .route("/api/scripts/:script_id/status", put(update_script_status))
+        .route(
+            "/api/scripts/:script_id/asset-generation-plan",
+            post(create_asset_generation_plan),
+        )
+        .route(
+            "/api/scripts/:script_id/asset-generation-tasks",
+            get(list_asset_generation_tasks).post(create_asset_generation_tasks),
+        )
+        .route(
+            "/api/scripts/:script_id/asset-candidates",
+            get(list_asset_candidates),
+        )
+        .route(
+            "/api/scenes/:scene_id/asset-candidates/:candidate_id/select",
+            put(select_asset_candidate),
+        )
+        .route(
+            "/api/scenes/:scene_id/asset-candidates/:candidate_id/reject",
+            put(reject_asset_candidate),
+        )
+        .route(
+            "/api/scenes/:scene_id/asset-generation-tasks",
+            post(create_scene_asset_generation_task),
+        )
+        .route(
+            "/api/asset-generation-tasks/:task_id/confirm",
+            post(confirm_asset_generation_task),
+        )
+        .route(
+            "/api/asset-generation-tasks/:task_id/dismiss",
+            post(dismiss_asset_generation_task),
+        )
+        .nest_service(
+            "/assets",
+            ServeDir::new(state.config.asset_storage_root.clone()),
+        )
         .layer(cors)
         .with_state(state)
 }
@@ -405,6 +488,7 @@ pub async fn connect_runtime_pg_pool(
         .max_connections(max_connections)
         .connect(database_url)
         .await?;
+    sqlx::migrate!("./migrations").run(&pg_pool).await?;
     sync_content_strategy_menu_state(&pg_pool).await?;
 
     Ok(pg_pool)
@@ -1276,6 +1360,505 @@ async fn update_script_status(
     Ok(Json(UpdateScriptStatusResponse::from(script)))
 }
 
+async fn create_asset_generation_plan(
+    State(state): State<AppState>,
+    Path(script_id): Path<Uuid>,
+    ValidJson(request): ValidJson<AssetGenerationPlanRequest>,
+) -> Result<Json<AssetGenerationPlanResponse>, ScriptApiError> {
+    let provider = request
+        .validate_for_api()
+        .map_err(ScriptApiError::AssetValidation)?;
+    ensure_asset_provider_enabled(&state, provider)?;
+    let script = state
+        .script_agent_service_without_llm()?
+        .get_script(script_id)
+        .await?;
+    let reference_material_count = if request.use_reference_materials {
+        active_image_material_ids(&state, script.project_id)
+            .await?
+            .len() as i32
+    } else {
+        0
+    };
+    let response = build_asset_generation_plan_response(
+        script.id,
+        script.scenes.len(),
+        request.image_candidates_per_scene,
+        provider,
+        enabled_asset_generation_providers(&state),
+        reference_material_count,
+    );
+
+    Ok(Json(response))
+}
+
+async fn create_asset_generation_tasks(
+    State(state): State<AppState>,
+    Path(script_id): Path<Uuid>,
+    ValidJson(request): ValidJson<AssetGenerationTaskRequest>,
+) -> Result<(StatusCode, Json<AssetGenerationTaskListResponse>), ScriptApiError> {
+    let provider = request
+        .validate_for_api()
+        .map_err(ScriptApiError::AssetValidation)?;
+    ensure_asset_provider_enabled(&state, provider)?;
+    let script = state
+        .script_agent_service_without_llm()?
+        .get_script(script_id)
+        .await?;
+    let plan = build_asset_generation_plan_response(
+        script.id,
+        script.scenes.len(),
+        request.image_candidates_per_scene,
+        provider,
+        enabled_asset_generation_providers(&state),
+        0,
+    );
+    ensure_asset_generation_plan_can_create(&plan)?;
+
+    let repository = state.asset_generation_repository()?;
+    let existing_tasks = repository.list_tasks(script.id).await?;
+    let reference_material_ids = if request.use_reference_materials {
+        active_image_material_ids(&state, script.project_id).await?
+    } else {
+        Vec::new()
+    };
+    create_existing_material_candidates(&state, script.project_id, script.id, &script.scenes)
+        .await?;
+    let scene_ids: Vec<Uuid> = script.scenes.iter().map(|scene| scene.id).collect();
+    let mut tasks = Vec::new();
+
+    let image_task_key = script_image_task_idempotency_key(
+        script.id,
+        provider,
+        request.image_candidates_per_scene,
+        request.use_reference_materials,
+        &reference_material_ids,
+    );
+    let had_matching_image_task = existing_tasks
+        .iter()
+        .any(|task| task.params.get("idempotency_key") == Some(&json!(image_task_key)));
+    let image_task = repository
+        .create_task(CreateAssetGenerationTaskInput {
+            project_id: script.project_id,
+            script_id: Some(script.id),
+            scene_id: None,
+            provider,
+            task_type: AssetGenerationTaskType::ImageCandidates,
+            status: AssetGenerationTaskStatus::Pending,
+            candidate_count: plan.image_candidate_count,
+            reference_material_ids: reference_material_ids.clone(),
+            idempotency_key: Some(image_task_key.clone()),
+            params: json!({
+                "idempotency_key": image_task_key,
+                "image_candidates_per_scene": request.image_candidates_per_scene,
+                "scene_ids": scene_ids,
+                "use_reference_materials": request.use_reference_materials
+            }),
+        })
+        .await?;
+    tasks.push(AssetGenerationTaskResponse::from(image_task));
+
+    let mut reused_video_task_count = 0;
+    for scene in &script.scenes {
+        let video_task_key = scene_video_task_idempotency_key(scene.id, provider);
+        if existing_tasks
+            .iter()
+            .any(|task| task.params.get("idempotency_key") == Some(&json!(video_task_key)))
+        {
+            reused_video_task_count += 1;
+        }
+        let video_task = repository
+            .create_task(CreateAssetGenerationTaskInput {
+                project_id: script.project_id,
+                script_id: Some(script.id),
+                scene_id: Some(scene.id),
+                provider,
+                task_type: AssetGenerationTaskType::VideoDraft,
+                status: AssetGenerationTaskStatus::Draft,
+                candidate_count: 0,
+                reference_material_ids: reference_material_ids.clone(),
+                idempotency_key: Some(video_task_key.clone()),
+                params: json!({
+                    "idempotency_key": video_task_key,
+                    "scene_id": scene.id,
+                    "requires_manual_confirmation": true
+                }),
+            })
+            .await?;
+        repository
+            .create_candidate(CreateAssetCandidateInput {
+                project_id: script.project_id,
+                script_id: script.id,
+                scene_id: scene.id,
+                material_id: None,
+                candidate_type: AssetCandidateType::Video,
+                source: AssetCandidateSource::VideoTask,
+                rank: 10_000,
+                generation_task_id: Some(video_task.id),
+                metadata: json!({ "requires_manual_confirmation": true }),
+            })
+            .await?;
+        tasks.push(AssetGenerationTaskResponse::from(video_task));
+    }
+
+    let status_code = if had_matching_image_task && reused_video_task_count == script.scenes.len() {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+
+    Ok((
+        status_code,
+        Json(AssetGenerationTaskListResponse {
+            script_id: script.id,
+            tasks,
+        }),
+    ))
+}
+
+async fn list_asset_generation_tasks(
+    State(state): State<AppState>,
+    Path(script_id): Path<Uuid>,
+) -> Result<Json<AssetGenerationTaskListResponse>, ScriptApiError> {
+    state
+        .script_agent_service_without_llm()?
+        .get_script(script_id)
+        .await?;
+    let tasks = state
+        .asset_generation_repository()?
+        .list_tasks(script_id)
+        .await?
+        .into_iter()
+        .map(AssetGenerationTaskResponse::from)
+        .collect();
+
+    Ok(Json(AssetGenerationTaskListResponse { script_id, tasks }))
+}
+
+async fn list_asset_candidates(
+    State(state): State<AppState>,
+    Path(script_id): Path<Uuid>,
+) -> Result<Json<SceneAssetCandidateListResponse>, ScriptApiError> {
+    state
+        .script_agent_service_without_llm()?
+        .get_script(script_id)
+        .await?;
+    let candidates = state
+        .asset_generation_repository()?
+        .list_candidates(script_id)
+        .await?;
+    let responses = asset_candidate_responses(&state, candidates).await?;
+
+    Ok(Json(SceneAssetCandidateListResponse {
+        candidates: responses,
+    }))
+}
+
+async fn select_asset_candidate(
+    State(state): State<AppState>,
+    Path((scene_id, candidate_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<SceneAssetCandidateResponse>, ScriptApiError> {
+    let candidate = state
+        .asset_generation_repository()?
+        .select_candidate(scene_id, candidate_id)
+        .await?;
+    let response = asset_candidate_response(&state, candidate).await?;
+
+    Ok(Json(response))
+}
+
+async fn reject_asset_candidate(
+    State(state): State<AppState>,
+    Path((scene_id, candidate_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<SceneAssetCandidateResponse>, ScriptApiError> {
+    let candidate = state
+        .asset_generation_repository()?
+        .reject_candidate(scene_id, candidate_id)
+        .await?;
+    let response = asset_candidate_response(&state, candidate).await?;
+
+    Ok(Json(response))
+}
+
+async fn create_scene_asset_generation_task(
+    State(state): State<AppState>,
+    Path(scene_id): Path<Uuid>,
+    headers: HeaderMap,
+    ValidJson(request): ValidJson<AssetGenerationTaskRequest>,
+) -> Result<(StatusCode, Json<AssetGenerationTaskResponse>), ScriptApiError> {
+    let request_idempotency_key = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            ScriptApiError::AssetValidation(
+                "单镜头重生必须提供 UUID 格式 Idempotency-Key".to_string(),
+            )
+        })?;
+    let request_idempotency_key =
+        Uuid::parse_str(request_idempotency_key.trim()).map_err(|_| {
+            ScriptApiError::AssetValidation(
+                "单镜头重生必须提供 UUID 格式 Idempotency-Key".to_string(),
+            )
+        })?;
+    let provider = request
+        .validate_for_api()
+        .map_err(ScriptApiError::AssetValidation)?;
+    ensure_asset_provider_enabled(&state, provider)?;
+    let (script_id, project_id) = scene_context(&state, scene_id).await?;
+    let reference_material_ids = if request.use_reference_materials {
+        active_image_material_ids(&state, project_id).await?
+    } else {
+        Vec::new()
+    };
+    let idempotency_key = format!("scene-image:{scene_id}:{request_idempotency_key}");
+    let result = state
+        .asset_generation_repository()?
+        .create_or_reuse_scene_image_task(CreateAssetGenerationTaskInput {
+            project_id,
+            script_id: Some(script_id),
+            scene_id: Some(scene_id),
+            provider,
+            task_type: AssetGenerationTaskType::ImageCandidates,
+            status: AssetGenerationTaskStatus::Pending,
+            candidate_count: request.image_candidates_per_scene,
+            reference_material_ids,
+            idempotency_key: Some(idempotency_key.clone()),
+            params: json!({
+                "idempotency_key": idempotency_key,
+                "image_candidates_per_scene": request.image_candidates_per_scene,
+                "scene_id": scene_id,
+                "use_reference_materials": request.use_reference_materials
+            }),
+        })
+        .await?;
+
+    Ok((
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(AssetGenerationTaskResponse::from(result.task)),
+    ))
+}
+
+async fn confirm_asset_generation_task(
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+) -> Result<Json<AssetGenerationTaskResponse>, ScriptApiError> {
+    let task = state
+        .asset_generation_repository()?
+        .confirm_video_task(task_id)
+        .await?;
+
+    Ok(Json(AssetGenerationTaskResponse::from(task)))
+}
+
+async fn dismiss_asset_generation_task(
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+) -> Result<Json<AssetGenerationTaskResponse>, ScriptApiError> {
+    let task = state
+        .asset_generation_repository()?
+        .dismiss_task(task_id)
+        .await?;
+
+    Ok(Json(AssetGenerationTaskResponse::from(task)))
+}
+
+fn build_asset_generation_plan_response(
+    script_id: Uuid,
+    scene_count: usize,
+    image_candidates_per_scene: i32,
+    provider: repositories::AssetGenerationProvider,
+    enabled_providers: Vec<String>,
+    reference_material_count: i32,
+) -> AssetGenerationPlanResponse {
+    let image_candidate_count = scene_count as i32 * image_candidates_per_scene;
+    let can_create = image_candidate_count <= 48;
+    let warnings = if can_create {
+        Vec::new()
+    } else {
+        vec!["单次最多生成 48 张图片候选，请减少分镜或候选数量".to_string()]
+    };
+
+    AssetGenerationPlanResponse {
+        script_id,
+        scene_count,
+        image_candidate_count,
+        max_image_candidate_count: 48,
+        provider: provider.as_str().to_string(),
+        enabled_providers,
+        reference_material_count,
+        video_task_count: scene_count as i32,
+        can_create,
+        warnings,
+    }
+}
+
+fn enabled_asset_generation_providers(state: &AppState) -> Vec<String> {
+    parse_asset_generation_providers(&state.config.asset_generation_providers.join(","))
+}
+
+fn ensure_asset_provider_enabled(
+    state: &AppState,
+    provider: repositories::AssetGenerationProvider,
+) -> Result<(), ScriptApiError> {
+    let enabled = enabled_asset_generation_providers(state);
+    if enabled.iter().any(|item| item == provider.as_str()) {
+        Ok(())
+    } else {
+        Err(ScriptApiError::AssetValidation(format!(
+            "素材生成供应商 {} 未启用",
+            provider.as_str()
+        )))
+    }
+}
+
+fn script_image_task_idempotency_key(
+    script_id: Uuid,
+    provider: repositories::AssetGenerationProvider,
+    image_candidates_per_scene: i32,
+    use_reference_materials: bool,
+    reference_material_ids: &[Uuid],
+) -> String {
+    let mut references: Vec<String> = reference_material_ids.iter().map(Uuid::to_string).collect();
+    references.sort();
+    format!(
+        "script:{script_id}:image:{}:{image_candidates_per_scene}:{use_reference_materials}:{}",
+        provider.as_str(),
+        references.join("|")
+    )
+}
+
+fn scene_video_task_idempotency_key(
+    scene_id: Uuid,
+    provider: repositories::AssetGenerationProvider,
+) -> String {
+    format!("scene:{scene_id}:video-draft:{}", provider.as_str())
+}
+
+fn ensure_asset_generation_plan_can_create(
+    plan: &AssetGenerationPlanResponse,
+) -> Result<(), ScriptApiError> {
+    if plan.can_create {
+        Ok(())
+    } else {
+        Err(ScriptApiError::AssetValidation(
+            "单次最多生成 48 张图片候选，请减少分镜或候选数量".to_string(),
+        ))
+    }
+}
+
+async fn active_image_material_ids(
+    state: &AppState,
+    project_id: Uuid,
+) -> Result<Vec<Uuid>, ScriptApiError> {
+    let materials = state
+        .material_repository()?
+        .list_materials(
+            project_id,
+            MaterialListFilter {
+                material_type: Some(MaterialType::Image),
+                status: MaterialStatusFilter::Active,
+                ..MaterialListFilter::default()
+            },
+        )
+        .await?;
+
+    Ok(materials.into_iter().map(|material| material.id).collect())
+}
+
+async fn create_existing_material_candidates(
+    state: &AppState,
+    project_id: Uuid,
+    script_id: Uuid,
+    scenes: &[crate::agents::models::Scene],
+) -> Result<(), ScriptApiError> {
+    let materials = state
+        .material_repository()?
+        .list_materials(
+            project_id,
+            MaterialListFilter {
+                material_type: Some(MaterialType::Image),
+                status: MaterialStatusFilter::Active,
+                ..MaterialListFilter::default()
+            },
+        )
+        .await?;
+    let repository = state.asset_generation_repository()?;
+
+    for scene in scenes {
+        for (index, material) in materials.iter().enumerate() {
+            repository
+                .create_candidate(CreateAssetCandidateInput {
+                    project_id,
+                    script_id,
+                    scene_id: scene.id,
+                    material_id: Some(material.id),
+                    candidate_type: AssetCandidateType::Image,
+                    source: AssetCandidateSource::ExistingMaterial,
+                    rank: index as i32 + 1,
+                    generation_task_id: None,
+                    metadata: json!({ "reuse_reason": "active image material" }),
+                })
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn asset_candidate_responses(
+    state: &AppState,
+    candidates: Vec<repositories::SceneAssetCandidate>,
+) -> Result<Vec<SceneAssetCandidateResponse>, ScriptApiError> {
+    let mut responses = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        responses.push(asset_candidate_response(state, candidate).await?);
+    }
+    Ok(responses)
+}
+
+async fn asset_candidate_response(
+    state: &AppState,
+    candidate: repositories::SceneAssetCandidate,
+) -> Result<SceneAssetCandidateResponse, ScriptApiError> {
+    let material = match candidate.material_id {
+        Some(material_id) => Some(
+            state
+                .material_repository()?
+                .get_material(material_id)
+                .await?,
+        ),
+        None => None,
+    };
+
+    Ok(SceneAssetCandidateResponse::from_candidate(
+        candidate, material,
+    ))
+}
+
+async fn scene_context(state: &AppState, scene_id: Uuid) -> Result<(Uuid, Uuid), ScriptApiError> {
+    let pool = state
+        .pg_pool
+        .clone()
+        .ok_or_else(|| ScriptApiError::State("database pool is not configured".to_string()))?;
+    sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT s.id AS script_id, s.project_id
+        FROM scenes sc
+        JOIN scripts s ON s.id = sc.script_id
+        WHERE sc.id = $1
+        "#,
+    )
+    .bind(scene_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|error| ScriptApiError::AssetValidation(error.to_string()))?
+    .ok_or_else(|| ScriptApiError::AssetValidation("分镜不存在".to_string()))
+}
+
 struct ValidJson<T>(T);
 
 #[async_trait::async_trait]
@@ -1305,11 +1888,13 @@ enum ScriptApiError {
     AgentRuntime(AgentRuntimeError),
     ProjectRepository(ProjectRepositoryError),
     MaterialRepository(MaterialRepositoryError),
+    AssetGenerationRepository(AssetGenerationRepositoryError),
     ConversationRepository(ConversationRepositoryError),
     TopicRepository(TopicRepositoryError),
     WorkspaceMenuRepository(WorkspaceMenuRepositoryError),
     ProjectValidation(String),
     MaterialValidation(String),
+    AssetValidation(String),
     ConversationValidation(String),
     TopicValidation(String),
     StrategyDraftLlm(LLMError),
@@ -1332,6 +1917,12 @@ impl From<ProjectRepositoryError> for ScriptApiError {
 impl From<MaterialRepositoryError> for ScriptApiError {
     fn from(error: MaterialRepositoryError) -> Self {
         Self::MaterialRepository(error)
+    }
+}
+
+impl From<AssetGenerationRepositoryError> for ScriptApiError {
+    fn from(error: AssetGenerationRepositoryError) -> Self {
+        Self::AssetGenerationRepository(error)
     }
 }
 
@@ -1373,6 +1964,9 @@ impl IntoResponse for ScriptApiError {
             Self::MaterialRepository(error) => {
                 material_repository_error_response(error).into_response()
             }
+            Self::AssetGenerationRepository(error) => {
+                asset_generation_repository_error_response(error).into_response()
+            }
             Self::ConversationRepository(error) => {
                 conversation_repository_error_response(error).into_response()
             }
@@ -1386,6 +1980,9 @@ impl IntoResponse for ScriptApiError {
                 (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
             }
             Self::MaterialValidation(message) => {
+                (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+            }
+            Self::AssetValidation(message) => {
                 (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
             }
             Self::ConversationValidation(message) => {
@@ -1476,9 +2073,52 @@ fn material_repository_error_response(
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "项目不存在", "project_id": project_id })),
         ),
+        MaterialRepositoryError::MaterialInUseAsSelectedCandidate(material_id) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "已选为分镜主素材的素材不可归档", "material_id": material_id })),
+        ),
         MaterialRepositoryError::Storage(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "素材存储失败", "details": message })),
+        ),
+    }
+}
+
+fn asset_generation_repository_error_response(
+    error: AssetGenerationRepositoryError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match error {
+        AssetGenerationRepositoryError::TaskNotFound(task_id) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "素材生成任务不存在", "task_id": task_id })),
+        ),
+        AssetGenerationRepositoryError::TaskNotConfirmable(task_id) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "只有待确认的 AI 视频任务可以确认", "task_id": task_id })),
+        ),
+        AssetGenerationRepositoryError::TaskNotDismissible(task_id) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "只有失败的素材生成任务可以清理", "task_id": task_id })),
+        ),
+        AssetGenerationRepositoryError::CandidateNotFound(candidate_id) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "素材候选不存在", "candidate_id": candidate_id })),
+        ),
+        AssetGenerationRepositoryError::CandidateNotSelectable(candidate_id) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "素材候选不可选择", "candidate_id": candidate_id })),
+        ),
+        AssetGenerationRepositoryError::FailedCandidateNotSelectable(candidate_id) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "失败候选不可绑定分镜", "candidate_id": candidate_id })),
+        ),
+        AssetGenerationRepositoryError::InvalidCandidateRelation(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "素材候选关系非法", "details": message })),
+        ),
+        AssetGenerationRepositoryError::Storage(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "素材生成存储失败", "details": message })),
         ),
     }
 }

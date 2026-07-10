@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAgentConversation,
+  confirmAssetGenerationTask,
   createApiClient,
+  createAssetGenerationTasks,
   createContentTopic,
+  createSceneAssetGenerationTask,
   createTopicGroupReview,
   deleteContentTopic,
+  dismissAssetGenerationTask,
   generateStrategyProfileDraft,
   generateScript,
+  getAssetGenerationPlan,
   getApiBaseUrl,
   getLatestTopicQualityEvaluation,
   getLatestTopicGroupReview,
@@ -14,6 +19,8 @@ import {
   getScript,
   getScriptAgentTurnMetadata,
   listAgentMessages,
+  listAssetCandidates,
+  listAssetGenerationTasks,
   listContentTopics,
   listMaterials,
   listTopicGenerationBatches,
@@ -24,6 +31,8 @@ import {
   prepareScriptFromTopic,
   sendAgentMessage,
   createMaterial,
+  rejectAssetCandidate,
+  selectAssetCandidate,
   updateContentTopic,
   updateContentTopicStatus,
   updateMaterial,
@@ -138,6 +147,66 @@ const materialPayload: MaterialPayload = {
     language: "zh-CN",
     subtitle_format: "vtt",
   },
+};
+
+const assetGenerationPlan = {
+  script_id: scriptSummary.script_id,
+  scene_count: 2,
+  image_candidate_count: 6,
+  max_image_candidate_count: 48,
+  provider: "gpt-image-2",
+  enabled_providers: ["gpt-image-2", "jimeng"],
+  reference_material_count: 1,
+  video_task_count: 2,
+  can_create: true,
+  warnings: [],
+};
+
+const imageAssetGenerationTask = {
+  task_id: "12121212-1212-4212-8212-121212121212",
+  project_id: project.project_id,
+  script_id: scriptSummary.script_id,
+  scene_id: null,
+  provider: "gpt-image-2",
+  task_type: "image_candidates",
+  status: "pending",
+  candidate_count: 6,
+  reference_material_ids: [material.material_id],
+  params: { image_candidates_per_scene: 3 },
+  result: {},
+  error_message: null,
+  retry_count: 0,
+  created_at: "2026-07-09T00:30:00Z",
+  updated_at: "2026-07-09T00:30:00Z",
+};
+
+const videoDraftAssetGenerationTask = {
+  ...imageAssetGenerationTask,
+  task_id: "13131313-1313-4313-8313-131313131313",
+  scene_id: scriptDetail.scenes[0].scene_id,
+  task_type: "video_draft",
+  status: "draft",
+  candidate_count: 0,
+  params: { requires_manual_confirmation: true },
+};
+
+const sceneAssetCandidate = {
+  candidate_id: "14141414-1414-4414-8414-141414141414",
+  project_id: project.project_id,
+  script_id: scriptSummary.script_id,
+  scene_id: scriptDetail.scenes[0].scene_id,
+  material_id: material.material_id,
+  candidate_type: "image",
+  source: "ai_generated",
+  status: "candidate",
+  rank: 1,
+  generation_task_id: imageAssetGenerationTask.task_id,
+  metadata: { source_scene_id: scriptDetail.scenes[0].scene_id },
+  file_url: "http://api.test/assets/generated/images/task/scene-1.png",
+  thumbnail_url: "http://api.test/assets/generated/images/task/scene-1.png",
+  file_name: "scene-1.png",
+  created_at: "2026-07-09T00:31:00Z",
+  updated_at: "2026-07-09T00:31:00Z",
 };
 
 const topicGenerationBatch = {
@@ -696,6 +765,221 @@ describe("video-agent api client", () => {
     expect(detail.file_name).toBe("demo.vtt");
     expect(updated.file_name).toBe("demo-updated.vtt");
     expect(archived.status).toBe("archived");
+  });
+
+  it("创建素材生成计划和批量任务", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(assetGenerationPlan))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            script_id: scriptSummary.script_id,
+            tasks: [imageAssetGenerationTask, videoDraftAssetGenerationTask],
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          script_id: scriptSummary.script_id,
+          tasks: [imageAssetGenerationTask, videoDraftAssetGenerationTask],
+        }),
+      );
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+    const payload = {
+      provider: "gpt-image-2" as const,
+      image_candidates_per_scene: 3,
+      use_reference_materials: true,
+    };
+
+    const plan = await getAssetGenerationPlan(client, scriptSummary.script_id, payload);
+    const tasks = await createAssetGenerationTasks(client, scriptSummary.script_id, payload);
+    const listedTasks = await listAssetGenerationTasks(client, scriptSummary.script_id);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `http://api.test/api/scripts/${scriptSummary.script_id}/asset-generation-plan`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      `http://api.test/api/scripts/${scriptSummary.script_id}/asset-generation-tasks`,
+      {
+        headers: {
+          accept: "application/json",
+        },
+      },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `http://api.test/api/scripts/${scriptSummary.script_id}/asset-generation-tasks`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      },
+    );
+    expect(plan.image_candidate_count).toBe(6);
+    expect(plan.enabled_providers).toEqual(["gpt-image-2", "jimeng"]);
+    expect(tasks.tasks.map((task) => task.task_type)).toEqual(["image_candidates", "video_draft"]);
+    expect(listedTasks.tasks.map((task) => task.status)).toEqual(["pending", "draft"]);
+  });
+
+  it("清理失败素材生成任务", async () => {
+    const dismissedAt = "2026-07-10T08:30:00Z";
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        ...imageAssetGenerationTask,
+        status: "failed",
+        error_message: "Image generation is not enabled for this group",
+        dismissed_at: dismissedAt,
+      }),
+    );
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const task = await dismissAssetGenerationTask(client, imageAssetGenerationTask.task_id);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://api.test/api/asset-generation-tasks/${imageAssetGenerationTask.task_id}/dismiss`,
+      {
+        method: "POST",
+        headers: { accept: "application/json" },
+      },
+    );
+    expect(task.status).toBe("failed");
+    expect(task.dismissed_at).toBe(dismissedAt);
+  });
+
+  it("读取并操作分镜素材候选", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ candidates: [sceneAssetCandidate] }))
+      .mockResolvedValueOnce(jsonResponse({ ...sceneAssetCandidate, status: "selected" }))
+      .mockResolvedValueOnce(jsonResponse({ ...sceneAssetCandidate, status: "rejected" }))
+      .mockResolvedValueOnce(jsonResponse({ ...imageAssetGenerationTask, scene_id: scriptDetail.scenes[0].scene_id }, { status: 201 }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+    const payload = {
+      provider: "jimeng" as const,
+      image_candidates_per_scene: 2,
+      use_reference_materials: false,
+    };
+    const idempotencyKey = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+    const candidates = await listAssetCandidates(client, scriptSummary.script_id);
+    const selected = await selectAssetCandidate(
+      client,
+      scriptDetail.scenes[0].scene_id,
+      sceneAssetCandidate.candidate_id,
+    );
+    const rejected = await rejectAssetCandidate(
+      client,
+      scriptDetail.scenes[0].scene_id,
+      sceneAssetCandidate.candidate_id,
+    );
+    const regenerateTask = await createSceneAssetGenerationTask(
+      client,
+      scriptDetail.scenes[0].scene_id,
+      payload,
+      idempotencyKey,
+    );
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `http://api.test/api/scripts/${scriptSummary.script_id}/asset-candidates`,
+      { headers: { accept: "application/json" } },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `http://api.test/api/scenes/${scriptDetail.scenes[0].scene_id}/asset-candidates/${sceneAssetCandidate.candidate_id}/select`,
+      { method: "PUT", headers: { accept: "application/json" } },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      `http://api.test/api/scenes/${scriptDetail.scenes[0].scene_id}/asset-candidates/${sceneAssetCandidate.candidate_id}/reject`,
+      { method: "PUT", headers: { accept: "application/json" } },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      `http://api.test/api/scenes/${scriptDetail.scenes[0].scene_id}/asset-generation-tasks`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+        },
+        body: JSON.stringify(payload),
+      },
+    );
+    expect(candidates.candidates[0].source).toBe("ai_generated");
+    expect(selected.status).toBe("selected");
+    expect(rejected.status).toBe("rejected");
+    expect(regenerateTask.task_type).toBe("image_candidates");
+  });
+
+  it("将自管素材相对 URL 解析到 API 地址", async () => {
+    const relativeCandidate = {
+      ...sceneAssetCandidate,
+      file_url: "/assets/generated/images/task-1/scene-1.png",
+      thumbnail_url: "/assets/generated/images/task-1/scene-1-thumb.png",
+    };
+    const relativeMaterial = {
+      ...material,
+      material_type: "image" as const,
+      file_url: "/assets/generated/images/task-1/scene-1.png",
+      thumbnail_url: null,
+    };
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ candidates: [relativeCandidate] }))
+      .mockResolvedValueOnce(jsonResponse({ materials: [relativeMaterial] }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const candidates = await listAssetCandidates(client, scriptSummary.script_id);
+    const materials = await listMaterials(client, project.project_id);
+
+    expect(candidates.candidates[0].file_url).toBe(
+      "http://api.test/assets/generated/images/task-1/scene-1.png",
+    );
+    expect(candidates.candidates[0].thumbnail_url).toBe(
+      "http://api.test/assets/generated/images/task-1/scene-1-thumb.png",
+    );
+    expect(materials.materials[0].file_url).toBe(
+      "http://api.test/assets/generated/images/task-1/scene-1.png",
+    );
+  });
+
+  it("确认 AI 视频生成任务", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        ...videoDraftAssetGenerationTask,
+        task_type: "video_generation",
+        status: "pending",
+      }),
+    );
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await confirmAssetGenerationTask(client, videoDraftAssetGenerationTask.task_id);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://api.test/api/asset-generation-tasks/${videoDraftAssetGenerationTask.task_id}/confirm`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+        },
+      },
+    );
+    expect(result.task_type).toBe("video_generation");
+    expect(result.status).toBe("pending");
   });
 
   it("请求选题生成批次列表", async () => {

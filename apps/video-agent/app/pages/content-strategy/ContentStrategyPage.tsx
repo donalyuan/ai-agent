@@ -261,7 +261,6 @@ function TopicAgentPanel({
     <section aria-label="选题 Agent" className="sidePanel topicAgentPanel">
       <div className="panelHeader">
         <div>
-          <p className="sectionKicker">Agent</p>
           <h2>选题 Agent</h2>
         </div>
         <span className={!disabled ? "agentChatState ready" : "agentChatState"}>
@@ -289,7 +288,7 @@ function TopicAgentPanel({
             const qualitySummary = getTopicAgentQualitySummary(message);
             return (
               <article className={`agentMessage ${message.role}`} key={message.message_id}>
-                <span>{message.role === "user" ? "你" : "Agent"}</span>
+                <span>{message.role === "user" ? "你" : "智能体"}</span>
                 <p>{message.content}</p>
                 {qualitySummary ? (
                   <div className="agentQualitySummary" aria-label="质量闸门摘要">
