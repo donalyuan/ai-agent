@@ -7,14 +7,18 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use novex_model::{LLMError, LLMJsonSchema, LLMPrompt, OpenAIClient, OpenAIConfig};
+use novex_model::{
+    ApiProtocol, LLMError, LLMJsonSchema, LLMPrompt, ModelExecutionSnapshot, ModelRuntimeConfig,
+    ModelType,
+};
 use repositories::{
-    AssetCandidateSource, AssetCandidateType, AssetGenerationRepository,
+    AiModelRepository, AssetCandidateSource, AssetCandidateType, AssetGenerationRepository,
     AssetGenerationRepositoryError, AssetGenerationTaskStatus, AssetGenerationTaskType,
     ConversationRepository, ConversationRepositoryError, CreateAssetCandidateInput,
     CreateAssetGenerationTaskInput, CreateContentTopicInput, CreateProjectInput,
     MaterialListFilter, MaterialRepository, MaterialRepositoryError, MaterialStatusFilter,
     MaterialType, PostgresAssetGenerationRepository, PostgresConversationRepository,
+    PostgresAiModelRepository,
     PostgresMaterialRepository, PostgresProjectRepository, PostgresScriptRepository,
     PostgresTopicRepository, PostgresWorkspaceMenuRepository, ProjectRepository,
     ProjectRepositoryError, ScriptRepositoryError, TopicRepository, TopicRepositoryError,
@@ -28,7 +32,9 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
-use crate::agents::conversation::CreateAgentConversationInput;
+use crate::agents::conversation::{
+    AgentRunRecord, CreateAgentConversationInput, CreateAgentRunInput, FinishAgentRunInput,
+};
 use crate::agents::conversational_runtime::{AgentRuntime, AgentRuntimeError, AgentTurnRequest};
 use crate::agents::models::{
     AccountStrategyProfileRequest, AgentConversationResponse, AgentMessageListResponse,
@@ -38,7 +44,7 @@ use crate::agents::models::{
     ContentTopicResponse, ContentTopicStatsResponse, ContentTopicStatus,
     CreateAgentConversationRequest, CreateContentTopicRequest, CreateProjectRequest,
     GenerateScriptRequest, MaterialListQuery, MaterialListResponse, MaterialPayloadRequest,
-    MaterialResponse, MaterialStatusRequest, PrepareScriptFromTopicRequest,
+    MaterialResponse, MaterialStatusRequest, ModelSelectionRequest, PrepareScriptFromTopicRequest,
     PrepareScriptFromTopicResponse, ProjectListResponse, ProjectResponse,
     SceneAssetCandidateListResponse, SceneAssetCandidateResponse, ScriptListFilter,
     ScriptListResponse, ScriptResponse, SendAgentMessageRequest, StrategyProfileDraftRequest,
@@ -51,7 +57,19 @@ use crate::agents::models::{
 };
 
 pub mod agents;
+pub mod model_config_import;
+mod model_management;
+pub mod model_routing;
 pub mod repositories;
+
+use model_management::{
+    change_ai_model_status, create_ai_model, delete_ai_model, get_ai_model, list_ai_models,
+    list_model_options, set_default_ai_model, update_ai_model,
+};
+use model_routing::{
+    ModelClientResolver, ModelResolveError, PostgresModelClientResolver, ResolvedTextClient,
+    StaticModelClientResolver,
+};
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -79,49 +97,16 @@ impl AppConfig {
             }),
             redis_url: std::env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://bs-redis:6379/2".to_string()),
-            openai_api_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-            openai_base_url: std::env::var("OPENAI_BASE_URL")
-                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string()),
-            openai_model: std::env::var("OPENAI_MODEL")
-                .unwrap_or_else(|_| "gpt-4-turbo".to_string()),
-            openai_timeout_seconds: std::env::var("OPENAI_TIMEOUT_SECONDS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(30),
-            openai_reasoning_effort: std::env::var("OPENAI_REASONING_EFFORT")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"))
-                .or_else(|| Some("low".to_string())),
-            openai_max_output_tokens: std::env::var("OPENAI_MAX_OUTPUT_TOKENS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value| *value > 0)
-                .unwrap_or(3000),
+            openai_api_key: String::new(),
+            openai_base_url: String::new(),
+            openai_model: String::new(),
+            openai_timeout_seconds: 0,
+            openai_reasoning_effort: None,
+            openai_max_output_tokens: 0,
             asset_storage_root: std::env::var("ASSET_STORAGE_ROOT")
                 .unwrap_or_else(|_| "/app/storage/assets".to_string()),
-            asset_generation_providers: parse_asset_generation_providers(
-                std::env::var("ASSET_GENERATION_PROVIDERS")
-                    .unwrap_or_else(|_| "gpt-image-2,jimeng".to_string())
-                    .as_str(),
-            ),
+            asset_generation_providers: Vec::new(),
         }
-    }
-}
-
-fn parse_asset_generation_providers(value: &str) -> Vec<String> {
-    let providers: Vec<String> = value
-        .split(',')
-        .map(str::trim)
-        .filter(|provider| !provider.is_empty())
-        .filter(|provider| repositories::AssetGenerationProvider::try_from(*provider).is_ok())
-        .map(ToString::to_string)
-        .collect();
-
-    if providers.is_empty() {
-        vec!["gpt-image-2".to_string(), "jimeng".to_string()]
-    } else {
-        providers
     }
 }
 
@@ -130,7 +115,7 @@ pub struct AppState {
     config: AppConfig,
     pg_pool: Option<PgPool>,
     redis_client: Option<redis::Client>,
-    llm_client: Option<Arc<dyn LLMClient>>,
+    model_client_resolver: Option<Arc<dyn ModelClientResolver>>,
 }
 
 impl AppState {
@@ -139,7 +124,7 @@ impl AppState {
             config: AppConfig::from_env(),
             pg_pool: None,
             redis_client: None,
-            llm_client: None,
+            model_client_resolver: None,
         }
     }
 
@@ -152,27 +137,38 @@ impl AppState {
             config,
             pg_pool: Some(pg_pool),
             redis_client,
-            llm_client: None,
+            model_client_resolver: None,
         })
     }
 
     pub fn with_llm_client(mut self, llm_client: Arc<dyn LLMClient>) -> Self {
-        self.llm_client = Some(llm_client);
+        self.model_client_resolver = Some(Arc::new(StaticModelClientResolver::new(llm_client)));
         self
     }
 
-    fn script_agent_service(&self) -> Result<ScriptAgentService, ScriptApiError> {
+    pub fn with_model_client_resolver(
+        mut self,
+        resolver: Arc<dyn ModelClientResolver>,
+    ) -> Self {
+        self.model_client_resolver = Some(resolver);
+        self
+    }
+
+    fn script_agent_service(
+        &self,
+        llm_client: Arc<dyn LLMClient>,
+        reasoning_effort: Option<&str>,
+    ) -> Result<ScriptAgentService, ScriptApiError> {
         let pool = self
             .pg_pool
             .clone()
             .ok_or_else(|| ScriptApiError::State("database pool is not configured".to_string()))?;
-        let llm_client = self.openai_client()?;
         let script_repository = Arc::new(PostgresScriptRepository::new(pool.clone()));
         let project_repository = Arc::new(PostgresProjectRepository::new(pool.clone()));
         let topic_repository = Arc::new(PostgresTopicRepository::new(pool));
 
         let service = ScriptAgentService::new(llm_client, script_repository, project_repository)
-            .with_generation_mode(self.script_generation_mode())
+            .with_generation_mode(script_generation_mode(reasoning_effort))
             .with_topic_repository(topic_repository);
 
         Ok(service)
@@ -225,7 +221,18 @@ impl AppState {
         Ok(PostgresAssetGenerationRepository::new(pool))
     }
 
-    fn agent_runtime(&self) -> Result<AgentRuntime, ScriptApiError> {
+    fn ai_model_repository(&self) -> Result<PostgresAiModelRepository, model_management::ModelApiError> {
+        let pool = self
+            .pg_pool
+            .clone()
+            .ok_or_else(|| model_management::ModelApiError::State("database pool is not configured".to_string()))?;
+        Ok(PostgresAiModelRepository::new(pool))
+    }
+
+    fn agent_runtime(
+        &self,
+        resolved: ResolvedTextClient,
+    ) -> Result<AgentRuntime, ScriptApiError> {
         let pool = self
             .pg_pool
             .clone()
@@ -234,14 +241,14 @@ impl AppState {
         let script_repository = Arc::new(PostgresScriptRepository::new(pool.clone()));
         let project_repository = Arc::new(PostgresProjectRepository::new(pool.clone()));
         let topic_repository = Arc::new(PostgresTopicRepository::new(pool));
-        let llm_client = self.openai_client()?;
 
         Ok(AgentRuntime::new(
             conversation_repository,
             script_repository,
             project_repository,
-            llm_client,
+            resolved.client,
         )
+        .with_model_execution(resolved.snapshot)
         .with_topic_repository(topic_repository))
     }
 
@@ -269,41 +276,84 @@ impl AppState {
         ))
     }
 
-    fn openai_client(&self) -> Result<Arc<dyn LLMClient>, ScriptApiError> {
-        if let Some(llm_client) = &self.llm_client {
-            return Ok(llm_client.clone());
+    async fn resolve_text_model(
+        &self,
+        model_id: Uuid,
+    ) -> Result<ResolvedTextClient, ScriptApiError> {
+        if let Some(resolver) = &self.model_client_resolver {
+            return resolver.text_client(model_id).await.map_err(Into::into);
         }
-        Ok(Arc::new(LazyOpenAIClient {
-            config: OpenAIConfig {
-                api_key: self.config.openai_api_key.clone(),
-                base_url: self.config.openai_base_url.clone(),
-                model: self.config.openai_model.clone(),
-                timeout_seconds: self.config.openai_timeout_seconds,
-                responses_reasoning_effort: self.config.openai_reasoning_effort.clone(),
-                responses_max_output_tokens: self.config.openai_max_output_tokens,
-            },
-        }))
+        let repository = self.ai_model_repository().map_err(|error| {
+            ScriptApiError::State(format!("model repository is unavailable: {error:?}"))
+        })?;
+        PostgresModelClientResolver::new(repository)
+            .text_client(model_id)
+            .await
+            .map_err(Into::into)
     }
 
-    fn script_generation_mode(&self) -> ScriptGenerationMode {
-        match self.config.openai_reasoning_effort.as_deref() {
-            Some(effort) if effort.eq_ignore_ascii_case("xhigh") => {
-                ScriptGenerationMode::StepwiseSingleScene
-            }
-            _ => ScriptGenerationMode::Complete,
-        }
+    async fn resolve_image_model(
+        &self,
+        model_id: Uuid,
+    ) -> Result<ModelRuntimeConfig, ScriptApiError> {
+        self.ai_model_repository()
+            .map_err(|error| {
+                ScriptApiError::State(format!("model repository is unavailable: {error:?}"))
+            })?
+            .resolve_enabled(model_id, ModelType::Image)
+            .await
+            .map_err(|error| ModelResolveError::from_repository(error, model_id).into())
     }
+
+    async fn create_direct_model_run(
+        &self,
+        correlation_id: Uuid,
+        project_id: Uuid,
+        agent_type: &str,
+        intent: &str,
+        snapshot: &ModelExecutionSnapshot,
+    ) -> Result<AgentRunRecord, ScriptApiError> {
+        let model_snapshot = serde_json::to_value(snapshot)
+            .map_err(|error| ScriptApiError::State(format!("模型快照序列化失败: {error}")))?;
+        self.conversation_repository()?
+            .create_run(CreateAgentRunInput {
+                conversation_id: correlation_id,
+                project_id: Some(project_id),
+                agent_type: agent_type.to_string(),
+                input: json!({ "intent": intent }),
+                model_id: Some(snapshot.model_id),
+                model_snapshot: Some(model_snapshot),
+            })
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn finish_direct_model_run(
+        &self,
+        run_id: Uuid,
+        status: &str,
+        output: Option<serde_json::Value>,
+        error_message: Option<String>,
+    ) -> Result<(), ScriptApiError> {
+        self.conversation_repository()?
+            .finish_run(FinishAgentRunInput {
+                agent_run_id: run_id,
+                status: status.to_string(),
+                output,
+                error_message,
+            })
+            .await?;
+        Ok(())
+    }
+
 }
 
-struct LazyOpenAIClient {
-    config: OpenAIConfig,
-}
-
-#[async_trait::async_trait]
-impl LLMClient for LazyOpenAIClient {
-    async fn generate_script(&self, prompt: LLMPrompt) -> Result<String, LLMError> {
-        let client = OpenAIClient::new(self.config.clone())?;
-        client.generate_script(prompt).await
+fn script_generation_mode(reasoning_effort: Option<&str>) -> ScriptGenerationMode {
+    match reasoning_effort {
+        Some(effort) if effort.eq_ignore_ascii_case("xhigh") => {
+            ScriptGenerationMode::StepwiseSingleScene
+        }
+        _ => ScriptGenerationMode::Complete,
     }
 }
 
@@ -368,6 +418,23 @@ pub fn build_app_with_state(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
+        .route(
+            "/api/admin/models",
+            get(list_ai_models).post(create_ai_model),
+        )
+        .route(
+            "/api/admin/models/:model_id",
+            get(get_ai_model).put(update_ai_model).delete(delete_ai_model),
+        )
+        .route(
+            "/api/admin/models/:model_id/default",
+            post(set_default_ai_model),
+        )
+        .route(
+            "/api/admin/models/:model_id/status",
+            put(change_ai_model_status),
+        )
+        .route("/api/model-options", get(list_model_options))
         .route("/api/video-workspace/menus", get(list_workspace_menus))
         .route("/api/projects", get(list_projects).post(create_project))
         .route(
@@ -646,15 +713,51 @@ async fn generate_project_strategy_profile_draft(
         .map_err(ScriptApiError::ProjectValidation)?;
     let repository = state.project_repository()?;
     let project = repository.get_project(project_id).await?;
-    let llm_client = state.openai_client()?;
-    let raw = generate_strategy_profile_draft_with_retry(
-        llm_client.as_ref(),
-        build_strategy_profile_draft_prompt(&project, &request.direction_notes),
-    )
-    .await
-    .map_err(ScriptApiError::StrategyDraftLlm)?;
-    let output = StrategyProfileDraftLlmOutput::parse_and_validate(&raw)
-        .map_err(ScriptApiError::StrategyDraftOutput)?;
+    let resolved = state.resolve_text_model(request.model_id).await?;
+    let run = state
+        .create_direct_model_run(
+            project_id,
+            project_id,
+            "topic",
+            "strategy_profile_draft",
+            &resolved.snapshot,
+        )
+        .await?;
+    let result: Result<StrategyProfileDraftResponse, ScriptApiError> = async {
+        let raw = generate_strategy_profile_draft_with_retry(
+            resolved.client.as_ref(),
+            build_strategy_profile_draft_prompt(&project, &request.direction_notes),
+        )
+        .await
+        .map_err(ScriptApiError::StrategyDraftLlm)?;
+        StrategyProfileDraftLlmOutput::parse_and_validate(&raw)
+            .map_err(ScriptApiError::StrategyDraftOutput)
+    }
+    .await;
+    let output = match result {
+        Ok(output) => {
+            state
+                .finish_direct_model_run(
+                    run.id,
+                    "succeeded",
+                    Some(json!({ "draft_generated": true })),
+                    None,
+                )
+                .await?;
+            output
+        }
+        Err(error) => {
+            state
+                .finish_direct_model_run(
+                    run.id,
+                    "failed",
+                    None,
+                    Some(format!("{error:?}")),
+                )
+                .await?;
+            return Err(error);
+        }
+    };
 
     Ok(Json(StrategyProfileDraftResponse {
         draft: output.draft,
@@ -1015,12 +1118,13 @@ async fn create_topic_group_review(
     State(state): State<AppState>,
     Path(root_batch_id): Path<Uuid>,
     Query(query): Query<TopicGroupProjectQuery>,
+    ValidJson(model): ValidJson<ModelSelectionRequest>,
 ) -> Result<(StatusCode, Json<TopicReviewSnapshotResponse>), ScriptApiError> {
     let repository = state.topic_repository()?;
     let project_id =
         resolve_topic_group_project_id(&repository, root_batch_id, query.project_id).await?;
     let snapshot = state
-        .agent_runtime()?
+        .agent_runtime(state.resolve_text_model(model.model_id).await?)?
         .review_topic_group(project_id, root_batch_id)
         .await?;
 
@@ -1297,7 +1401,7 @@ async fn send_agent_message(
         .validate_for_api()
         .map_err(ScriptApiError::ConversationValidation)?;
     let response = state
-        .agent_runtime()?
+        .agent_runtime(state.resolve_text_model(request.model_id).await?)?
         .handle_turn(AgentTurnRequest {
             conversation_id,
             user_message: request.content,
@@ -1316,8 +1420,44 @@ async fn generate_script(
     State(state): State<AppState>,
     ValidJson(request): ValidJson<GenerateScriptRequest>,
 ) -> Result<Json<ScriptResponse>, ScriptApiError> {
-    let service = state.script_agent_service()?;
-    let script = service.generate_script(request).await?;
+    let resolved = state.resolve_text_model(request.model_id).await?;
+    let project_id = request.project_id;
+    let run = state
+        .create_direct_model_run(
+            project_id,
+            project_id,
+            "script",
+            "generate_script",
+            &resolved.snapshot,
+        )
+        .await?;
+    let reasoning_effort = resolved.snapshot.reasoning_effort.clone();
+    let service = state.script_agent_service(resolved.client, reasoning_effort.as_deref())?;
+    let result = service.generate_script(request).await;
+    let script = match result {
+        Ok(script) => {
+            state
+                .finish_direct_model_run(
+                    run.id,
+                    "succeeded",
+                    Some(json!({ "script_id": script.id })),
+                    None,
+                )
+                .await?;
+            script
+        }
+        Err(error) => {
+            state
+                .finish_direct_model_run(
+                    run.id,
+                    "failed",
+                    None,
+                    Some(error.to_string()),
+                )
+                .await?;
+            return Err(error.into());
+        }
+    };
 
     Ok(Json(ScriptResponse::from(script)))
 }
@@ -1365,10 +1505,11 @@ async fn create_asset_generation_plan(
     Path(script_id): Path<Uuid>,
     ValidJson(request): ValidJson<AssetGenerationPlanRequest>,
 ) -> Result<Json<AssetGenerationPlanResponse>, ScriptApiError> {
-    let provider = request
+    request
         .validate_for_api()
         .map_err(ScriptApiError::AssetValidation)?;
-    ensure_asset_provider_enabled(&state, provider)?;
+    let model = state.resolve_image_model(request.model_id).await?;
+    let provider = image_provider_for_protocol(model.snapshot.api_protocol)?;
     let script = state
         .script_agent_service_without_llm()?
         .get_script(script_id)
@@ -1384,8 +1525,8 @@ async fn create_asset_generation_plan(
         script.id,
         script.scenes.len(),
         request.image_candidates_per_scene,
+        request.model_id,
         provider,
-        enabled_asset_generation_providers(&state),
         reference_material_count,
     );
 
@@ -1397,10 +1538,11 @@ async fn create_asset_generation_tasks(
     Path(script_id): Path<Uuid>,
     ValidJson(request): ValidJson<AssetGenerationTaskRequest>,
 ) -> Result<(StatusCode, Json<AssetGenerationTaskListResponse>), ScriptApiError> {
-    let provider = request
+    request
         .validate_for_api()
         .map_err(ScriptApiError::AssetValidation)?;
-    ensure_asset_provider_enabled(&state, provider)?;
+    let model = state.resolve_image_model(request.model_id).await?;
+    let provider = image_provider_for_protocol(model.snapshot.api_protocol)?;
     let script = state
         .script_agent_service_without_llm()?
         .get_script(script_id)
@@ -1409,8 +1551,8 @@ async fn create_asset_generation_tasks(
         script.id,
         script.scenes.len(),
         request.image_candidates_per_scene,
+        request.model_id,
         provider,
-        enabled_asset_generation_providers(&state),
         0,
     );
     ensure_asset_generation_plan_can_create(&plan)?;
@@ -1429,7 +1571,7 @@ async fn create_asset_generation_tasks(
 
     let image_task_key = script_image_task_idempotency_key(
         script.id,
-        provider,
+        request.model_id,
         request.image_candidates_per_scene,
         request.use_reference_materials,
         &reference_material_ids,
@@ -1442,6 +1584,7 @@ async fn create_asset_generation_tasks(
             project_id: script.project_id,
             script_id: Some(script.id),
             scene_id: None,
+            model_id: Some(request.model_id),
             provider,
             task_type: AssetGenerationTaskType::ImageCandidates,
             status: AssetGenerationTaskStatus::Pending,
@@ -1472,6 +1615,7 @@ async fn create_asset_generation_tasks(
                 project_id: script.project_id,
                 script_id: Some(script.id),
                 scene_id: Some(scene.id),
+                model_id: None,
                 provider,
                 task_type: AssetGenerationTaskType::VideoDraft,
                 status: AssetGenerationTaskStatus::Draft,
@@ -1600,10 +1744,11 @@ async fn create_scene_asset_generation_task(
                 "单镜头重生必须提供 UUID 格式 Idempotency-Key".to_string(),
             )
         })?;
-    let provider = request
+    request
         .validate_for_api()
         .map_err(ScriptApiError::AssetValidation)?;
-    ensure_asset_provider_enabled(&state, provider)?;
+    let model = state.resolve_image_model(request.model_id).await?;
+    let provider = image_provider_for_protocol(model.snapshot.api_protocol)?;
     let (script_id, project_id) = scene_context(&state, scene_id).await?;
     let reference_material_ids = if request.use_reference_materials {
         active_image_material_ids(&state, project_id).await?
@@ -1617,6 +1762,7 @@ async fn create_scene_asset_generation_task(
             project_id,
             script_id: Some(script_id),
             scene_id: Some(scene_id),
+            model_id: Some(request.model_id),
             provider,
             task_type: AssetGenerationTaskType::ImageCandidates,
             status: AssetGenerationTaskStatus::Pending,
@@ -1670,8 +1816,8 @@ fn build_asset_generation_plan_response(
     script_id: Uuid,
     scene_count: usize,
     image_candidates_per_scene: i32,
+    model_id: Uuid,
     provider: repositories::AssetGenerationProvider,
-    enabled_providers: Vec<String>,
     reference_material_count: i32,
 ) -> AssetGenerationPlanResponse {
     let image_candidate_count = scene_count as i32 * image_candidates_per_scene;
@@ -1687,8 +1833,8 @@ fn build_asset_generation_plan_response(
         scene_count,
         image_candidate_count,
         max_image_candidate_count: 48,
+        model_id,
         provider: provider.as_str().to_string(),
-        enabled_providers,
         reference_material_count,
         video_task_count: scene_count as i32,
         can_create,
@@ -1696,28 +1842,19 @@ fn build_asset_generation_plan_response(
     }
 }
 
-fn enabled_asset_generation_providers(state: &AppState) -> Vec<String> {
-    parse_asset_generation_providers(&state.config.asset_generation_providers.join(","))
-}
-
-fn ensure_asset_provider_enabled(
-    state: &AppState,
-    provider: repositories::AssetGenerationProvider,
-) -> Result<(), ScriptApiError> {
-    let enabled = enabled_asset_generation_providers(state);
-    if enabled.iter().any(|item| item == provider.as_str()) {
-        Ok(())
-    } else {
-        Err(ScriptApiError::AssetValidation(format!(
-            "素材生成供应商 {} 未启用",
-            provider.as_str()
-        )))
+fn image_provider_for_protocol(
+    protocol: ApiProtocol,
+) -> Result<repositories::AssetGenerationProvider, ScriptApiError> {
+    match protocol {
+        ApiProtocol::OpenAiImages => Ok(repositories::AssetGenerationProvider::GptImage2),
+        ApiProtocol::JimengVisual => Ok(repositories::AssetGenerationProvider::Jimeng),
+        _ => Err(ModelResolveError::InvalidConfig(Uuid::nil()).into()),
     }
 }
 
 fn script_image_task_idempotency_key(
     script_id: Uuid,
-    provider: repositories::AssetGenerationProvider,
+    model_id: Uuid,
     image_candidates_per_scene: i32,
     use_reference_materials: bool,
     reference_material_ids: &[Uuid],
@@ -1725,8 +1862,7 @@ fn script_image_task_idempotency_key(
     let mut references: Vec<String> = reference_material_ids.iter().map(Uuid::to_string).collect();
     references.sort();
     format!(
-        "script:{script_id}:image:{}:{image_candidates_per_scene}:{use_reference_materials}:{}",
-        provider.as_str(),
+        "script:{script_id}:image:{model_id}:{image_candidates_per_scene}:{use_reference_materials}:{}",
         references.join("|")
     )
 }
@@ -1886,6 +2022,7 @@ enum ScriptApiError {
     State(String),
     Agent(ScriptAgentError),
     AgentRuntime(AgentRuntimeError),
+    ModelResolve(ModelResolveError),
     ProjectRepository(ProjectRepositoryError),
     MaterialRepository(MaterialRepositoryError),
     AssetGenerationRepository(AssetGenerationRepositoryError),
@@ -1941,6 +2078,12 @@ impl From<TopicRepositoryError> for ScriptApiError {
 impl From<AgentRuntimeError> for ScriptApiError {
     fn from(error: AgentRuntimeError) -> Self {
         Self::AgentRuntime(error)
+    }
+}
+
+impl From<ModelResolveError> for ScriptApiError {
+    fn from(error: ModelResolveError) -> Self {
+        Self::ModelResolve(error)
     }
 }
 
@@ -2004,8 +2147,34 @@ impl IntoResponse for ScriptApiError {
             Self::JsonRejection(error) => invalid_json_response(error).into_response(),
             Self::Agent(error) => script_agent_error_response(error).into_response(),
             Self::AgentRuntime(error) => agent_runtime_error_response(error).into_response(),
+            Self::ModelResolve(error) => model_resolve_error_response(error).into_response(),
         }
     }
+}
+
+fn model_resolve_error_response(
+    error: ModelResolveError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let (status, code, message) = match error {
+        ModelResolveError::NotFound(_) => (StatusCode::NOT_FOUND, "model_not_found", "模型不存在"),
+        ModelResolveError::Disabled(_) => (StatusCode::CONFLICT, "model_disabled", "模型已停用或删除"),
+        ModelResolveError::TypeMismatch { .. } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "model_type_mismatch",
+            "模型类型不匹配",
+        ),
+        ModelResolveError::InvalidConfig(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_model_config",
+            "模型配置无效",
+        ),
+        ModelResolveError::Storage => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "model_storage_error",
+            "模型配置服务暂时不可用",
+        ),
+    };
+    (status, Json(json!({ "error": { "code": code, "message": message } })))
 }
 
 fn topic_repository_error_response(

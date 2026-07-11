@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 mod support;
 
-use support::test_database::TestDatabase;
+use support::test_database::{insert_enabled_text_model, TestDatabase};
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -121,7 +121,7 @@ fn app_state_with_asset_options(
 }
 
 async fn insert_project(pool: &PgPool) -> Uuid {
-    sqlx::query_scalar::<_, Uuid>(
+    let project_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO projects (name, positioning, description)
         VALUES ('素材生成账号', '', '')
@@ -130,7 +130,51 @@ async fn insert_project(pool: &PgPool) -> Uuid {
     )
     .fetch_one(pool)
     .await
-    .expect("project fixture should be inserted")
+    .expect("project fixture should be inserted");
+    insert_image_model(pool, openai_image_model_id(), "openai_images", "enabled").await;
+    project_id
+}
+
+fn openai_image_model_id() -> Uuid {
+    Uuid::from_u128(1)
+}
+
+fn jimeng_image_model_id() -> Uuid {
+    Uuid::from_u128(2)
+}
+
+async fn insert_image_model(pool: &PgPool, model_id: Uuid, protocol: &str, status: &str) {
+    let (auth_scheme, api_secret, settings) = if protocol == "jimeng_visual" {
+        (
+            "access_key_secret",
+            Some("test-secret"),
+            json!({"supported_sizes":["1328x1328"],"default_size":"1328x1328","request_key":"test"}),
+        )
+    } else {
+        (
+            "bearer",
+            None,
+            json!({"supported_sizes":["1024x1024"],"default_size":"1024x1024"}),
+        )
+    };
+    sqlx::query(
+        r#"
+        INSERT INTO ai_models (
+            id, display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key, api_secret, status, settings
+        ) VALUES ($1, '测试图片模型', 'image', 'test', $2, $3,
+                  'https://example.invalid/v1', 'test-image', 'test-key', $4, $5, $6)
+        "#,
+    )
+    .bind(model_id)
+    .bind(protocol)
+    .bind(auth_scheme)
+    .bind(api_secret)
+    .bind(status)
+    .bind(settings)
+    .execute(pool)
+    .await
+    .expect("image model fixture should be inserted");
 }
 
 async fn insert_script_with_scenes(
@@ -234,7 +278,7 @@ fn scene_generation_request(scene_id: Uuid, idempotency_key: Option<&str>) -> Re
     builder
         .body(Body::from(
             json!({
-                "provider": "gpt-image-2",
+                "model_id": openai_image_model_id(),
                 "image_candidates_per_scene": 2,
                 "use_reference_materials": false
             })
@@ -305,7 +349,7 @@ async fn asset_generation_plan_rejects_more_than_48_images() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "provider": "gpt-image-2",
+                        "model_id": openai_image_model_id(),
                         "image_candidates_per_scene": 4,
                         "use_reference_materials": true
                     })
@@ -332,7 +376,7 @@ async fn asset_generation_plan_rejects_more_than_48_images() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "provider": "gpt-image-2",
+                        "model_id": openai_image_model_id(),
                         "image_candidates_per_scene": 4,
                         "use_reference_materials": true
                     })
@@ -368,7 +412,7 @@ async fn create_asset_generation_tasks_does_not_wait_for_worker() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "provider": "gpt-image-2",
+                        "model_id": openai_image_model_id(),
                         "image_candidates_per_scene": 3,
                         "use_reference_materials": false
                     })
@@ -386,6 +430,7 @@ async fn create_asset_generation_tasks_does_not_wait_for_worker() {
         task["task_type"] == "image_candidates"
             && task["status"] == "pending"
             && task["candidate_count"] == 6
+            && task["model_id"] == openai_image_model_id().to_string()
     }));
     assert_eq!(
         tasks
@@ -394,6 +439,10 @@ async fn create_asset_generation_tasks_does_not_wait_for_worker() {
             .count(),
         2
     );
+    assert!(tasks
+        .iter()
+        .filter(|task| task["task_type"] == "video_draft")
+        .all(|task| task["model_id"].is_null()));
 
     let persisted = sqlx::query_as::<_, (String, String, i32)>(
         r#"
@@ -433,7 +482,7 @@ async fn create_asset_generation_tasks_is_idempotent_and_tasks_are_listable() {
     insert_material(&test_pool, project_id, "character.png").await;
     let app = build_app_with_state(app_state(test_url, test_pool.clone()));
     let payload = json!({
-        "provider": "gpt-image-2",
+        "model_id": openai_image_model_id(),
         "image_candidates_per_scene": 3,
         "use_reference_materials": true
     })
@@ -517,16 +566,23 @@ async fn create_asset_generation_tasks_is_idempotent_and_tasks_are_listable() {
 }
 
 #[tokio::test]
-async fn asset_generation_plan_uses_enabled_provider_configuration() {
+async fn asset_generation_plan_uses_enabled_database_model_configuration() {
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
     let project_id = insert_project(&test_pool).await;
     let (script_id, _) = insert_script_with_scenes(&test_pool, project_id, 1).await;
-    let app = build_app_with_state(app_state_with_asset_options(
-        test_url,
-        test_pool.clone(),
-        "/app/storage/assets".to_string(),
-        vec!["jimeng".to_string()],
-    ));
+    insert_image_model(
+        &test_pool,
+        jimeng_image_model_id(),
+        "jimeng_visual",
+        "enabled",
+    )
+    .await;
+    sqlx::query("UPDATE ai_models SET status = 'disabled' WHERE id = $1")
+        .bind(openai_image_model_id())
+        .execute(&test_pool)
+        .await
+        .unwrap();
+    let app = build_app_with_state(app_state(test_url, test_pool.clone()));
 
     let jimeng_response = app
         .clone()
@@ -537,7 +593,7 @@ async fn asset_generation_plan_uses_enabled_provider_configuration() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "provider": "jimeng",
+                        "model_id": jimeng_image_model_id(),
                         "image_candidates_per_scene": 3,
                         "use_reference_materials": false
                     })
@@ -549,7 +605,8 @@ async fn asset_generation_plan_uses_enabled_provider_configuration() {
         .unwrap();
     assert_eq!(jimeng_response.status(), StatusCode::OK);
     let jimeng_plan = response_json(jimeng_response).await;
-    assert_eq!(jimeng_plan["enabled_providers"], json!(["jimeng"]));
+    assert_eq!(jimeng_plan["model_id"], jimeng_image_model_id().to_string());
+    assert_eq!(jimeng_plan["provider"], "jimeng");
 
     let disabled_response = app
         .oneshot(
@@ -559,7 +616,7 @@ async fn asset_generation_plan_uses_enabled_provider_configuration() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "provider": "gpt-image-2",
+                        "model_id": openai_image_model_id(),
                         "image_candidates_per_scene": 3,
                         "use_reference_materials": false
                     })
@@ -569,11 +626,11 @@ async fn asset_generation_plan_uses_enabled_provider_configuration() {
         )
         .await
         .unwrap();
-    assert_eq!(disabled_response.status(), StatusCode::BAD_REQUEST);
-    assert!(response_json(disabled_response).await["error"]
-        .as_str()
-        .unwrap()
-        .contains("未启用"));
+    assert_eq!(disabled_response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(disabled_response).await["error"]["code"],
+        "model_disabled"
+    );
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
@@ -584,6 +641,13 @@ async fn asset_generation_plan_uses_enabled_provider_configuration() {
 async fn asset_generation_routes_validate_provider_reject_and_scene_regenerate() {
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
     let project_id = insert_project(&test_pool).await;
+    insert_image_model(
+        &test_pool,
+        jimeng_image_model_id(),
+        "jimeng_visual",
+        "enabled",
+    )
+    .await;
     let (script_id, scene_ids) = insert_script_with_scenes(&test_pool, project_id, 1).await;
     let material_id = insert_material(&test_pool, project_id, "candidate.png").await;
     let candidate_id = insert_candidate(
@@ -596,8 +660,9 @@ async fn asset_generation_routes_validate_provider_reject_and_scene_regenerate()
     )
     .await;
     let app = build_app_with_state(app_state(test_url, test_pool.clone()));
+    let text_model_id = insert_enabled_text_model(&test_pool).await;
 
-    let invalid_provider = app
+    let missing_model = app
         .clone()
         .oneshot(
             Request::builder()
@@ -606,7 +671,7 @@ async fn asset_generation_routes_validate_provider_reject_and_scene_regenerate()
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "provider": "unknown-provider",
+                        "model_id": Uuid::new_v4(),
                         "image_candidates_per_scene": 3,
                         "use_reference_materials": false
                     })
@@ -616,11 +681,36 @@ async fn asset_generation_routes_validate_provider_reject_and_scene_regenerate()
         )
         .await
         .unwrap();
-    assert_eq!(invalid_provider.status(), StatusCode::BAD_REQUEST);
-    assert!(response_json(invalid_provider).await["error"]
-        .as_str()
-        .unwrap()
-        .contains("供应商"));
+    assert_eq!(missing_model.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_json(missing_model).await["error"]["code"],
+        "model_not_found"
+    );
+
+    let wrong_type = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/scripts/{script_id}/asset-generation-plan"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model_id": text_model_id,
+                        "image_candidates_per_scene": 3,
+                        "use_reference_materials": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_type.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        response_json(wrong_type).await["error"]["code"],
+        "model_type_mismatch"
+    );
 
     let reject_response = app
         .clone()
@@ -651,7 +741,7 @@ async fn asset_generation_routes_validate_provider_reject_and_scene_regenerate()
                 .header("idempotency-key", Uuid::new_v4().to_string())
                 .body(Body::from(
                     json!({
-                        "provider": "jimeng",
+                        "model_id": jimeng_image_model_id(),
                         "image_candidates_per_scene": 2,
                         "use_reference_materials": false
                     })
@@ -664,6 +754,7 @@ async fn asset_generation_routes_validate_provider_reject_and_scene_regenerate()
     assert_eq!(scene_task_response.status(), StatusCode::CREATED);
     let scene_task = response_json(scene_task_response).await;
     assert_eq!(scene_task["provider"], "jimeng");
+    assert_eq!(scene_task["model_id"], jimeng_image_model_id().to_string());
     assert_eq!(scene_task["task_type"], "image_candidates");
     assert_eq!(scene_task["status"], "pending");
     assert_eq!(scene_task["candidate_count"], 2);
@@ -896,7 +987,7 @@ async fn confirm_asset_generation_task_only_allows_draft_video_tasks() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "provider": "gpt-image-2",
+                        "model_id": openai_image_model_id(),
                         "image_candidates_per_scene": 3,
                         "use_reference_materials": false
                     })

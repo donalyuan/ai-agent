@@ -8,18 +8,29 @@ from fastapi import FastAPI
 from video_worker.asset_generation import (
     LocalAssetStorage,
     PostgresAssetGenerationStore,
-    image_provider_from_env,
+    image_provider_from_model,
     run_next_image_task,
 )
+from video_worker.model_registry import PostgresModelRegistry
 
 
 def default_process_next_image_task() -> bool:
-    store = PostgresAssetGenerationStore.from_env()
+    database_url = os.getenv(
+        "DATABASE_URL",
+        "postgres://postgres:postgres@biga-postgres:5432/video_agent",
+    )
+    store = PostgresAssetGenerationStore(database_url)
+    model_registry = PostgresModelRegistry(database_url)
     storage = LocalAssetStorage(
         Path(os.getenv("ASSET_STORAGE_ROOT", "/app/storage/assets")),
         public_prefix=os.getenv("ASSET_PUBLIC_PREFIX", "/assets"),
     )
-    return run_next_image_task(store, image_provider_from_env, storage)
+    return run_next_image_task(
+        store,
+        model_registry,
+        image_provider_from_model,
+        storage,
+    )
 
 
 def create_app(

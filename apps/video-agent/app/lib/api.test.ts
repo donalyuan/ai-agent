@@ -23,6 +23,7 @@ import {
   listAssetGenerationTasks,
   listContentTopics,
   listMaterials,
+  listModelOptions,
   listTopicGenerationBatches,
   listTopicGroups,
   listProjects,
@@ -41,6 +42,9 @@ import {
   updateScriptStatus,
 } from "./api";
 import type { MaterialPayload } from "./api";
+
+const textModelId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const imageModelId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 const strategyProfile = {
   target_audience: "内容运营负责人",
@@ -154,8 +158,8 @@ const assetGenerationPlan = {
   scene_count: 2,
   image_candidate_count: 6,
   max_image_candidate_count: 48,
+  model_id: imageModelId,
   provider: "gpt-image-2",
-  enabled_providers: ["gpt-image-2", "jimeng"],
   reference_material_count: 1,
   video_task_count: 2,
   can_create: true,
@@ -167,6 +171,8 @@ const imageAssetGenerationTask = {
   project_id: project.project_id,
   script_id: scriptSummary.script_id,
   scene_id: null,
+  model_id: imageModelId,
+  model_snapshot: null,
   provider: "gpt-image-2",
   task_type: "image_candidates",
   status: "pending",
@@ -590,6 +596,28 @@ describe("video-agent api client", () => {
     expect(result.menus[1].children[0].agent_key).toBe("script-generation-agent");
   });
 
+  it("按类型读取工作台模型选项", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      models: [{
+        model_id: "99999999-9999-4999-8999-999999999999",
+        display_name: "GPT Text",
+        model_type: "text",
+        provider_name: "OpenAI",
+        api_protocol: "openai_responses",
+        upstream_model: "gpt-test",
+        is_default: true,
+      }],
+    }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    const result = await listModelOptions(client, "text");
+
+    expect(fetchMock).toHaveBeenCalledWith("http://api.test/api/model-options?type=text", {
+      headers: { accept: "application/json" },
+    });
+    expect(result.models[0].is_default).toBe(true);
+  });
+
   it("更新账号策略资料并生成策略草稿", async () => {
     const draftResponse = {
       draft: {
@@ -611,6 +639,7 @@ describe("video-agent api client", () => {
     });
     const draft = await generateStrategyProfileDraft(client, project.project_id, {
       direction_notes: "偏 AI 副业新手，强调避坑。",
+      model_id: textModelId,
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -641,6 +670,7 @@ describe("video-agent api client", () => {
         },
         body: JSON.stringify({
           direction_notes: "偏 AI 副业新手，强调避坑。",
+          model_id: textModelId,
         }),
       },
     );
@@ -787,7 +817,7 @@ describe("video-agent api client", () => {
       );
     const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
     const payload = {
-      provider: "gpt-image-2" as const,
+      model_id: imageModelId,
       image_candidates_per_scene: 3,
       use_reference_materials: true,
     };
@@ -830,7 +860,7 @@ describe("video-agent api client", () => {
       },
     );
     expect(plan.image_candidate_count).toBe(6);
-    expect(plan.enabled_providers).toEqual(["gpt-image-2", "jimeng"]);
+    expect(plan.model_id).toBe(imageModelId);
     expect(tasks.tasks.map((task) => task.task_type)).toEqual(["image_candidates", "video_draft"]);
     expect(listedTasks.tasks.map((task) => task.status)).toEqual(["pending", "draft"]);
   });
@@ -868,7 +898,7 @@ describe("video-agent api client", () => {
       .mockResolvedValueOnce(jsonResponse({ ...imageAssetGenerationTask, scene_id: scriptDetail.scenes[0].scene_id }, { status: 201 }));
     const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
     const payload = {
-      provider: "jimeng" as const,
+      model_id: imageModelId,
       image_candidates_per_scene: 2,
       use_reference_materials: false,
     };
@@ -1014,7 +1044,9 @@ describe("video-agent api client", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(topicReviewSnapshot, { status: 201 }));
     const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
 
-    const result = await createTopicGroupReview(client, topicGenerationBatch.batch_id);
+    const result = await createTopicGroupReview(client, topicGenerationBatch.batch_id, {
+      model_id: textModelId,
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
       `http://api.test/api/topic-groups/${topicGenerationBatch.batch_id}/reviews`,
@@ -1022,7 +1054,9 @@ describe("video-agent api client", () => {
         method: "POST",
         headers: {
           accept: "application/json",
+          "content-type": "application/json",
         },
+        body: JSON.stringify({ model_id: textModelId }),
       },
     );
     expect(result.snapshot_id).toBe(topicReviewSnapshot.snapshot_id);
@@ -1170,6 +1204,7 @@ describe("video-agent api client", () => {
 
     const result = await generateScript(client, {
       project_id: project.project_id,
+      model_id: textModelId,
       topic: "ChatGPT如何改变程序员工作流",
       style: "knowledge",
       scene_count: 5,
@@ -1183,6 +1218,7 @@ describe("video-agent api client", () => {
       },
       body: JSON.stringify({
         project_id: project.project_id,
+        model_id: textModelId,
         topic: "ChatGPT如何改变程序员工作流",
         style: "knowledge",
         scene_count: 5,
@@ -1203,6 +1239,7 @@ describe("video-agent api client", () => {
 
     const result = await generateScript(client, {
       project_id: project.project_id,
+      model_id: textModelId,
       topic_id: contentTopic.topic_id,
       style: "knowledge",
       scene_count: 6,
@@ -1216,6 +1253,7 @@ describe("video-agent api client", () => {
       },
       body: JSON.stringify({
         project_id: project.project_id,
+        model_id: textModelId,
         topic_id: contentTopic.topic_id,
         style: "knowledge",
         scene_count: 6,
@@ -1302,6 +1340,7 @@ describe("video-agent api client", () => {
 
     const result = await sendAgentMessage(client, conversation.conversation_id, {
       content: userMessage.content,
+      model_id: textModelId,
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -1312,7 +1351,7 @@ describe("video-agent api client", () => {
           accept: "application/json",
           "content-type": "application/json",
         },
-        body: JSON.stringify({ content: userMessage.content }),
+        body: JSON.stringify({ content: userMessage.content, model_id: textModelId }),
       },
     );
     expect(result.assistant_message.content).toContain("已更新第 2 镜");
@@ -1327,6 +1366,7 @@ describe("video-agent api client", () => {
 
     await sendAgentMessage(client, conversation.conversation_id, {
       content: "补充 2 个 AI 内容流水线选题",
+      model_id: textModelId,
       supplement_of_batch_id: "77777777-7777-4777-8777-777777777777",
     });
 
@@ -1336,6 +1376,7 @@ describe("video-agent api client", () => {
         method: "POST",
         body: JSON.stringify({
           content: "补充 2 个 AI 内容流水线选题",
+          model_id: textModelId,
           supplement_of_batch_id: "77777777-7777-4777-8777-777777777777",
         }),
       }),
@@ -1354,6 +1395,7 @@ describe("video-agent api client", () => {
 
     const result = await sendAgentMessage(client, conversation.conversation_id, {
       content: "生成一个关于 ChatGPT 工作流的 6 镜知识科普脚本",
+      model_id: textModelId,
     });
 
     expect(getScriptAgentTurnMetadata(result.assistant_message)).toEqual({
@@ -1377,6 +1419,7 @@ describe("video-agent api client", () => {
 
     const result = await sendAgentMessage(client, conversation.conversation_id, {
       content: "帮我生成脚本",
+      model_id: textModelId,
     });
 
     expect(getScriptAgentTurnMetadata(result.assistant_message)).toEqual({

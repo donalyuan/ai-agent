@@ -197,6 +197,7 @@ async fn migrations_create_video_agent_core_schema() {
         "asset_generation_tasks",
         "asset_generation_task_requests",
         "scene_asset_candidates",
+        "ai_models",
     ] {
         assert!(
             table_exists(&test_pool, table).await,
@@ -233,6 +234,8 @@ async fn migrations_create_video_agent_core_schema() {
         "idx_asset_generation_task_requests_task",
         "idx_scene_asset_candidates_script_scene_rank",
         "scene_asset_candidates_one_selected_per_scene",
+        "ai_models_one_default_per_type",
+        "idx_ai_models_type_status_sort",
     ] {
         assert!(
             index_exists(&test_pool, index).await,
@@ -247,6 +250,41 @@ async fn migrations_create_video_agent_core_schema() {
     assert!(
         column_exists(&test_pool, "asset_generation_tasks", "dismissed_at").await,
         "asset_generation_tasks.dismissed_at should preserve soft-dismiss audit state"
+    );
+    for (table, column) in [
+        ("agent_runs", "model_id"),
+        ("agent_runs", "model_snapshot"),
+        ("asset_generation_tasks", "model_id"),
+        ("asset_generation_tasks", "model_snapshot"),
+    ] {
+        assert!(
+            column_exists(&test_pool, table, column).await,
+            "{table}.{column} should exist for model execution audit"
+        );
+    }
+    for constraint in [
+        "ai_models_type_check",
+        "ai_models_protocol_check",
+        "ai_models_auth_scheme_check",
+        "ai_models_status_check",
+        "ai_models_timeout_check",
+        "ai_models_max_output_tokens_check",
+        "ai_models_version_check",
+        "ai_models_type_protocol_check",
+    ] {
+        assert!(
+            constraint_exists(&test_pool, "ai_models", constraint).await,
+            "{constraint} should constrain model configuration"
+        );
+    }
+    let default_model_predicate =
+        unique_partial_index_predicate(&test_pool, "ai_models_one_default_per_type")
+            .await
+            .expect("default model index should be unique and partial");
+    assert!(
+        default_model_predicate.contains("is_default")
+            && default_model_predicate.contains("deleted_at"),
+        "default model index should only cover active records, got {default_model_predicate}"
     );
     assert!(
         constraint_exists(&test_pool, "materials", "materials_status_check").await,
@@ -285,13 +323,13 @@ async fn migrations_create_video_agent_core_schema() {
         "in-flight scene image task index should cover pending and processing image tasks, got {in_flight_scene_task_predicate}"
     );
     assert!(
-        constraint_exists(
+        !constraint_exists(
             &test_pool,
             "asset_generation_tasks",
             "asset_generation_tasks_provider_check"
         )
         .await,
-        "asset generation task provider should be constrained"
+        "legacy provider audit value must not restrict database-backed model providers"
     );
     assert!(
         constraint_exists(

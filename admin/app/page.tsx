@@ -27,26 +27,8 @@ const managementAreas = [
 
 export default function Home() {
   return (
-    <main className="adminShell">
-      <aside className="adminRail" aria-label="管理后台导航">
-        <div className="brandBlock">
-          <div className="brandMark">NX</div>
-          <div>
-            <p>NOVEX ADMIN</p>
-            <span>控制面</span>
-          </div>
-        </div>
-
-        <nav className="adminNav">
-          {managementAreas.map((area) => (
-            <a href={`#${area.title}`} key={area.title}>
-              {area.title}
-            </a>
-          ))}
-        </nav>
-      </aside>
-
-      <section className="adminWorkbench">
+    <AdminShell>
+      <div className="adminOverviewPage">
         <header className="adminTopbar">
           <div>
             <p className="sectionKicker">NOVEX ADMIN</p>
@@ -67,7 +49,8 @@ export default function Home() {
             </article>
           ))}
         </section>
-      </section>
-    </main>
+      </div>
+    </AdminShell>
   );
 }
+import { AdminShell } from "./components/AdminShell";

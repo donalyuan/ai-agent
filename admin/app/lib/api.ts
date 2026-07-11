@@ -77,6 +77,75 @@ export type ApiClient = {
   fetcher: typeof fetch;
 };
 
+export type AiModelType = "text" | "image" | "video";
+export type AiModelStatus = "enabled" | "disabled" | "deleted";
+export type AiModelProtocol =
+  | "openai_responses"
+  | "openai_chat_completions"
+  | "openai_images"
+  | "jimeng_visual"
+  | "runway_api"
+  | "kling_api";
+export type AuthScheme = "bearer" | "access_key_secret";
+
+export type AiModel = {
+  model_id: string;
+  display_name: string;
+  model_type: AiModelType;
+  provider_name: string;
+  api_protocol: AiModelProtocol;
+  protocol_version: string;
+  auth_scheme: AuthScheme;
+  request_base_url: string;
+  upstream_model: string;
+  api_key_masked: string;
+  api_secret_masked: string | null;
+  api_key_configured: boolean;
+  api_secret_configured: boolean;
+  timeout_seconds: number;
+  reasoning_effort: string | null;
+  max_output_tokens: number | null;
+  settings: Record<string, unknown>;
+  sort_order: number;
+  remark: string;
+  status: AiModelStatus;
+  is_default: boolean;
+  last_call_status: "never" | "success" | "failed";
+  last_call_at: string | null;
+  last_error_summary: string | null;
+  source: string;
+  version: number;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AiModelPayload = {
+  display_name: string;
+  model_type: AiModelType;
+  provider_name: string;
+  api_protocol: AiModelProtocol;
+  protocol_version: string;
+  auth_scheme: AuthScheme;
+  request_base_url: string;
+  upstream_model: string;
+  api_key: string;
+  api_secret: string | null;
+  timeout_seconds: number;
+  reasoning_effort: string | null;
+  max_output_tokens: number | null;
+  settings: Record<string, unknown>;
+  sort_order: number;
+  remark: string;
+  is_default: boolean;
+};
+
+export type VersionedModelAction = {
+  version: number;
+  replacement_model_id?: string | null;
+  allow_no_default?: boolean;
+};
+
 export class ApiError extends Error {
   status: number;
   details: unknown;
@@ -160,10 +229,80 @@ export function updateScriptStatus(
   });
 }
 
+export function listAiModels(
+  client: ApiClient,
+  filters: {
+    type?: AiModelType;
+    status?: AiModelStatus;
+    provider?: string;
+    protocol?: AiModelProtocol;
+    q?: string;
+  } = {},
+) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) search.set(key, value);
+  }
+  const query = search.toString();
+  return request<{ models: AiModel[] }>(
+    client,
+    `/api/admin/models${query ? `?${query}` : ""}`,
+  );
+}
+
+export function createAiModel(client: ApiClient, payload: AiModelPayload) {
+  return request<AiModel>(client, "/api/admin/models", { method: "POST", body: payload });
+}
+
+export function updateAiModel(
+  client: ApiClient,
+  modelId: string,
+  payload: AiModelPayload & VersionedModelAction,
+) {
+  return request<AiModel>(client, `/api/admin/models/${modelId}`, {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function setDefaultAiModel(
+  client: ApiClient,
+  modelId: string,
+  payload: { version: number },
+) {
+  return request<AiModel>(client, `/api/admin/models/${modelId}/default`, {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function changeAiModelStatus(
+  client: ApiClient,
+  modelId: string,
+  payload: VersionedModelAction & { status: "enabled" | "disabled" },
+) {
+  return request<AiModel>(client, `/api/admin/models/${modelId}/status`, {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function deleteAiModel(
+  client: ApiClient,
+  modelId: string,
+  payload: VersionedModelAction,
+) {
+  return request<{ deletion: "physical" | "logical"; model_id?: string; model?: AiModel }>(
+    client,
+    `/api/admin/models/${modelId}`,
+    { method: "DELETE", body: payload },
+  );
+}
+
 async function request<T>(
   client: ApiClient,
   path: string,
-  options: { method?: "GET" | "POST" | "PUT"; body?: unknown } = {},
+  options: { method?: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown } = {},
 ): Promise<T> {
   const headers: HeadersInit = { accept: "application/json" };
   const init: RequestInit = { headers };

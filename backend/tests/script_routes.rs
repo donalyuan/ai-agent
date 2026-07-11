@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 mod support;
 
-use support::test_database::TestDatabase;
+use support::test_database::{insert_enabled_text_model_with_base_url, TestDatabase};
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -277,6 +277,9 @@ async fn response_json(response: axum::response::Response) -> Value {
 async fn script_routes_generate_read_list_and_update_status() {
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
     let project_id = insert_project(&test_pool).await;
+    let openai_base_url = local_openai_base_url().await;
+    let model_id =
+        insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
     let app = build_app_with_state(
         AppState::new(
             AppConfig {
@@ -284,7 +287,7 @@ async fn script_routes_generate_read_list_and_update_status() {
                 database_url: test_url,
                 redis_url: "redis://127.0.0.1:6379/15".to_string(),
                 openai_api_key: "test-key".to_string(),
-                openai_base_url: local_openai_base_url().await,
+                openai_base_url,
                 openai_model: "test-model".to_string(),
                 openai_timeout_seconds: 5,
                 openai_reasoning_effort: Some("low".to_string()),
@@ -308,6 +311,7 @@ async fn script_routes_generate_read_list_and_update_status() {
                 .body(Body::from(
                     json!({
                         "project_id": project_id,
+                        "model_id": model_id,
                         "topic": "ChatGPT如何改变程序员工作流",
                         "style": "knowledge",
                         "scene_count": 5
@@ -324,6 +328,18 @@ async fn script_routes_generate_read_list_and_update_status() {
     let script_id = generated["script_id"].as_str().unwrap();
     assert_eq!(generated["project_id"], project_id.to_string());
     assert_eq!(generated["scenes"].as_array().unwrap().len(), 5);
+    let run = sqlx::query_as::<_, (String, Option<Uuid>, Value)>(
+        "SELECT status, model_id, model_snapshot FROM agent_runs WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(run.0, "succeeded");
+    assert_eq!(run.1, Some(model_id));
+    assert_eq!(run.2["model_id"], model_id.to_string());
+    assert!(run.2.get("api_key").is_none());
+    assert!(run.2.get("api_secret").is_none());
 
     let get_response = app
         .clone()
@@ -414,6 +430,13 @@ async fn generate_route_uses_stepwise_single_scene_mode_for_xhigh() {
         requests.clone(),
     )
     .await;
+    let model_id =
+        insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
+    sqlx::query("UPDATE ai_models SET reasoning_effort = 'xhigh' WHERE id = $1")
+        .bind(model_id)
+        .execute(&test_pool)
+        .await
+        .unwrap();
     let app = build_app_with_state(
         AppState::new(
             AppConfig {
@@ -445,6 +468,7 @@ async fn generate_route_uses_stepwise_single_scene_mode_for_xhigh() {
                 .body(Body::from(
                     json!({
                         "project_id": project_id,
+                        "model_id": model_id,
                         "topic": "AI 如何改变人类，人类该如何接受 AI",
                         "style": "knowledge",
                         "scene_count": 3
@@ -487,6 +511,9 @@ async fn generate_route_persists_topic_link_snapshot_and_marks_topic_scripted() 
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
     let project_id = insert_project(&test_pool).await;
     let topic_id = insert_content_topic(&test_pool, project_id, "approved").await;
+    let openai_base_url = local_openai_base_url().await;
+    let model_id =
+        insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
     let app = build_app_with_state(
         AppState::new(
             AppConfig {
@@ -494,7 +521,7 @@ async fn generate_route_persists_topic_link_snapshot_and_marks_topic_scripted() 
                 database_url: test_url,
                 redis_url: "redis://127.0.0.1:6379/15".to_string(),
                 openai_api_key: "test-key".to_string(),
-                openai_base_url: local_openai_base_url().await,
+                openai_base_url,
                 openai_model: "test-model".to_string(),
                 openai_timeout_seconds: 5,
                 openai_reasoning_effort: Some("low".to_string()),
@@ -518,6 +545,7 @@ async fn generate_route_persists_topic_link_snapshot_and_marks_topic_scripted() 
                 .body(Body::from(
                     json!({
                         "project_id": project_id,
+                        "model_id": model_id,
                         "topic_id": topic_id,
                         "style": "knowledge",
                         "scene_count": 5
@@ -585,6 +613,9 @@ async fn generate_route_rejects_non_approved_or_cross_project_topics_without_cre
     let idea_topic_id = insert_content_topic(&test_pool, project_id, "idea").await;
     let other_project_topic_id =
         insert_content_topic(&test_pool, other_project_id, "approved").await;
+    let openai_base_url = local_openai_base_url().await;
+    let model_id =
+        insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
     let app = build_app_with_state(
         AppState::new(
             AppConfig {
@@ -592,7 +623,7 @@ async fn generate_route_rejects_non_approved_or_cross_project_topics_without_cre
                 database_url: test_url,
                 redis_url: "redis://127.0.0.1:6379/15".to_string(),
                 openai_api_key: "test-key".to_string(),
-                openai_base_url: local_openai_base_url().await,
+                openai_base_url,
                 openai_model: "test-model".to_string(),
                 openai_timeout_seconds: 5,
                 openai_reasoning_effort: Some("low".to_string()),
@@ -617,6 +648,7 @@ async fn generate_route_rejects_non_approved_or_cross_project_topics_without_cre
                     .body(Body::from(
                         json!({
                             "project_id": project_id,
+                            "model_id": model_id,
                             "topic_id": topic_id,
                             "style": "knowledge",
                             "scene_count": 5
@@ -653,6 +685,17 @@ async fn generate_route_returns_script_generation_error_when_llm_output_is_inval
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
     let project_id = insert_project(&test_pool).await;
     let requests = Arc::new(Mutex::new(Vec::new()));
+    let openai_base_url = local_scripted_openai_base_url(
+        vec![
+            json!("不是 JSON"),
+            json!("仍然不是 JSON"),
+            json!("还是不是 JSON"),
+        ],
+        requests,
+    )
+    .await;
+    let model_id =
+        insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
     let app = build_app_with_state(
         AppState::new(
             AppConfig {
@@ -660,15 +703,7 @@ async fn generate_route_returns_script_generation_error_when_llm_output_is_inval
                 database_url: test_url,
                 redis_url: "redis://127.0.0.1:6379/15".to_string(),
                 openai_api_key: "test-key".to_string(),
-                openai_base_url: local_scripted_openai_base_url(
-                    vec![
-                        json!("不是 JSON"),
-                        json!("仍然不是 JSON"),
-                        json!("还是不是 JSON"),
-                    ],
-                    requests,
-                )
-                .await,
+                openai_base_url,
                 openai_model: "test-model".to_string(),
                 openai_timeout_seconds: 5,
                 openai_reasoning_effort: Some("low".to_string()),
@@ -691,6 +726,7 @@ async fn generate_route_returns_script_generation_error_when_llm_output_is_inval
                 .body(Body::from(
                     json!({
                         "project_id": project_id,
+                        "model_id": model_id,
                         "topic": "ChatGPT如何改变程序员工作流",
                         "style": "knowledge",
                         "scene_count": 5
@@ -709,6 +745,14 @@ async fn generate_route_returns_script_generation_error_when_llm_output_is_inval
         .as_str()
         .unwrap()
         .contains("script parse error"));
+    let run_status = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM agent_runs WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(run_status, "failed");
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
@@ -817,6 +861,7 @@ async fn generate_route_checks_project_before_openai_config() {
                 .body(Body::from(
                     json!({
                         "project_id": missing_project_id,
+                        "model_id": Uuid::new_v4(),
                         "topic": "ChatGPT如何改变程序员工作流",
                         "style": "knowledge",
                         "scene_count": 5

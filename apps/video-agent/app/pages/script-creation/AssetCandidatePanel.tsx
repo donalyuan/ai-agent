@@ -1,14 +1,12 @@
 import type { ReactNode } from "react";
 import type {
   AssetGenerationPlanResponse,
-  AssetGenerationProvider,
   AssetGenerationTask,
   SceneAssetCandidate,
   ScriptDetail,
 } from "../../lib/api";
 import {
   assetCandidateStatusLabels,
-  assetProviderLabels,
   assetTaskStatusLabels,
   candidatePreviewUrl,
   candidatesForScene,
@@ -25,7 +23,8 @@ export type AssetCandidatePanelProps = {
   loadingCandidates: boolean;
   loadingPlan: boolean;
   plan: AssetGenerationPlanResponse | null;
-  provider: AssetGenerationProvider;
+  modelSelect: ReactNode;
+  modelUnavailable: boolean;
   script: ScriptDetail;
   selectedSceneId: string | null;
   tasks: AssetGenerationTask[];
@@ -37,7 +36,6 @@ export type AssetCandidatePanelProps = {
   onConfirmDismissTask: () => void;
   onConfirmVideoTask: (taskId: string) => void;
   onGenerateCandidates: () => void;
-  onProviderChange: (provider: AssetGenerationProvider) => void;
   onRegenerateScene: (sceneId: string) => void;
   onRequestDismissTask: (taskId: string) => void;
   onRejectCandidate: (sceneId: string, candidateId: string) => void;
@@ -46,7 +44,6 @@ export type AssetCandidatePanelProps = {
   onUseReferenceMaterialsChange: (enabled: boolean) => void;
 };
 
-const fallbackProviderOptions: AssetGenerationProvider[] = ["gpt-image-2", "jimeng"];
 const candidateCountOptions = [1, 2, 3, 4];
 
 export function AssetCandidatePanel({
@@ -58,7 +55,8 @@ export function AssetCandidatePanel({
   loadingCandidates,
   loadingPlan,
   plan,
-  provider,
+  modelSelect,
+  modelUnavailable,
   script,
   selectedSceneId,
   tasks,
@@ -69,7 +67,6 @@ export function AssetCandidatePanel({
   onCancelDismissTask,
   onConfirmDismissTask,
   onConfirmVideoTask,
-  onProviderChange,
   onRegenerateScene,
   onRequestDismissTask,
   onRejectCandidate,
@@ -95,7 +92,6 @@ export function AssetCandidatePanel({
   const planSceneCount = plan?.scene_count || scenes.length;
   const planImageCount = plan?.image_candidate_count || planSceneCount * candidateCount;
   const maxImageCount = plan?.max_image_candidate_count || 48;
-  const providerOptions = plan?.enabled_providers.length ? plan.enabled_providers : fallbackProviderOptions;
   const imageTaskEntries = imageTasksForScene(tasks, activeScene?.scene_id || null);
   const videoTaskEntries = videoTasksForScene(tasks, activeScene?.scene_id || null);
   const taskToDismiss = tasks.find((task) => task.task_id === taskToDismissId) || null;
@@ -214,20 +210,7 @@ export function AssetCandidatePanel({
           </div>
 
           <div className="assetSettingBlock">
-            <span className="assetSettingLabel">图片供应商</span>
-            <div className="assetSegmentedControl" aria-label="图片供应商">
-              {providerOptions.map((option) => (
-                <button
-                  className={provider === option ? "filterButton selected" : "filterButton"}
-                  disabled={writesDisabled || actionInProgress}
-                  key={option}
-                  onClick={() => onProviderChange(option)}
-                  type="button"
-                >
-                  {assetProviderLabels[option]}
-                </button>
-              ))}
-            </div>
+            {modelSelect}
           </div>
 
           <div className="assetSettingBlock">
@@ -250,7 +233,7 @@ export function AssetCandidatePanel({
           <label className="assetReferenceToggle">
             <input
               checked={useReferenceMaterials}
-              disabled={writesDisabled || actionInProgress}
+              disabled={writesDisabled || actionInProgress || modelUnavailable}
               onChange={(event) => onUseReferenceMaterialsChange(event.target.checked)}
               type="checkbox"
             />
@@ -273,7 +256,7 @@ export function AssetCandidatePanel({
           {activeScene ? (
             <button
               className="secondaryButton"
-              disabled={writesDisabled || actionInProgress}
+              disabled={writesDisabled || actionInProgress || modelUnavailable}
               onClick={() => onRegenerateScene(activeScene.scene_id)}
               type="button"
             >

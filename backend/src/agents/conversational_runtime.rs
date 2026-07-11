@@ -17,7 +17,7 @@ use crate::repositories::{
     ScriptRepository, ScriptRepositoryError, TopicRepository, TopicRepositoryError,
     UpdateTopicGenerationBatchInput,
 };
-use novex_model::{LLMClient, LLMError, LLMJsonSchema, LLMPrompt};
+use novex_model::{LLMClient, LLMError, LLMJsonSchema, LLMPrompt, ModelExecutionSnapshot};
 use serde::Deserialize;
 use serde_json::json;
 use std::fmt;
@@ -31,6 +31,7 @@ pub struct AgentRuntime {
     project_repository: Arc<dyn ProjectRepository>,
     topic_repository: Option<Arc<dyn TopicRepository>>,
     llm_client: Arc<dyn LLMClient>,
+    model_execution: Option<ModelExecutionSnapshot>,
 }
 
 impl AgentRuntime {
@@ -46,11 +47,17 @@ impl AgentRuntime {
             project_repository,
             topic_repository: None,
             llm_client,
+            model_execution: None,
         }
     }
 
     pub fn with_topic_repository(mut self, topic_repository: Arc<dyn TopicRepository>) -> Self {
         self.topic_repository = Some(topic_repository);
+        self
+    }
+
+    pub fn with_model_execution(mut self, snapshot: ModelExecutionSnapshot) -> Self {
+        self.model_execution = Some(snapshot);
         self
     }
 
@@ -82,6 +89,11 @@ impl AgentRuntime {
                 project_id: conversation.project_id,
                 agent_type: conversation.agent_type.clone(),
                 input: json!({ "user_message_id": user_message.id }),
+                model_id: self.model_execution.as_ref().map(|snapshot| snapshot.model_id),
+                model_snapshot: self
+                    .model_execution
+                    .as_ref()
+                    .and_then(|snapshot| serde_json::to_value(snapshot).ok()),
             })
             .await?;
 
@@ -277,6 +289,11 @@ impl AgentRuntime {
                     "intent": "review_topic_group",
                     "root_batch_id": root_batch_id
                 }),
+                model_id: self.model_execution.as_ref().map(|snapshot| snapshot.model_id),
+                model_snapshot: self
+                    .model_execution
+                    .as_ref()
+                    .and_then(|snapshot| serde_json::to_value(snapshot).ok()),
             })
             .await?;
 
@@ -472,7 +489,13 @@ impl AgentRuntime {
         }
 
         let reply = intent.reply.clone();
-        let request = intent.into_generate_request(project_id)?;
+        let request = intent.into_generate_request(
+            project_id,
+            self.model_execution
+                .as_ref()
+                .map(|snapshot| snapshot.model_id)
+                .unwrap_or_default(),
+        )?;
         let service = ScriptAgentService::new(
             self.llm_client.clone(),
             self.script_repository.clone(),
@@ -1251,6 +1274,7 @@ impl ScriptGenerationIntent {
     fn into_generate_request(
         self,
         project_id: Uuid,
+        model_id: Uuid,
     ) -> Result<GenerateScriptRequest, AgentRuntimeError> {
         let topic = self
             .topic
@@ -1266,6 +1290,7 @@ impl ScriptGenerationIntent {
         })?;
 
         Ok(GenerateScriptRequest {
+            model_id,
             project_id,
             topic,
             topic_id: None,

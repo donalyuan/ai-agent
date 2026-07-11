@@ -11,8 +11,10 @@ use validator::Validate;
 #[test]
 fn generate_script_request_deserializes_and_validates() {
     let project_id = Uuid::new_v4();
+    let model_id = Uuid::new_v4();
     let payload = json!({
         "project_id": project_id,
+        "model_id": model_id,
         "topic": "ChatGPT如何改变程序员工作流",
         "style": "knowledge",
         "scene_count": 6,
@@ -23,6 +25,7 @@ fn generate_script_request_deserializes_and_validates() {
 
     request.validate().unwrap();
     assert_eq!(request.project_id, project_id);
+    assert_eq!(request.model_id, model_id);
     assert_eq!(request.style_or_default(), ScriptStyle::Knowledge);
     assert_eq!(request.scene_count_or_default(), 6);
 }
@@ -32,6 +35,7 @@ fn generate_script_request_accepts_scene_count_from_three_to_twelve() {
     for scene_count in [3, 12] {
         let request: GenerateScriptRequest = serde_json::from_value(json!({
             "project_id": Uuid::new_v4(),
+            "model_id": Uuid::new_v4(),
             "topic": "ChatGPT如何改变程序员工作流",
             "scene_count": scene_count
         }))
@@ -144,6 +148,7 @@ fn project_response_maps_repository_project_to_api_shape() {
 fn generate_script_request_rejects_too_long_topic_and_invalid_scene_count() {
     let payload = json!({
         "project_id": Uuid::new_v4(),
+        "model_id": Uuid::new_v4(),
         "topic": "太".repeat(201),
         "scene_count": 13
     });
@@ -159,6 +164,7 @@ fn generate_script_request_rejects_too_long_topic_and_invalid_scene_count() {
 fn generate_script_request_allows_empty_topic_for_topic_id_flow() {
     let request: GenerateScriptRequest = serde_json::from_value(json!({
         "project_id": Uuid::new_v4(),
+        "model_id": Uuid::new_v4(),
         "topic_id": Uuid::new_v4(),
         "style": "knowledge",
         "scene_count": 5
@@ -175,6 +181,7 @@ fn generate_script_request_rejects_scene_count_outside_three_to_twelve() {
     for scene_count in [2, 13] {
         let request: GenerateScriptRequest = serde_json::from_value(json!({
             "project_id": Uuid::new_v4(),
+            "model_id": Uuid::new_v4(),
             "topic": "ChatGPT如何改变程序员工作流",
             "scene_count": scene_count
         }))
@@ -184,6 +191,16 @@ fn generate_script_request_rejects_scene_count_outside_three_to_twelve() {
 
         assert!(errors.field_errors().contains_key("scene_count"));
     }
+}
+
+#[test]
+fn generate_script_request_requires_model_id() {
+    let result = serde_json::from_value::<GenerateScriptRequest>(json!({
+        "project_id": Uuid::new_v4(),
+        "topic": "ChatGPT如何改变程序员工作流"
+    }));
+
+    assert!(result.is_err());
 }
 
 #[test]

@@ -48,6 +48,7 @@
 - 用户已确认新的脚本创作产品约定：脚本生成也应走脚本 Agent 对话入口；后续 `apps/video-agent` 不应在右侧并列保留独立“生成脚本”大表单和“脚本 Agent 对话”输入框，而应使用单一脚本 Agent 对话承载无脚本时生成脚本、有脚本时修改脚本。该改造通过 OpenSpec change `conversational-script-generation` 推进，前端实现前仍需更新 `docs/prototypes/video-agent/video-agent.pen` 并获得确认
 - 脚本智能体详情展示已选定“时间轴对照视图”：左侧表达分镜顺序和节奏节点，右侧并排展示旁白与画面指令；后续实现不要回退成纯卡片流或纯表格
 - 用户已确认素材 Agent 下一步规划采用“旧素材复用优先 + AI 图片自动生成 + AI 视频人工二次确认”边界：AI 图片默认每分镜 3 张候选、可调整为 1-4 张，未选候选也进入素材库并标记来源；旧人物/IP 素材可作为参考图；生成图片必须落到自管素材存储后再写入 `materials.file_url`；第一版图片供应商为 `gpt-image-2` 和即梦，用户可选择供应商，失败不得自动跨供应商重试。后续“大模型管理”归 `admin/` 平台控制面，不放在视频工作台；视频工作台只消费已启用供应商、默认模型和限额配置。
+- 2026-07-11 已确认并实现统一 AI 模型管理，此条覆盖此前“素材生成直接选择供应商”的旧约定：PostgreSQL `ai_models` 统一纳管文本、图片、视频模型及供应商、显式 API 调用协议、请求地址、上游模型、推理配置、超时和凭据；API Key/API Secret 原文入库，但 API、日志和运行快照必须掩码或排除。`admin/` 支持添加、编辑、删除、启停和默认替换；`apps/video-agent` 的账号策略草稿、选题生成/补充、主题组评审、脚本确认、脚本对话和素材生成均由用户选择启用模型并提交 `model_id`，不得再按供应商字符串或环境变量路由。临时错误只允许同模型重试，不得自动跨模型切换；视频工作台仍不新增视频生成模型调用入口。
 - 2026-07-10 `gpt-image-2` 真实调用仍不可用：使用独立 `OPENAI_IMAGE_KEY` 和 `OPENAI_IMAGE_BASE_URL=https://api.zeekai.cc` 对 `/v1/images/generations` 执行一次 `n=1`、无重试的 SSE 请求，服务端返回 `HTTP 403 permission_error: Image generation is not enabled for this group`，未生成图片；后续不得继续盲目重试或开启 Worker，必须先在 ZeekAI 确认该 Key 所属分组已启用图片生成，再做一次受控验证。不得在记忆、日志或回复中记录真实 Key。
 - 用户已确认素材生成应作为 `素材管理 / 素材生成` 独立二级入口，不放在 `脚本创作 / 脚本生成` 页面；页面文案中 `Agent` 仍作为产品名称保留，只去掉 `Topic Source`、独立 `Agent`、`素材 Agent` 这类说明性小标题。
 - Video Agent 前端工作台当前仅覆盖桌面端运营后台，不涉及移动端原型、移动端适配或移动端验收；后续如需要移动端，应单独提出 OpenSpec change

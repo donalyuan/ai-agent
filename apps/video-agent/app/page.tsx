@@ -1,13 +1,17 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspaceShell } from "./components/workspace/WorkspaceShell";
+import { ModelSelect } from "./components/models/ModelSelect";
+import {
+  modelSelectionUnavailable,
+  reconcileModelSelection,
+} from "./components/models/modelSelection";
 import {
   AgentMessage,
   ApiClient,
   ApiError,
   AssetGenerationPlanResponse,
-  AssetGenerationProvider,
   AssetGenerationTask,
   ContentTopic,
   ContentTopicSource,
@@ -17,6 +21,7 @@ import {
   MaterialStatus,
   MaterialStatusFilter,
   MaterialType,
+  ModelOption,
   PrepareScriptFromTopicResponse,
   Project,
   SceneAssetCandidate,
@@ -52,6 +57,7 @@ import {
   listAssetCandidates,
   listAssetGenerationTasks,
   listMaterials,
+  listModelOptions,
   listProjects,
   listScripts,
   listContentTopics,
@@ -206,7 +212,6 @@ export default function Home() {
   const [assetCandidates, setAssetCandidates] = useState<SceneAssetCandidate[]>([]);
   const [assetTasks, setAssetTasks] = useState<AssetGenerationTask[]>([]);
   const [assetPlan, setAssetPlan] = useState<AssetGenerationPlanResponse | null>(null);
-  const [assetProvider, setAssetProvider] = useState<AssetGenerationProvider>("gpt-image-2");
   const [assetCandidateCount, setAssetCandidateCount] = useState(3);
   const [useReferenceMaterials, setUseReferenceMaterials] = useState(true);
   const [selectedAssetSceneId, setSelectedAssetSceneId] = useState<string | null>(null);
@@ -306,6 +311,18 @@ export default function Home() {
   const [agentDraft, setAgentDraft] = useState("");
   const [agentError, setAgentError] = useState("");
   const [sendingAgentMessage, setSendingAgentMessage] = useState(false);
+  const [textModelOptions, setTextModelOptions] = useState<ModelOption[]>([]);
+  const [imageModelOptions, setImageModelOptions] = useState<ModelOption[]>([]);
+  const [loadingTextModels, setLoadingTextModels] = useState(true);
+  const [loadingImageModels, setLoadingImageModels] = useState(true);
+  const [textModelError, setTextModelError] = useState("");
+  const [imageModelError, setImageModelError] = useState("");
+  const [strategyModelId, setStrategyModelId] = useState("");
+  const [topicModelId, setTopicModelId] = useState("");
+  const [reviewModelId, setReviewModelId] = useState("");
+  const [scriptGenerateModelId, setScriptGenerateModelId] = useState("");
+  const [scriptAgentModelId, setScriptAgentModelId] = useState("");
+  const [imageModelId, setImageModelId] = useState("");
   const selectedScriptIdRef = useRef<string | null>(null);
   const selectedProjectIdRef = useRef("");
   const preserveAgentConversationRef = useRef<string | null>(null);
@@ -350,9 +367,15 @@ export default function Home() {
   const selectedMaterial =
     materials.find((material) => material.material_id === selectedMaterialId) || null;
   const currentAssetPayload = useMemo(
-    () => assetGenerationPayload(assetProvider, assetCandidateCount, useReferenceMaterials),
-    [assetCandidateCount, assetProvider, useReferenceMaterials],
+    () => assetGenerationPayload(imageModelId, assetCandidateCount, useReferenceMaterials),
+    [assetCandidateCount, imageModelId, useReferenceMaterials],
   );
+  const strategyModelUnavailable = modelSelectionUnavailable(strategyModelId, textModelOptions);
+  const topicModelUnavailable = modelSelectionUnavailable(topicModelId, textModelOptions);
+  const reviewModelUnavailable = modelSelectionUnavailable(reviewModelId, textModelOptions);
+  const scriptGenerateModelUnavailable = modelSelectionUnavailable(scriptGenerateModelId, textModelOptions);
+  const scriptAgentModelUnavailable = modelSelectionUnavailable(scriptAgentModelId, textModelOptions);
+  const imageModelUnavailable = modelSelectionUnavailable(imageModelId, imageModelOptions);
   const writesDisabled = apiAvailable === false;
   const selectedSubMenuKey =
     selectedMenuKey === contentStrategyMenuKey
@@ -366,6 +389,46 @@ export default function Home() {
         : selectedMenuKey === materialManagementMenuKey
           ? selectedMaterialSubMenuKey
         : null;
+
+  const refreshModelOptions = useCallback(async () => {
+    async function refreshTextModels() {
+      setLoadingTextModels(true);
+      setTextModelError("");
+      try {
+        const response = await listModelOptions(client, "text");
+        setTextModelOptions(response.models);
+        setStrategyModelId((current) => reconcileModelSelection(current, response.models));
+        setTopicModelId((current) => reconcileModelSelection(current, response.models));
+        setReviewModelId((current) => reconcileModelSelection(current, response.models));
+        setScriptGenerateModelId((current) => reconcileModelSelection(current, response.models));
+        setScriptAgentModelId((current) => reconcileModelSelection(current, response.models));
+      } catch (error) {
+        setTextModelError(errorToMessage(error));
+      } finally {
+        setLoadingTextModels(false);
+      }
+    }
+
+    async function refreshImageModels() {
+      setLoadingImageModels(true);
+      setImageModelError("");
+      try {
+        const response = await listModelOptions(client, "image");
+        setImageModelOptions(response.models);
+        setImageModelId((current) => reconcileModelSelection(current, response.models));
+      } catch (error) {
+        setImageModelError(errorToMessage(error));
+      } finally {
+        setLoadingImageModels(false);
+      }
+    }
+
+    await Promise.all([refreshTextModels(), refreshImageModels()]);
+  }, [client]);
+
+  useEffect(() => {
+    void refreshModelOptions();
+  }, [refreshModelOptions]);
 
   useEffect(() => {
     let active = true;
@@ -936,10 +999,14 @@ export default function Home() {
     if (
       !selectedScript ||
       selectedMenuKey !== materialManagementMenuKey ||
-      selectedMaterialSubMenuKey !== assetGenerationMenuKey
+      selectedMaterialSubMenuKey !== assetGenerationMenuKey ||
+      imageModelUnavailable
     ) {
       setAssetPlan(null);
       setLoadingAssetPlan(false);
+      if (selectedScript && selectedMenuKey === materialManagementMenuKey && selectedMaterialSubMenuKey === assetGenerationMenuKey) {
+        setAssetError("请选择可用的图片模型");
+      }
       return;
     }
 
@@ -954,14 +1021,14 @@ export default function Home() {
         const plan = await getAssetGenerationPlan(client, script.script_id, currentAssetPayload);
         if (active) {
           setAssetPlan(plan);
-          if (plan.enabled_providers.length && !plan.enabled_providers.includes(assetProvider)) {
-            setAssetProvider(plan.enabled_providers[0]);
-          }
         }
       } catch (error) {
         if (active) {
           setAssetPlan(null);
           setAssetError(errorToMessage(error));
+          if (isModelDisabledError(error)) {
+            void refreshModelOptions();
+          }
         }
       } finally {
         if (active) {
@@ -975,7 +1042,7 @@ export default function Home() {
     return () => {
       active = false;
     };
-  }, [assetProvider, client, currentAssetPayload, selectedMaterialSubMenuKey, selectedMenuKey, selectedScript]);
+  }, [client, currentAssetPayload, imageModelUnavailable, refreshModelOptions, selectedMaterialSubMenuKey, selectedMenuKey, selectedScript]);
 
   useEffect(() => {
     selectedProjectIdRef.current = selectedProjectId;
@@ -1014,7 +1081,6 @@ export default function Home() {
     setAssetCandidates([]);
     setAssetTasks([]);
     setAssetPlan(null);
-    setAssetProvider("gpt-image-2");
     setAssetCandidateCount(3);
     setUseReferenceMaterials(true);
     setSelectedAssetSceneId(null);
@@ -1287,7 +1353,8 @@ export default function Home() {
   }
 
   async function handleCreateAssetGenerationTasks() {
-    if (!selectedScript) {
+    if (!selectedScript || imageModelUnavailable) {
+      setAssetError("请选择可用的图片模型");
       return;
     }
 
@@ -1302,6 +1369,9 @@ export default function Home() {
       }
       await refreshAssetCandidates(scriptId);
     } catch (error) {
+      if (isModelDisabledError(error)) {
+        await refreshModelOptions();
+      }
       if (selectedScriptIdRef.current === scriptId) {
         setAssetError(errorToMessage(error));
       }
@@ -1345,7 +1415,8 @@ export default function Home() {
   }
 
   async function handleRegenerateSceneAsset(sceneId: string) {
-    if (sceneRegenerationInFlightRef.current) {
+    if (sceneRegenerationInFlightRef.current || imageModelUnavailable) {
+      setAssetError("请选择可用的图片模型");
       return;
     }
     sceneRegenerationInFlightRef.current = true;
@@ -1365,6 +1436,9 @@ export default function Home() {
       sceneRegenerationIdempotencyKeysRef.current.delete(sceneId);
       setAssetTasks((currentTasks) => upsertAssetTask(currentTasks, task));
     } catch (error) {
+      if (isModelDisabledError(error)) {
+        await refreshModelOptions();
+      }
       setAssetError(errorToMessage(error));
     } finally {
       sceneRegenerationInFlightRef.current = false;
@@ -1564,6 +1638,10 @@ export default function Home() {
       setAccountStrategyError("请先选择账号");
       return;
     }
+    if (strategyModelUnavailable) {
+      setAccountStrategyError("请选择可用的文本模型");
+      return;
+    }
 
     setGeneratingAccountStrategyDraft(true);
     setAccountStrategyError("");
@@ -1573,6 +1651,7 @@ export default function Home() {
     try {
       const response = await generateStrategyProfileDraft(client, selectedProjectId, {
         direction_notes: accountStrategyDraftNotes.trim(),
+        model_id: strategyModelId,
       });
       if (selectedProjectIdRef.current !== projectIdAtSend) {
         return;
@@ -1588,6 +1667,9 @@ export default function Home() {
       }));
       setAccountStrategyDraftSummary(response.draft_summary);
     } catch (error) {
+      if (isModelDisabledError(error)) {
+        await refreshModelOptions();
+      }
       if (selectedProjectIdRef.current === projectIdAtSend) {
         setAccountStrategyError(errorToMessage(error));
       }
@@ -1681,6 +1763,9 @@ export default function Home() {
     if (!selectedProjectId) {
       throw new Error("请先选择项目");
     }
+    if (topicModelUnavailable) {
+      throw new Error("请选择可用的文本模型");
+    }
 
     const projectIdAtSend = selectedProjectId;
     let conversationId = topicAgentConversationId;
@@ -1697,10 +1782,19 @@ export default function Home() {
       setTopicAgentConversationId(conversationId);
     }
 
-    const response = await sendAgentMessage(client, conversationId, {
-      content,
-      supplement_of_batch_id: batchId,
-    });
+    let response: Awaited<ReturnType<typeof sendAgentMessage>>;
+    try {
+      response = await sendAgentMessage(client, conversationId, {
+        content,
+        model_id: topicModelId,
+        supplement_of_batch_id: batchId,
+      });
+    } catch (error) {
+      if (isModelDisabledError(error)) {
+        await refreshModelOptions();
+      }
+      throw error;
+    }
     if (selectedProjectIdRef.current !== projectIdAtSend) {
       return;
     }
@@ -1728,17 +1822,26 @@ export default function Home() {
       setTopicReviewError("请先选择历史主题组");
       return;
     }
+    if (reviewModelUnavailable) {
+      setTopicReviewError("请选择可用的文本模型");
+      return;
+    }
 
     const rootBatchId = activeTopicReviewRootBatchId;
     setTopicReviewLoading(true);
     setTopicReviewError("");
 
     try {
-      const createdSnapshot = await createTopicGroupReview(client, rootBatchId);
+      const createdSnapshot = await createTopicGroupReview(client, rootBatchId, {
+        model_id: reviewModelId,
+      });
       const latestSnapshot = await getLatestTopicGroupReview(client, rootBatchId);
       setTopicReviewSnapshot(latestSnapshot || createdSnapshot);
       await refreshTopicGroupsSafely();
     } catch (error) {
+      if (isModelDisabledError(error)) {
+        await refreshModelOptions();
+      }
       setTopicReviewError(errorToMessage(error));
     } finally {
       setTopicReviewLoading(false);
@@ -1756,6 +1859,10 @@ export default function Home() {
 
     if (!content) {
       setTopicAgentError("请输入选题生成要求");
+      return;
+    }
+    if (topicModelUnavailable) {
+      setTopicAgentError("请选择可用的文本模型");
       return;
     }
 
@@ -1778,7 +1885,10 @@ export default function Home() {
         setTopicAgentConversationId(conversationId);
       }
 
-      const response = await sendAgentMessage(client, conversationId, { content });
+      const response = await sendAgentMessage(client, conversationId, {
+        content,
+        model_id: topicModelId,
+      });
       if (selectedProjectIdRef.current !== projectIdAtSend) {
         return;
       }
@@ -1801,6 +1911,9 @@ export default function Home() {
       }
       await refreshContentTopics(batchId);
     } catch (error) {
+      if (isModelDisabledError(error)) {
+        await refreshModelOptions();
+      }
       if (selectedProjectIdRef.current === projectIdAtSend) {
         setTopicAgentError(errorToMessage(error));
       }
@@ -1831,6 +1944,10 @@ export default function Home() {
     if (!scriptPreparation || !selectedProjectId) {
       return;
     }
+    if (scriptGenerateModelUnavailable) {
+      setTopicScriptError("请选择可用的文本模型");
+      return;
+    }
 
     setGeneratingTopicScript(true);
     setTopicScriptError("");
@@ -1838,6 +1955,7 @@ export default function Home() {
     try {
       const script = await generateScript(client, {
         project_id: selectedProjectId,
+        model_id: scriptGenerateModelId,
         topic_id: scriptPreparation.script_request.topic_id,
         style: scriptPrepareOptions.style,
         scene_count: scriptPrepareOptions.scene_count,
@@ -1852,6 +1970,9 @@ export default function Home() {
       setSelectedMenuKey(scriptCreationMenuKey);
       setScriptPreparation(null);
     } catch (error) {
+      if (isModelDisabledError(error)) {
+        await refreshModelOptions();
+      }
       setTopicScriptError(errorToMessage(error));
     } finally {
       setGeneratingTopicScript(false);
@@ -1869,6 +1990,10 @@ export default function Home() {
 
     if (!content) {
       setAgentError("请输入脚本需求或修改方向");
+      return;
+    }
+    if (scriptAgentModelUnavailable) {
+      setAgentError("请选择可用的文本模型");
       return;
     }
 
@@ -1905,7 +2030,10 @@ export default function Home() {
         setAgentConversationId(conversationId);
       }
 
-      const response = await sendAgentMessage(client, conversationId, { content });
+      const response = await sendAgentMessage(client, conversationId, {
+        content,
+        model_id: scriptAgentModelId,
+      });
       if (!stillCurrentContext()) {
         return;
       }
@@ -1941,6 +2069,9 @@ export default function Home() {
       setScripts((currentScripts) => upsertSummary(currentScripts, createdScript));
       setStatusFilter("all");
     } catch (error) {
+      if (isModelDisabledError(error)) {
+        await refreshModelOptions();
+      }
       if (stillCurrentContext()) {
         setAgentError(errorToMessage(error));
       }
@@ -1969,6 +2100,18 @@ export default function Home() {
           <ScriptPreparationDialog
             error={topicScriptError}
             generating={generatingTopicScript}
+            modelUnavailable={scriptGenerateModelUnavailable}
+            modelSelect={
+              <ModelSelect
+                error={textModelError}
+                id="script-generate-model"
+                label="推理模型"
+                loading={loadingTextModels}
+                models={textModelOptions}
+                value={scriptGenerateModelId}
+                onChange={setScriptGenerateModelId}
+              />
+            }
             options={scriptPrepareOptions}
             preparation={scriptPreparation}
             onClose={() => setScriptPreparation(null)}
@@ -1987,6 +2130,18 @@ export default function Home() {
           draftSummary={accountStrategyDraftSummary}
           error={accountStrategyError}
           generatingDraft={generatingAccountStrategyDraft}
+          modelUnavailable={strategyModelUnavailable}
+          modelSelect={
+            <ModelSelect
+              error={textModelError}
+              id="strategy-draft-model"
+              label="推理模型"
+              loading={loadingTextModels}
+              models={textModelOptions}
+              value={strategyModelId}
+              onChange={setStrategyModelId}
+            />
+          }
           saving={savingAccountStrategy}
           writesDisabled={writesDisabled}
           onBackToTopicPool={() => setContentStrategyView("pool")}
@@ -2017,6 +2172,30 @@ export default function Home() {
           reviewError={topicReviewError}
           reviewLoading={topicReviewLoading}
           reviewSnapshot={topicReviewSnapshot}
+          reviewModelUnavailable={reviewModelUnavailable}
+          reviewModelSelect={
+            <ModelSelect
+              error={textModelError}
+              id="topic-review-model"
+              label="评审模型"
+              loading={loadingTextModels}
+              models={textModelOptions}
+              value={reviewModelId}
+              onChange={setReviewModelId}
+            />
+          }
+          topicModelUnavailable={topicModelUnavailable}
+          topicModelSelect={
+            <ModelSelect
+              error={textModelError}
+              id="topic-supplement-model"
+              label="推理模型"
+              loading={loadingTextModels}
+              models={textModelOptions}
+              value={topicModelId}
+              onChange={setTopicModelId}
+            />
+          }
           deletingTopicId={deletingTopicId}
           writesDisabled={writesDisabled}
           onDeleteTopic={handleDeleteTopic}
@@ -2053,6 +2232,18 @@ export default function Home() {
           agentError={topicAgentError}
           agentMessages={topicAgentMessages}
           sendingAgentMessage={sendingTopicAgentMessage}
+          topicModelUnavailable={topicModelUnavailable}
+          topicModelSelect={
+            <ModelSelect
+              error={textModelError}
+              id="topic-generation-model"
+              label="推理模型"
+              loading={loadingTextModels}
+              models={textModelOptions}
+              value={topicModelId}
+              onChange={setTopicModelId}
+            />
+          }
           preparingScript={preparingScript}
           onSelectTopic={setSelectedTopicId}
           onClearTopicBatchFilter={() => {
@@ -2086,7 +2277,18 @@ export default function Home() {
                   loadingCandidates: loadingAssetCandidates,
                   loadingPlan: loadingAssetPlan,
                   plan: assetPlan,
-                  provider: assetProvider,
+                  modelUnavailable: imageModelUnavailable,
+                  modelSelect: (
+                    <ModelSelect
+                      error={imageModelError}
+                      id="asset-image-model"
+                      label="图片模型"
+                      loading={loadingImageModels}
+                      models={imageModelOptions}
+                      value={imageModelId}
+                      onChange={setImageModelId}
+                    />
+                  ),
                   selectedSceneId: selectedAssetSceneId,
                   tasks: assetTasks,
                   taskToDismissId: assetTaskToDismissId,
@@ -2096,7 +2298,6 @@ export default function Home() {
                   onCancelDismissTask: () => setAssetTaskToDismissId(null),
                   onConfirmDismissTask: handleDismissAssetGenerationTask,
                   onGenerateCandidates: handleCreateAssetGenerationTasks,
-                  onProviderChange: setAssetProvider,
                   onRegenerateScene: handleRegenerateSceneAsset,
                   onRequestDismissTask: setAssetTaskToDismissId,
                   onRejectCandidate: handleRejectAssetCandidate,
@@ -2144,6 +2345,18 @@ export default function Home() {
           loadingProjects={loadingProjects}
           loadingScriptDetail={loadingScriptDetail}
           loadingScripts={loadingScripts}
+          modelUnavailable={scriptAgentModelUnavailable}
+          modelSelect={
+            <ModelSelect
+              error={textModelError}
+              id="script-agent-model"
+              label="推理模型"
+              loading={loadingTextModels}
+              models={textModelOptions}
+              value={scriptAgentModelId}
+              onChange={setScriptAgentModelId}
+            />
+          }
           projectError={projectError}
           scriptError={scriptError}
           scripts={scripts}
@@ -2203,6 +2416,14 @@ function errorToMessage(error: unknown) {
     return error.message;
   }
   return "请求失败";
+}
+
+function isModelDisabledError(error: unknown) {
+  if (!(error instanceof ApiError) || !error.details || typeof error.details !== "object") {
+    return false;
+  }
+  const body = error.details as { error?: { code?: unknown } };
+  return body.error?.code === "model_disabled";
 }
 
 function getTopicAgentBatchId(message: AgentMessage) {

@@ -1,3 +1,4 @@
+pub mod ai_model_repository;
 pub mod asset_generation_repository;
 pub mod conversation_repository;
 pub mod material_repository;
@@ -34,4 +35,9 @@ pub use topic_repository::{
 pub use workspace_menu_repository::{
     PostgresWorkspaceMenuRepository, WorkspaceMenu, WorkspaceMenuRepositoryError,
     WorkspaceMenuTreeNode,
+};
+pub use ai_model_repository::{
+    AiModel, AiModelListFilter, AiModelRepository, AiModelRepositoryError, AiModelStatus,
+    ChangeAiModelStatusInput, CreateAiModelInput, DeleteAiModelInput, DeleteAiModelOutcome,
+    PostgresAiModelRepository, UpdateAiModelInput,
 };

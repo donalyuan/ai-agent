@@ -341,6 +341,7 @@ fn valid_llm_json() -> String {
 
 fn request(project_id: Uuid) -> GenerateScriptRequest {
     GenerateScriptRequest {
+        model_id: Uuid::nil(),
         project_id,
         topic: "ChatGPT如何改变程序员工作流".to_string(),
         topic_id: None,
@@ -421,6 +422,7 @@ async fn generate_script_stepwise_requests_metadata_then_single_scenes() {
         ],
     );
     let request = GenerateScriptRequest {
+        model_id: Uuid::nil(),
         project_id,
         topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
         topic_id: None,
@@ -465,6 +467,7 @@ async fn generate_script_stepwise_retries_transient_provider_errors_for_single_s
         ],
     );
     let request = GenerateScriptRequest {
+        model_id: Uuid::nil(),
         project_id,
         topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
         topic_id: None,

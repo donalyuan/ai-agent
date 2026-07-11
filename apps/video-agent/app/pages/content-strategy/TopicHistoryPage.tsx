@@ -1,4 +1,4 @@
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 import type {
   ContentTopic,
   ContentTopicStats,
@@ -33,12 +33,16 @@ type TopicHistoryPageProps = {
   reviewError: string;
   reviewLoading: boolean;
   reviewSnapshot: TopicReviewSnapshot | null;
+  reviewModelSelect: ReactNode;
+  reviewModelUnavailable: boolean;
   stats: ContentTopicStats;
   topicBatchError: string;
   topicBatches: TopicGenerationBatchSummary[];
   topicGroups: TopicGroupSummary[];
   topicGroupSort: TopicGroupSort;
   topics: ContentTopic[];
+  topicModelSelect: ReactNode;
+  topicModelUnavailable: boolean;
   writesDisabled: boolean;
   onDeleteTopic: (topic: ContentTopic) => void;
   onPrepareScript: (topic: ContentTopic) => void;
@@ -64,12 +68,16 @@ export function TopicHistoryPage({
   reviewError,
   reviewLoading,
   reviewSnapshot,
+  reviewModelSelect,
+  reviewModelUnavailable,
   stats,
   topicBatchError,
   topicBatches,
   topicGroups,
   topicGroupSort,
   topics,
+  topicModelSelect,
+  topicModelUnavailable,
   writesDisabled,
   onDeleteTopic,
   onPrepareScript,
@@ -105,7 +113,7 @@ export function TopicHistoryPage({
         : [],
     [rootBatchId, topicBatches],
   );
-  const supplementDisabled = writesDisabled || supplementing || !selectedBatch;
+  const supplementDisabled = writesDisabled || supplementing || !selectedBatch || topicModelUnavailable;
 
   async function handleSupplementSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -306,12 +314,13 @@ export function TopicHistoryPage({
               </div>
               <button
                 className="primaryButton"
-                disabled={writesDisabled || reviewLoading || !rootBatchId}
+                disabled={writesDisabled || reviewLoading || !rootBatchId || reviewModelUnavailable}
                 onClick={() => void onReviewTopicGroup()}
                 type="button"
               >
                 {reviewLoading ? "评审中" : "评审当前主题组"}
               </button>
+              {reviewModelSelect}
               <p>评审只生成辅助分层，不会自动确认、归档或移除选题。</p>
             </section>
           ) : null}
@@ -326,6 +335,7 @@ export function TopicHistoryPage({
               </div>
               {supplementError ? <p className="errorText" role="alert">{supplementError}</p> : null}
               <form className="agentChatForm" onSubmit={handleSupplementSubmit}>
+                {topicModelSelect}
                 <label>
                   补充要求
                   <textarea

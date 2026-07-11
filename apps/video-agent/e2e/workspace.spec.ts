@@ -4,6 +4,28 @@ const projectId = "11111111-1111-4111-8111-111111111111";
 const scriptId = "22222222-2222-4222-8222-222222222222";
 const previousTopicBatchId = "77777777-7777-4777-8777-777777777777";
 const supplementTopicBatchId = "99999999-9999-4999-8999-999999999901";
+const textModelId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const imageModelId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+const textModelOption = {
+  model_id: textModelId,
+  display_name: "默认文本模型",
+  model_type: "text",
+  provider_name: "OpenAI",
+  api_protocol: "openai_responses",
+  upstream_model: "gpt-test",
+  is_default: true,
+};
+
+const imageModelOption = {
+  model_id: imageModelId,
+  display_name: "默认图片模型",
+  model_type: "image",
+  provider_name: "OpenAI",
+  api_protocol: "openai_images",
+  upstream_model: "gpt-image-test",
+  is_default: true,
+};
 
 const emptyStrategyProfile = {
   target_audience: "",
@@ -622,7 +644,7 @@ const subtitleMaterial = {
 };
 
 const assetGenerationPayload = {
-  provider: "gpt-image-2",
+  model_id: imageModelId,
   image_candidates_per_scene: 3,
   use_reference_materials: true,
 };
@@ -632,8 +654,8 @@ const assetGenerationPlan = {
   scene_count: scriptDetail.scenes.length,
   image_candidate_count: scriptDetail.scenes.length * assetGenerationPayload.image_candidates_per_scene,
   max_image_candidate_count: 48,
-  provider: assetGenerationPayload.provider,
-  enabled_providers: ["gpt-image-2", "jimeng"],
+  model_id: imageModelId,
+  provider: "gpt-image-2",
   reference_material_count: 1,
   video_task_count: scriptDetail.scenes.length,
   can_create: true,
@@ -645,7 +667,9 @@ const imageAssetGenerationTask = {
   project_id: projectId,
   script_id: scriptId,
   scene_id: null,
-  provider: assetGenerationPayload.provider,
+  model_id: imageModelId,
+  model_snapshot: null,
+  provider: "gpt-image-2",
   task_type: "image_candidates",
   status: "pending",
   candidate_count: assetGenerationPlan.image_candidate_count,
@@ -779,6 +803,13 @@ test.beforeEach(async ({ page }) => {
   await page.route(/\/api\/projects$/, async (route) => {
     await route.fulfill({ contentType: "application/json", json: { projects: [project] } });
   });
+  await page.route(/\/api\/model-options\?type=(text|image|video)$/, async (route) => {
+    const modelType = new URL(route.request().url()).searchParams.get("type");
+    await route.fulfill({
+      contentType: "application/json",
+      json: { models: modelType === "text" ? [textModelOption] : modelType === "image" ? [imageModelOption] : [] },
+    });
+  });
 });
 
 async function mockExistingScriptWorkflow(page: Page) {
@@ -811,7 +842,7 @@ async function mockExistingScriptWorkflow(page: Page) {
     }
 
     expect(route.request().method()).toBe("POST");
-    expect(route.request().postDataJSON()).toEqual({ content: userMessage.content });
+    expect(route.request().postDataJSON()).toEqual({ content: userMessage.content, model_id: textModelId });
     scriptRefreshed = true;
     await route.fulfill({
       contentType: "application/json",
@@ -850,7 +881,7 @@ async function mockEmptyScriptGeneration(page: Page) {
     }
 
     expect(route.request().method()).toBe("POST");
-    expect(route.request().postDataJSON()).toEqual({ content: generatedUserMessage.content });
+    expect(route.request().postDataJSON()).toEqual({ content: generatedUserMessage.content, model_id: textModelId });
     scriptsRequestedAfterGeneration = true;
     await route.fulfill({
       contentType: "application/json",
@@ -992,6 +1023,7 @@ async function mockScriptAssetWorkflow(page: Page) {
 
 async function mockContentStrategyWorkflow(page: Page) {
   let generatedFromTopic = false;
+  const topicRequest = "本周 AI 工具方向，生成 8 个选题";
 
   await page.unroute(/\/api\/video-workspace\/menus$/);
   await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
@@ -1036,12 +1068,36 @@ async function mockContentStrategyWorkflow(page: Page) {
     expect(route.request().method()).toBe("POST");
     expect(route.request().postDataJSON()).toEqual({
       project_id: projectId,
+      model_id: textModelId,
       topic_id: approvedTopic.topic_id,
       style: "knowledge",
       scene_count: 6,
     });
     generatedFromTopic = true;
     await route.fulfill({ contentType: "application/json", json: topicScriptDetail });
+  });
+  await page.route(/\/api\/agent\/conversations$/, async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({ project_id: projectId, agent_type: "topic" });
+    await route.fulfill({ contentType: "application/json", json: topicConversation });
+  });
+  await page.route(new RegExp(`/api/agent/conversations/${topicConversationId}/messages$`), async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ contentType: "application/json", json: { messages: [] } });
+      return;
+    }
+    expect(route.request().postDataJSON()).toEqual({ content: topicRequest, model_id: textModelId });
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        user_message: { ...supplementUserMessage, content: topicRequest },
+        assistant_message: {
+          ...supplementAssistantMessage,
+          content: "已生成 8 个候选选题。",
+          metadata: { ...supplementAssistantMessage.metadata, batch_id: latestTopicBatch.batch_id },
+        },
+        run: supplementAgentRun,
+      },
+    });
   });
 }
 
@@ -1074,6 +1130,17 @@ async function mockAccountStrategyWorkflow(page: Page) {
       strategy_profile: updatedStrategyProfile,
     });
     await route.fulfill({ contentType: "application/json", json: accountStrategyProject });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/strategy-profile/draft$`), async (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({
+      direction_notes: "面向内容运营负责人",
+      model_id: textModelId,
+    });
+    await route.fulfill({
+      contentType: "application/json",
+      json: { draft: updatedStrategyProfile, draft_summary: "已按补充方向生成策略草稿。" },
+    });
   });
 }
 
@@ -1153,6 +1220,7 @@ async function mockContentStrategyHistoryWorkflow(page: Page) {
     const rootBatchId = route.request().url().split("/topic-groups/")[1]?.split("/")[0];
     expect(route.request().method()).toBe("POST");
     expect(rootBatchId).toBe(previousTopicBatchId);
+    expect(route.request().postDataJSON()).toEqual({ model_id: textModelId });
     reviewCreated = true;
     await route.fulfill({
       contentType: "application/json",
@@ -1178,6 +1246,7 @@ async function mockContentStrategyHistoryWorkflow(page: Page) {
     expect(route.request().method()).toBe("POST");
     expect(route.request().postDataJSON()).toEqual({
       content: supplementUserMessage.content,
+      model_id: textModelId,
       supplement_of_batch_id: previousTopicBatch.batch_id,
     });
     supplementGenerated = true;
@@ -1343,8 +1412,7 @@ test("素材生成页支持生成选择主素材并确认生成视频", async ({
   await expect(panel.getByText("分镜列表")).toBeVisible();
   await expect(panel.getByText("候选素材")).toBeVisible();
   await expect(panel.getByText("生成设置与任务")).toBeVisible();
-  await expect(panel.getByRole("button", { name: "gpt-image-2" })).toHaveClass(/selected/);
-  await expect(panel.getByRole("button", { name: "即梦" })).toBeVisible();
+  await expect(panel.getByRole("combobox", { name: "图片模型" })).toHaveValue(imageModelId);
   await expect(panel.getByText("2 分镜 × 3 = 6 张图片候选")).toBeVisible();
   await expect(panel.getByText("单次最多 48 张")).toBeVisible();
   await expect(panel.getByText("当前主素材")).toBeVisible();
@@ -1452,6 +1520,18 @@ test("内容策略页从已确认选题确认参数并生成脚本", async ({ pa
   await expect(sourceTopicPanel.getByText(approvedTopic.angle)).toBeVisible();
 });
 
+test("内容策略选题 Agent 使用用户选择的文本模型生成候选", async ({ page }) => {
+  await mockContentStrategyWorkflow(page);
+  await page.goto("/");
+
+  const agentPanel = page.getByRole("region", { name: "选题 Agent" });
+  await expect(agentPanel.getByRole("combobox", { name: "推理模型" })).toHaveValue(textModelId);
+  await agentPanel.getByLabel("生成要求").fill("本周 AI 工具方向，生成 8 个选题");
+  await agentPanel.getByRole("button", { name: "生成选题" }).click();
+
+  await expect(agentPanel.getByText("已生成 8 个候选选题。")).toBeVisible();
+});
+
 test("内容策略账号策略页保存资料后当前选题池不展示账号策略区块", async ({ page }) => {
   await page.setViewportSize({ width: 1756, height: 980 });
   await mockAccountStrategyWorkflow(page);
@@ -1507,6 +1587,10 @@ test("内容策略账号策略页保存资料后当前选题池不展示账号�
   expect(accountPanelGeometry!.basicsToContextGap).toBeLessThanOrEqual(22);
   expect(accountPanelGeometry!.contextToDraftGap).toBeGreaterThanOrEqual(18);
   expect(accountPanelGeometry!.contextToDraftGap).toBeLessThanOrEqual(22);
+  await expect(accountPage.getByRole("combobox", { name: "推理模型" })).toHaveValue(textModelId);
+  await accountPage.getByLabel("AI 草稿补充方向").fill("面向内容运营负责人");
+  await accountPage.getByRole("button", { name: "生成草稿" }).click();
+  await expect(accountPage.getByText("草稿摘要：已按补充方向生成策略草稿。")).toBeVisible();
   await accountPage.getByLabel("目标受众").fill(updatedStrategyProfile.target_audience);
   await accountPage.getByLabel("内容支柱").fill(updatedStrategyProfile.content_pillars.join("\n"));
   await accountPage.getByLabel("表达风格").fill(updatedStrategyProfile.tone_style);
@@ -1659,10 +1743,10 @@ test("内容策略空选题池布局贴近原型顶部", async ({ page }) => {
   expect(agentInputBox).not.toBeNull();
   expect(agentButtonBox).not.toBeNull();
   expect(Math.round(agentBox!.height)).toBeLessThanOrEqual(480);
-  expect(Math.round(agentInputBox!.y - agentBox!.y)).toBeLessThanOrEqual(128);
+  expect(Math.round(agentInputBox!.y - agentBox!.y)).toBeLessThanOrEqual(180);
   expect(Math.round(agentButtonBox!.width)).toBeLessThanOrEqual(160);
-  expect(Math.round(agentButtonBox!.y + agentButtonBox!.height - agentBox!.y)).toBeLessThanOrEqual(260);
-  expect(Math.round(agentMessagesBox!.y - agentBox!.y)).toBeLessThanOrEqual(310);
+  expect(Math.round(agentButtonBox!.y + agentButtonBox!.height - agentBox!.y)).toBeLessThanOrEqual(320);
+  expect(Math.round(agentMessagesBox!.y - agentBox!.y)).toBeLessThanOrEqual(370);
 
   const topicPool = page.getByRole("region", { name: "选题池" });
   const poolBox = await topicPool.boundingBox();

@@ -1,6 +1,36 @@
-use sqlx::postgres::PgPoolOptions;
+use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::ops::Deref;
 use std::thread;
+use uuid::Uuid;
+
+#[allow(dead_code)]
+pub async fn insert_enabled_text_model(pool: &PgPool) -> Uuid {
+    insert_enabled_text_model_with_base_url(pool, "https://example.invalid/v1").await
+}
+
+#[allow(dead_code)]
+pub async fn insert_enabled_text_model_with_base_url(
+    pool: &PgPool,
+    request_base_url: &str,
+) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key, timeout_seconds, status
+        )
+        VALUES (
+            '测试文本模型', 'text', 'test', 'openai_chat_completions', 'bearer',
+            $1, 'test-model', 'test-key', 5, 'enabled'
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(request_base_url)
+    .fetch_one(pool)
+    .await
+    .expect("enabled text model fixture should be inserted")
+}
 
 pub struct TestDatabase {
     admin_url: String,

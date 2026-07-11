@@ -82,12 +82,16 @@ impl UpdateProjectStrategyProfileRequest {
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct StrategyProfileDraftRequest {
+    pub model_id: Uuid,
     #[serde(default)]
     pub direction_notes: String,
 }
 
 impl StrategyProfileDraftRequest {
     pub fn validate_for_api(&self) -> Result<(), String> {
+        if self.model_id.is_nil() {
+            return Err("必须选择文本模型".to_string());
+        }
         if self.direction_notes.trim().chars().count() > ACCOUNT_STRATEGY_TEXT_LIMIT {
             return Err("补充方向不能超过 1000 个字符".to_string());
         }
@@ -406,39 +410,36 @@ pub struct MaterialListResponse {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct AssetGenerationPlanRequest {
-    pub provider: String,
+    pub model_id: Uuid,
     pub image_candidates_per_scene: i32,
     #[serde(default)]
     pub use_reference_materials: bool,
 }
 
 impl AssetGenerationPlanRequest {
-    pub fn normalized_provider(&self) -> Result<AssetGenerationProvider, String> {
-        AssetGenerationProvider::try_from(self.provider.trim())
-            .map_err(|_| "素材生成供应商无效".to_string())
-    }
-
-    pub fn validate_for_api(&self) -> Result<AssetGenerationProvider, String> {
-        let provider = self.normalized_provider()?;
+    pub fn validate_for_api(&self) -> Result<(), String> {
+        if self.model_id.is_nil() {
+            return Err("图片模型不能为空".to_string());
+        }
         if !(1..=4).contains(&self.image_candidates_per_scene) {
             return Err("每个分镜图片候选数量必须在 1 到 4 之间".to_string());
         }
-        Ok(provider)
+        Ok(())
     }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct AssetGenerationTaskRequest {
-    pub provider: String,
+    pub model_id: Uuid,
     pub image_candidates_per_scene: i32,
     #[serde(default)]
     pub use_reference_materials: bool,
 }
 
 impl AssetGenerationTaskRequest {
-    pub fn validate_for_api(&self) -> Result<AssetGenerationProvider, String> {
+    pub fn validate_for_api(&self) -> Result<(), String> {
         AssetGenerationPlanRequest {
-            provider: self.provider.clone(),
+            model_id: self.model_id,
             image_candidates_per_scene: self.image_candidates_per_scene,
             use_reference_materials: self.use_reference_materials,
         }
@@ -452,8 +453,8 @@ pub struct AssetGenerationPlanResponse {
     pub scene_count: usize,
     pub image_candidate_count: i32,
     pub max_image_candidate_count: i32,
+    pub model_id: Uuid,
     pub provider: String,
-    pub enabled_providers: Vec<String>,
     pub reference_material_count: i32,
     pub video_task_count: i32,
     pub can_create: bool,
@@ -466,6 +467,8 @@ pub struct AssetGenerationTaskResponse {
     pub project_id: Uuid,
     pub script_id: Option<Uuid>,
     pub scene_id: Option<Uuid>,
+    pub model_id: Option<Uuid>,
+    pub model_snapshot: Option<Value>,
     pub provider: String,
     pub task_type: String,
     pub status: String,
@@ -487,6 +490,8 @@ impl From<AssetGenerationTask> for AssetGenerationTaskResponse {
             project_id: task.project_id,
             script_id: task.script_id,
             scene_id: task.scene_id,
+            model_id: task.model_id,
+            model_snapshot: task.model_snapshot,
             provider: task.provider.as_str().to_string(),
             task_type: task.task_type.as_str().to_string(),
             status: task.status.as_str().to_string(),
@@ -1060,6 +1065,7 @@ impl CreateAgentConversationRequest {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Validate)]
 pub struct SendAgentMessageRequest {
+    pub model_id: Uuid,
     #[validate(length(min = 1, max = 4000))]
     pub content: String,
     #[serde(default)]
@@ -1068,6 +1074,9 @@ pub struct SendAgentMessageRequest {
 
 impl SendAgentMessageRequest {
     pub fn validate_for_api(&self) -> Result<(), String> {
+        if self.model_id.is_nil() {
+            return Err("必须选择文本模型".to_string());
+        }
         if self.content.trim().is_empty() {
             return Err("消息不能为空".to_string());
         }
@@ -1139,6 +1148,8 @@ pub struct AgentRunResponse {
     pub input: Value,
     pub output: Option<Value>,
     pub error_message: Option<String>,
+    pub model_id: Option<Uuid>,
+    pub model_snapshot: Option<Value>,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
 }
@@ -1153,6 +1164,8 @@ impl From<AgentRunRecord> for AgentRunResponse {
             input: run.input,
             output: run.output,
             error_message: run.error_message,
+            model_id: run.model_id,
+            model_snapshot: run.model_snapshot,
             started_at: run.started_at,
             ended_at: run.ended_at,
         }
@@ -1241,6 +1254,7 @@ impl ScriptStyle {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Validate)]
 pub struct GenerateScriptRequest {
+    pub model_id: Uuid,
     pub project_id: Uuid,
     #[serde(default)]
     #[validate(length(max = 200))]
@@ -1254,6 +1268,11 @@ pub struct GenerateScriptRequest {
     pub scene_count: Option<u8>,
     #[serde(default)]
     pub parent_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ModelSelectionRequest {
+    pub model_id: Uuid,
 }
 
 impl GenerateScriptRequest {

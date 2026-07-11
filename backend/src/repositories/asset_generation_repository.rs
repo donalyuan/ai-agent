@@ -198,6 +198,8 @@ pub struct AssetGenerationTask {
     pub project_id: Uuid,
     pub script_id: Option<Uuid>,
     pub scene_id: Option<Uuid>,
+    pub model_id: Option<Uuid>,
+    pub model_snapshot: Option<Value>,
     pub provider: AssetGenerationProvider,
     pub task_type: AssetGenerationTaskType,
     pub status: AssetGenerationTaskStatus,
@@ -234,6 +236,7 @@ pub struct CreateAssetGenerationTaskInput {
     pub project_id: Uuid,
     pub script_id: Option<Uuid>,
     pub scene_id: Option<Uuid>,
+    pub model_id: Option<Uuid>,
     pub provider: AssetGenerationProvider,
     pub task_type: AssetGenerationTaskType,
     pub status: AssetGenerationTaskStatus,
@@ -443,13 +446,14 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
         let row = sqlx::query(
             r#"
             INSERT INTO asset_generation_tasks (
-                project_id, script_id, scene_id, provider, task_type, status,
+                project_id, script_id, scene_id, model_id, provider, task_type, status,
                 candidate_count, reference_material_ids, idempotency_key, params
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, ''), $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, ''), $11)
             ON CONFLICT (idempotency_key) WHERE idempotency_key <> ''
             DO UPDATE SET updated_at = asset_generation_tasks.updated_at
-            RETURNING id, project_id, script_id, scene_id, provider, task_type, status,
+            RETURNING id, project_id, script_id, scene_id, model_id, model_snapshot,
+                      provider, task_type, status,
                       candidate_count, reference_material_ids, params, result, error_message,
                       retry_count, dismissed_at, created_at, updated_at
             "#,
@@ -457,6 +461,7 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
         .bind(input.project_id)
         .bind(input.script_id)
         .bind(input.scene_id)
+        .bind(input.model_id)
         .bind(input.provider.as_str())
         .bind(input.task_type.as_str())
         .bind(input.status.as_str())
@@ -498,7 +503,8 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
 
         let matching_key_row = sqlx::query(
             r#"
-            SELECT task.id, task.project_id, task.script_id, task.scene_id, task.provider,
+            SELECT task.id, task.project_id, task.script_id, task.scene_id,
+                   task.model_id, task.model_snapshot, task.provider,
                    task.task_type, task.status, task.candidate_count,
                    task.reference_material_ids, task.params, task.result, task.error_message,
                    task.retry_count, task.dismissed_at, task.created_at, task.updated_at
@@ -527,7 +533,8 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
 
         let in_flight_row = sqlx::query(
             r#"
-            SELECT id, project_id, script_id, scene_id, provider, task_type, status,
+            SELECT id, project_id, script_id, scene_id, model_id, model_snapshot,
+                   provider, task_type, status,
                    candidate_count, reference_material_ids, params, result, error_message,
                    retry_count, dismissed_at, created_at, updated_at
             FROM asset_generation_tasks
@@ -570,11 +577,12 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
         let row = sqlx::query(
             r#"
             INSERT INTO asset_generation_tasks (
-                project_id, script_id, scene_id, provider, task_type, status,
+                project_id, script_id, scene_id, model_id, provider, task_type, status,
                 candidate_count, reference_material_ids, idempotency_key, params
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            RETURNING id, project_id, script_id, scene_id, provider, task_type, status,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING id, project_id, script_id, scene_id, model_id, model_snapshot,
+                      provider, task_type, status,
                       candidate_count, reference_material_ids, params, result, error_message,
                       retry_count, dismissed_at, created_at, updated_at
             "#,
@@ -582,6 +590,7 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
         .bind(input.project_id)
         .bind(input.script_id)
         .bind(scene_id)
+        .bind(input.model_id)
         .bind(input.provider.as_str())
         .bind(input.task_type.as_str())
         .bind(input.status.as_str())
@@ -683,7 +692,8 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
     ) -> Result<Vec<AssetGenerationTask>, AssetGenerationRepositoryError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, project_id, script_id, scene_id, provider, task_type, status,
+            SELECT id, project_id, script_id, scene_id, model_id, model_snapshot,
+                   provider, task_type, status,
                    candidate_count, reference_material_ids, params, result, error_message,
                    retry_count, dismissed_at, created_at, updated_at
             FROM asset_generation_tasks
@@ -888,7 +898,8 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
                 error_message = $4,
                 updated_at = NOW()
             WHERE id = $1
-            RETURNING id, project_id, script_id, scene_id, provider, task_type, status,
+            RETURNING id, project_id, script_id, scene_id, model_id, model_snapshot,
+                      provider, task_type, status,
                       candidate_count, reference_material_ids, params, result, error_message,
                       retry_count, dismissed_at, created_at, updated_at
             "#,
@@ -920,7 +931,8 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
             WHERE id = $1
               AND task_type = 'video_draft'
               AND status = 'draft'
-            RETURNING id, project_id, script_id, scene_id, provider, task_type, status,
+            RETURNING id, project_id, script_id, scene_id, model_id, model_snapshot,
+                      provider, task_type, status,
                       candidate_count, reference_material_ids, params, result, error_message,
                       retry_count, dismissed_at, created_at, updated_at
             "#,
@@ -960,7 +972,8 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
                 updated_at = CASE WHEN dismissed_at IS NULL THEN NOW() ELSE updated_at END
             WHERE id = $1
               AND status = 'failed'
-            RETURNING id, project_id, script_id, scene_id, provider, task_type, status,
+            RETURNING id, project_id, script_id, scene_id, model_id, model_snapshot,
+                      provider, task_type, status,
                       candidate_count, reference_material_ids, params, result, error_message,
                       retry_count, dismissed_at, created_at, updated_at
             "#,
@@ -1006,6 +1019,8 @@ fn task_from_row(row: PgRow) -> Result<AssetGenerationTask, AssetGenerationRepos
         project_id: row.get("project_id"),
         script_id: row.get("script_id"),
         scene_id: row.get("scene_id"),
+        model_id: row.get("model_id"),
+        model_snapshot: row.get("model_snapshot"),
         provider,
         task_type,
         status,

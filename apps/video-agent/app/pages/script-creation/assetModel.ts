@@ -1,15 +1,9 @@
 import type {
-  AssetGenerationProvider,
   AssetGenerationRequestPayload,
   AssetGenerationTask,
   Scene,
   SceneAssetCandidate,
 } from "../../lib/api";
-
-export const assetProviderLabels: Record<AssetGenerationProvider, string> = {
-  "gpt-image-2": "gpt-image-2",
-  jimeng: "即梦",
-};
 
 export const assetTaskStatusLabels: Record<AssetGenerationTask["status"], string> = {
   draft: "待确认",
@@ -27,12 +21,12 @@ export const assetCandidateStatusLabels: Record<SceneAssetCandidate["status"], s
 };
 
 export function assetGenerationPayload(
-  provider: AssetGenerationProvider,
+  modelId: string,
   imageCandidatesPerScene: number,
   useReferenceMaterials: boolean,
 ): AssetGenerationRequestPayload {
   return {
-    provider,
+    model_id: modelId,
     image_candidates_per_scene: imageCandidatesPerScene,
     use_reference_materials: useReferenceMaterials,
   };

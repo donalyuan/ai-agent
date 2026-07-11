@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::{routing::post, Json, Router};
 use novex_api::{build_app_with_state, AppConfig, AppState};
+use novex_model::{ApiProtocol, OpenAIClient, OpenAIConfig};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::{Arc, Mutex};
@@ -11,7 +12,7 @@ use uuid::Uuid;
 
 mod support;
 
-use support::test_database::TestDatabase;
+use support::test_database::{insert_enabled_text_model, TestDatabase};
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -177,6 +178,16 @@ async fn local_scripted_openai_base_url(requests: Arc<Mutex<Vec<Value>>>) -> Str
 }
 
 fn app_state(test_url: String, pool: PgPool, openai_base_url: String) -> AppState {
+    let llm_client = OpenAIClient::new(OpenAIConfig {
+        api_protocol: ApiProtocol::OpenAiChatCompletions,
+        api_key: "test-key".to_string(),
+        request_base_url: openai_base_url.clone(),
+        upstream_model: "test-model".to_string(),
+        timeout_seconds: 5,
+        responses_reasoning_effort: Some("low".to_string()),
+        responses_max_output_tokens: 3000,
+    })
+    .unwrap();
     AppState::new(
         AppConfig {
             environment: "test".to_string(),
@@ -195,6 +206,7 @@ fn app_state(test_url: String, pool: PgPool, openai_base_url: String) -> AppStat
         None,
     )
     .unwrap()
+    .with_llm_client(Arc::new(llm_client))
 }
 
 #[tokio::test]
@@ -305,6 +317,7 @@ async fn conversation_routes_create_send_and_list_messages() {
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
     let project_id = insert_project(&test_pool).await;
     let script_id = insert_script(&test_pool, project_id).await;
+    let model_id = insert_enabled_text_model(&test_pool).await;
     let openai_requests = Arc::new(Mutex::new(Vec::new()));
     let openai_base_url = local_scripted_openai_base_url(openai_requests.clone()).await;
     let app = build_app_with_state(app_state(test_url, test_pool.clone(), openai_base_url));
@@ -348,7 +361,8 @@ async fn conversation_routes_create_send_and_list_messages() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "content": "把第 3 镜改得更有冲突感，画面换成办公室深夜加班"
+                        "content": "把第 3 镜改得更有冲突感，画面换成办公室深夜加班",
+                        "model_id": model_id
                     })
                     .to_string(),
                 ))
@@ -356,8 +370,9 @@ async fn conversation_routes_create_send_and_list_messages() {
         )
         .await
         .unwrap();
-    assert_eq!(send_response.status(), StatusCode::OK);
+    let send_status = send_response.status();
     let turn = response_json(send_response).await;
+    assert_eq!(send_status, StatusCode::OK, "response body: {turn}");
     assert_eq!(turn["assistant_message"]["role"], "assistant");
     assert_eq!(turn["assistant_message"]["metadata"]["scene_sequence"], 3);
     assert_eq!(turn["run"]["status"], "succeeded");
@@ -399,6 +414,7 @@ async fn conversation_routes_create_send_and_list_messages() {
 async fn conversation_routes_return_stable_errors() {
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
     let project_id = insert_project(&test_pool).await;
+    let model_id = Uuid::new_v4();
     let missing_script_id = Uuid::new_v4();
     let openai_requests = Arc::new(Mutex::new(Vec::new()));
     let openai_base_url = local_scripted_openai_base_url(openai_requests.clone()).await;
@@ -517,7 +533,9 @@ async fn conversation_routes_return_stable_errors() {
                     "/api/agent/conversations/{conversation_id}/messages"
                 ))
                 .header("content-type", "application/json")
-                .body(Body::from(json!({"content": "   "}).to_string()))
+                .body(Body::from(
+                    json!({"content": "   ", "model_id": model_id}).to_string(),
+                ))
                 .unwrap(),
         )
         .await

@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createApiClient,
+  createAiModel,
+  deleteAiModel,
   createProject,
   generateScript,
   getApiBaseUrl,
   getScript,
   listProjects,
+  listAiModels,
+  setDefaultAiModel,
+  updateAiModel,
+  changeAiModelStatus,
   listScripts,
   updateScriptStatus,
 } from "./api";
@@ -232,5 +238,71 @@ describe("api client", () => {
         message: "项目名称不能为空",
         details: { error: "项目名称不能为空" },
       });
+  });
+
+  it("按筛选条件管理 AI 模型完整生命周期", async () => {
+    const model = {
+      model_id: "44444444-4444-4444-8444-444444444444",
+      display_name: "GPT Text",
+      model_type: "text",
+      version: 2,
+    };
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(model)));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+    const payload = {
+      display_name: "GPT Text",
+      model_type: "text" as const,
+      provider_name: "OpenAI",
+      api_protocol: "openai_responses" as const,
+      protocol_version: "v1",
+      auth_scheme: "bearer" as const,
+      request_base_url: "https://api.example/v1",
+      upstream_model: "gpt-test",
+      api_key: "secret",
+      api_secret: null,
+      timeout_seconds: 120,
+      reasoning_effort: "high",
+      max_output_tokens: 3000,
+      settings: {},
+      sort_order: 0,
+      remark: "",
+      is_default: false,
+    };
+
+    await listAiModels(client, {
+      type: "text",
+      status: "enabled",
+      provider: "OpenAI",
+      protocol: "openai_responses",
+      q: "GPT",
+    });
+    await createAiModel(client, payload);
+    await updateAiModel(client, model.model_id, { ...payload, version: 2, api_key: "" });
+    await setDefaultAiModel(client, model.model_id, { version: 3 });
+    await changeAiModelStatus(client, model.model_id, {
+      version: 4,
+      status: "disabled",
+      replacement_model_id: null,
+      allow_no_default: true,
+    });
+    await deleteAiModel(client, model.model_id, {
+      version: 5,
+      replacement_model_id: null,
+      allow_no_default: true,
+    });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://api.test/api/admin/models?type=text&status=enabled&provider=OpenAI&protocol=openai_responses&q=GPT",
+      "http://api.test/api/admin/models",
+      `http://api.test/api/admin/models/${model.model_id}`,
+      `http://api.test/api/admin/models/${model.model_id}/default`,
+      `http://api.test/api/admin/models/${model.model_id}/status`,
+      `http://api.test/api/admin/models/${model.model_id}`,
+    ]);
+    expect(fetchMock.mock.calls[2][1]).toMatchObject({
+      method: "PUT",
+      body: JSON.stringify({ ...payload, version: 2, api_key: "" }),
+    });
+    expect(fetchMock.mock.calls[5][1]).toMatchObject({ method: "DELETE" });
   });
 });

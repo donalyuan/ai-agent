@@ -14,6 +14,7 @@ import type {
   ContentTopic,
   ContentTopicListResponse,
   Material,
+  ModelOption,
   ProjectListResponse,
   SceneAssetCandidate,
   ScriptDetail,
@@ -77,6 +78,7 @@ vi.mock("./lib/api", async (importOriginal) => {
     createApiClient: vi.fn(() => ({ baseUrl: "http://api.test", fetcher: vi.fn() })),
     listWorkspaceMenus: vi.fn(),
     listProjects: vi.fn(),
+    listModelOptions: vi.fn(),
     listScripts: vi.fn(),
     getScript: vi.fn(),
     generateScript: vi.fn(),
@@ -120,6 +122,34 @@ const strategyProfile = {
   forbidden_topics: ["夸大收益"],
   reference_accounts: ["参考账号A"],
   topic_preferences: "优先教程和案例",
+};
+
+const textModel: ModelOption = {
+  model_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  display_name: "默认文本模型",
+  model_type: "text",
+  provider_name: "OpenAI",
+  api_protocol: "openai_responses",
+  upstream_model: "gpt-test",
+  is_default: true,
+};
+
+const imageModel: ModelOption = {
+  model_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  display_name: "默认图片模型",
+  model_type: "image",
+  provider_name: "OpenAI",
+  api_protocol: "openai_images",
+  upstream_model: "gpt-image-test",
+  is_default: true,
+};
+
+const secondaryTextModel: ModelOption = {
+  ...textModel,
+  model_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  display_name: "备用文本模型",
+  upstream_model: "gpt-secondary",
+  is_default: false,
 };
 
 const emptyStrategyProfile = {
@@ -690,8 +720,8 @@ const assetGenerationPlan: AssetGenerationPlanResponse = {
   scene_count: scriptDetail.scenes.length,
   image_candidate_count: scriptDetail.scenes.length * 3,
   max_image_candidate_count: 48,
+  model_id: imageModel.model_id,
   provider: "gpt-image-2",
-  enabled_providers: ["gpt-image-2", "jimeng"],
   reference_material_count: 1,
   video_task_count: scriptDetail.scenes.length,
   can_create: true,
@@ -703,6 +733,8 @@ const imageGenerationTask: AssetGenerationTask = {
   project_id: project.project_id,
   script_id: scriptDetail.script_id,
   scene_id: null,
+  model_id: imageModel.model_id,
+  model_snapshot: null,
   provider: "gpt-image-2",
   task_type: "image_candidates",
   status: "pending",
@@ -1029,6 +1061,9 @@ describe("video-agent 视频工作台页面", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.listWorkspaceMenus).mockResolvedValue(workspaceMenus);
+    vi.mocked(api.listModelOptions).mockImplementation(async (_client, modelType) => ({
+      models: modelType === "text" ? [textModel] : modelType === "image" ? [imageModel] : [],
+    }));
     mockProjects({ projects: [] });
     mockScripts({ scripts: [], total: 0, limit: 20, offset: 0 });
     mockTopics({ topics: [], stats: { total: 0, idea: 0, approved: 0, scripted: 0, archived: 0 } });
@@ -1347,8 +1382,7 @@ describe("video-agent 视频工作台页面", () => {
     expect(within(panel).getByText("分镜列表")).toBeInTheDocument();
     expect(within(panel).getByText("候选素材")).toBeInTheDocument();
     expect(within(panel).getByText("生成设置与任务")).toBeInTheDocument();
-    expect(within(panel).getByRole("button", { name: "gpt-image-2" })).toHaveClass("selected");
-    expect(within(panel).getByRole("button", { name: "即梦" })).toBeInTheDocument();
+    expect(within(panel).getByRole("combobox", { name: "图片模型" })).toHaveValue(imageModel.model_id);
     expect(within(panel).getByText("2 分镜 × 3 = 6 张图片候选")).toBeInTheDocument();
     expect(within(panel).getByText("单次最多 48 张")).toBeInTheDocument();
     expect(within(panel).getByText("当前主素材")).toBeInTheDocument();
@@ -1370,7 +1404,7 @@ describe("video-agent 视频工作台页面", () => {
     fireEvent.click(generateCandidatesButton);
     await waitFor(() => {
       expect(api.createAssetGenerationTasks).toHaveBeenCalledWith(expect.anything(), scriptSummary.script_id, {
-        provider: "gpt-image-2",
+        model_id: imageModel.model_id,
         image_candidates_per_scene: 3,
         use_reference_materials: true,
       });
@@ -1400,7 +1434,7 @@ describe("video-agent 视频工作台页面", () => {
         expect.anything(),
         scriptDetail.scenes[0].scene_id,
         {
-          provider: "gpt-image-2",
+          model_id: imageModel.model_id,
           image_candidates_per_scene: 3,
           use_reference_materials: true,
         },
@@ -1526,7 +1560,7 @@ describe("video-agent 视频工作台页面", () => {
       expect.anything(),
       scriptDetail.scenes[0].scene_id,
       {
-        provider: "gpt-image-2",
+        model_id: imageModel.model_id,
         image_candidates_per_scene: 3,
         use_reference_materials: true,
       },
@@ -1738,6 +1772,7 @@ describe("video-agent 视频工作台页面", () => {
     });
     expect(api.sendAgentMessage).toHaveBeenCalledWith(expect.anything(), unboundConversation.conversation_id, {
       content: "生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本",
+      model_id: textModel.model_id,
     });
   });
 
@@ -1771,6 +1806,7 @@ describe("video-agent 视频工作台页面", () => {
     });
     expect(api.sendAgentMessage).toHaveBeenCalledWith(expect.anything(), unboundConversation.conversation_id, {
       content: "生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本",
+      model_id: textModel.model_id,
     });
   });
 
@@ -1844,6 +1880,7 @@ describe("video-agent 视频工作台页面", () => {
     });
     expect(api.sendAgentMessage).toHaveBeenCalledWith(expect.anything(), conversation.conversation_id, {
       content: userMessage.content,
+      model_id: textModel.model_id,
     });
     expect(await within(panel).findByText(assistantMessage.content)).toBeInTheDocument();
   });
@@ -2187,9 +2224,70 @@ describe("video-agent 视频工作台页面", () => {
     expect(within(accountPage).getByText(/草稿偏向 AI 工具教程、避坑和真实案例/)).toBeInTheDocument();
     expect(api.generateStrategyProfileDraft).toHaveBeenCalledWith(expect.anything(), project.project_id, {
       direction_notes: "面向 AI 副业新手，强调避坑。",
+      model_id: textModel.model_id,
     });
     expect(api.updateProjectStrategyProfile).not.toHaveBeenCalled();
     expect(screen.getByLabelText("当前账号")).toHaveDisplayValue("科技博主");
+  });
+
+  it("账号策略草稿允许用户切换文本模型并提交所选模型 ID", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    vi.mocked(api.listModelOptions).mockImplementation(async (_client, modelType) => ({
+      models: modelType === "text" ? [textModel, secondaryTextModel] : [imageModel],
+    }));
+    mockProjects({ projects: [project] });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "账号策略" }));
+    const accountPage = await screen.findByRole("region", { name: "账号策略资料" });
+    fireEvent.change(within(accountPage).getByRole("combobox", { name: "推理模型" }), {
+      target: { value: secondaryTextModel.model_id },
+    });
+    fireEvent.change(within(accountPage).getByLabelText("AI 草稿补充方向"), {
+      target: { value: "更偏向真实案例" },
+    });
+    fireEvent.click(within(accountPage).getByRole("button", { name: "生成草稿" }));
+
+    await waitFor(() => {
+      expect(api.generateStrategyProfileDraft).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+        direction_notes: "更偏向真实案例",
+        model_id: secondaryTextModel.model_id,
+      });
+    });
+  });
+
+  it("模型调用时被停用会刷新选项、保留输入并要求重新选择", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(contentStrategyWorkspaceMenus);
+    let modelDisabled = false;
+    vi.mocked(api.listModelOptions).mockImplementation(async (_client, modelType) => ({
+      models:
+        modelType === "text"
+          ? modelDisabled
+            ? [secondaryTextModel]
+            : [textModel, secondaryTextModel]
+          : [imageModel],
+    }));
+    vi.mocked(api.generateStrategyProfileDraft).mockImplementation(async () => {
+      modelDisabled = true;
+      throw new api.ApiError(409, "模型已停用或删除", {
+        error: { code: "model_disabled", message: "模型已停用或删除" },
+      });
+    });
+    mockProjects({ projects: [project] });
+    render(createElement(Home));
+
+    fireEvent.click(await screen.findByRole("button", { name: /内容策略/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "账号策略" }));
+    const accountPage = await screen.findByRole("region", { name: "账号策略资料" });
+    const notes = within(accountPage).getByLabelText("AI 草稿补充方向");
+    fireEvent.change(notes, { target: { value: "保留这段未提交输入" } });
+    fireEvent.click(within(accountPage).getByRole("button", { name: "生成草稿" }));
+
+    expect(await within(accountPage).findByText("原选择已停用或删除，请刷新后重新选择")).toBeInTheDocument();
+    expect(notes).toHaveValue("保留这段未提交输入");
+    expect(within(accountPage).getByRole("button", { name: "生成草稿" })).toBeDisabled();
+    expect(vi.mocked(api.listModelOptions).mock.calls.filter((call) => call[1] === "text")).toHaveLength(2);
   });
 
   it("账号策略页保存成功后同步账号列表和页面回显", async () => {
@@ -2500,7 +2598,9 @@ describe("video-agent 视频工作台页面", () => {
     fireEvent.click(within(history).getByRole("button", { name: "评审当前主题组" }));
 
     await waitFor(() => {
-      expect(api.createTopicGroupReview).toHaveBeenCalledWith(expect.anything(), previousTopicBatch.batch_id);
+      expect(api.createTopicGroupReview).toHaveBeenCalledWith(expect.anything(), previousTopicBatch.batch_id, {
+        model_id: textModel.model_id,
+      });
       expect(api.getLatestTopicGroupReview).toHaveBeenCalledWith(expect.anything(), previousTopicBatch.batch_id);
     });
     expect(await within(topicColumn).findByRole("region", { name: "优先推荐" })).toBeInTheDocument();
@@ -2918,6 +3018,7 @@ describe("video-agent 视频工作台页面", () => {
     });
     expect(api.sendAgentMessage).toHaveBeenCalledWith(expect.anything(), topicConversation.conversation_id, {
       content: "补充遗漏的 AI 工作流复盘角度",
+      model_id: textModel.model_id,
       supplement_of_batch_id: previousTopicBatch.batch_id,
     });
     await waitFor(() => {
@@ -3010,6 +3111,7 @@ describe("video-agent 视频工作台页面", () => {
     });
     expect(api.sendAgentMessage).toHaveBeenCalledWith(expect.anything(), topicConversation.conversation_id, {
       content: topicUserMessage.content,
+      model_id: textModel.model_id,
     });
     expect(await within(agentPanel).findByText(topicAssistantMessage.content)).toBeInTheDocument();
     await waitFor(() => {
@@ -3300,6 +3402,7 @@ describe("video-agent 视频工作台页面", () => {
     await waitFor(() => {
       expect(api.generateScript).toHaveBeenCalledWith(expect.anything(), {
         project_id: project.project_id,
+        model_id: textModel.model_id,
         topic_id: approvedTopic.topic_id,
         style: "knowledge",
         scene_count: 6,

@@ -19,7 +19,7 @@ Novex 是可复用 AI Agent Foundation。`apps/video-agent` 是第一个业务�
 - **Rust + Axum**：`backend/` 控制面 API 和业务编排入口
 - **SQLx + PostgreSQL**：类型安全数据库访问
 - **Redis**：任务队列与缓存
-- **LLM 接入**：通用 OpenAI-compatible provider 客户端归属 `crates/novex-model`，暴露 `LLMClient`、`LLMPrompt`、`LLMError`、`OpenAIConfig` 和 `OpenAIClient`；`backend/` 只保留脚本 Agent 的业务 Prompt 构造、LLM 输出解析和脚本业务校验。客户端同时支持 Chat Completions 与 Responses API；当 `OPENAI_BASE_URL` 以 `/responses` 结尾时直接走 Responses endpoint，并使用 JSON object 输出约束。Responses 分支使用 SSE 流式响应以避开上游同步请求 30 秒窗口，并发送 Codex-compatible `User-Agent`。Responses 分支支持 `OPENAI_REASONING_EFFORT` 和 `OPENAI_MAX_OUTPUT_TOKENS` 配置，`OPENAI_REASONING_EFFORT=none` 时不发送 `reasoning` 字段。
+- **模型接入**：PostgreSQL `ai_models` 是文本、图片、视频模型部署的运行时唯一配置来源；后台记录供应商、显式 API 调用协议、请求根地址、上游模型、原文凭据和类型化运行参数。`crates/novex-model` 按显式 `api_protocol` 构造 Responses 或 Chat Completions 客户端，不再根据 URL 后缀推断协议；Python Worker 按图片任务 `model_id` 读取数据库并构造 OpenAI Images 或即梦 provider。`OPENAI_*`、`OPENAI_IMAGE_*`、`JIMENG_*` 仅供带 `--confirm-plaintext-credentials` 的一次性导入命令使用，API 与 Worker 运行时不得回退这些变量。
 
 ### Rust 基座 crates
 - `crates/novex-ai-core`：Run Graph、Trace、Policy、通用 AI 领域模型

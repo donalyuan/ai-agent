@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import type { Project } from "../../lib/api";
 import {
   accountStrategyProfileIsEmpty,
@@ -12,6 +12,8 @@ type AccountStrategyPageProps = {
   form: AccountStrategyFormState;
   generatingDraft: boolean;
   hasUnsavedChanges: boolean;
+  modelSelect: ReactNode;
+  modelUnavailable: boolean;
   project?: Project;
   saving: boolean;
   writesDisabled: boolean;
@@ -31,6 +33,8 @@ export function AccountStrategyPage({
   error,
   generatingDraft,
   hasUnsavedChanges,
+  modelSelect,
+  modelUnavailable,
   saving,
   writesDisabled,
   onBackToTopicPool,
@@ -223,11 +227,12 @@ export function AccountStrategyPage({
               ) : (
                 <p className="strategyDraftSummary muted">草稿摘要：保存前不会修改正式账号资料。</p>
               )}
+              {modelSelect}
             </div>
             <div className="accountDraftActions">
               <button
                 className="primaryButton accountDraftButton"
-                disabled={disabled || generatingDraft}
+                disabled={disabled || generatingDraft || modelUnavailable}
                 onClick={onGenerateDraft}
                 type="button"
               >

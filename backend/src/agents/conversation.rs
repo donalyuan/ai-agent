@@ -102,6 +102,8 @@ pub struct AgentRunRecord {
     pub input: Value,
     pub output: Option<Value>,
     pub error_message: Option<String>,
+    pub model_id: Option<Uuid>,
+    pub model_snapshot: Option<Value>,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
 }
@@ -130,6 +132,8 @@ pub struct CreateAgentRunInput {
     pub project_id: Option<Uuid>,
     pub agent_type: String,
     pub input: Value,
+    pub model_id: Option<Uuid>,
+    pub model_snapshot: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -38,6 +38,7 @@ export function AssetGenerationPage({
 }: AssetGenerationPageProps) {
   const generateCandidatesDisabled =
     writesDisabled ||
+    Boolean(assetCandidatePanel?.modelUnavailable) ||
     Boolean(assetCandidatePanel?.actionInProgress) ||
     (assetCandidatePanel?.plan ? !assetCandidatePanel.plan.can_create : false);
 

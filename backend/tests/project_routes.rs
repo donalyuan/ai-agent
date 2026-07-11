@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 mod support;
 
-use support::test_database::TestDatabase;
+use support::test_database::{insert_enabled_text_model, TestDatabase};
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -448,6 +448,7 @@ async fn project_routes_generate_strategy_profile_draft_without_saving() {
     let app = build_app_with_state(
         app_state(test_url, test_pool.clone()).with_llm_client(llm_client.clone()),
     );
+    let model_id = insert_enabled_text_model(&test_pool).await;
 
     let response = app
         .oneshot(
@@ -457,7 +458,8 @@ async fn project_routes_generate_strategy_profile_draft_without_saving() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "direction_notes": "面向内容运营负责人，不要夸大收益。"
+                        "direction_notes": "面向内容运营负责人，不要夸大收益。",
+                        "model_id": model_id
                     })
                     .to_string(),
                 ))
@@ -481,6 +483,18 @@ async fn project_routes_generate_strategy_profile_draft_without_saving() {
             .await
             .unwrap();
     assert_eq!(stored_profile, json!({}));
+    let run = sqlx::query_as::<_, (String, Option<Uuid>, Value)>(
+        "SELECT status, model_id, model_snapshot FROM agent_runs WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(run.0, "succeeded");
+    assert_eq!(run.1, Some(model_id));
+    assert_eq!(run.2["model_id"], model_id.to_string());
+    assert!(run.2.get("api_key").is_none());
+    assert!(run.2.get("api_secret").is_none());
     {
         let prompts = llm_client.prompts.lock().unwrap();
         assert_eq!(prompts.len(), 1);
@@ -501,6 +515,7 @@ async fn project_routes_generate_strategy_profile_draft_missing_project_returns_
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
     let app = build_app_with_state(app_state(test_url, test_pool.clone()));
     let missing_project_id = Uuid::new_v4();
+    let model_id = Uuid::new_v4();
 
     let response = app
         .oneshot(
@@ -511,7 +526,7 @@ async fn project_routes_generate_strategy_profile_draft_missing_project_returns_
                 ))
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({ "direction_notes": "补充方向" }).to_string(),
+                    json!({ "direction_notes": "补充方向", "model_id": model_id }).to_string(),
                 ))
                 .unwrap(),
         )
@@ -544,6 +559,7 @@ async fn project_routes_reject_invalid_strategy_profile_draft_without_saving() {
     let llm_client = Arc::new(RecordingLLMClient::returning_raw("{}"));
     let app =
         build_app_with_state(app_state(test_url, test_pool.clone()).with_llm_client(llm_client));
+    let model_id = insert_enabled_text_model(&test_pool).await;
 
     let response = app
         .oneshot(
@@ -552,7 +568,7 @@ async fn project_routes_reject_invalid_strategy_profile_draft_without_saving() {
                 .uri(format!("/api/projects/{project_id}/strategy-profile/draft"))
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({ "direction_notes": "补充方向" }).to_string(),
+                    json!({ "direction_notes": "补充方向", "model_id": model_id }).to_string(),
                 ))
                 .unwrap(),
         )
@@ -569,6 +585,92 @@ async fn project_routes_reject_invalid_strategy_profile_draft_without_saving() {
             .await
             .unwrap();
     assert_eq!(stored_profile["target_audience"], "旧受众");
+    let run_status = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM agent_runs WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(run_status, "failed");
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn strategy_draft_rejects_disabled_and_image_models_before_llm_execution() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO projects (name, positioning) VALUES ('模型路由账号', '测试') RETURNING id",
+    )
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    let disabled_text_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key, status
+        ) VALUES (
+            '停用文本模型', 'text', 'test', 'openai_chat_completions', 'bearer',
+            'https://example.invalid/v1', 'test-model', 'test-key', 'disabled'
+        ) RETURNING id
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    let image_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key, status,
+            settings
+        ) VALUES (
+            '图片模型', 'image', 'test', 'openai_images', 'bearer',
+            'https://example.invalid/v1', 'test-image', 'test-key', 'enabled',
+            '{"supported_sizes":["1024x1024"],"default_size":"1024x1024"}'::jsonb
+        ) RETURNING id
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    let app = build_app_with_state(app_state(test_url, test_pool.clone()));
+
+    for (model_id, expected_status, expected_code) in [
+        (disabled_text_id, StatusCode::CONFLICT, "model_disabled"),
+        (
+            image_id,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "model_type_mismatch",
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/projects/{project_id}/strategy-profile/draft"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "direction_notes": "测试", "model_id": model_id }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected_status);
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["code"], expected_code);
+    }
+    let run_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_runs")
+        .fetch_one(&test_pool)
+        .await
+        .unwrap();
+    assert_eq!(run_count, 0);
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

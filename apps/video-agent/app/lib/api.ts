@@ -67,6 +67,7 @@ export type UpdateProjectStrategyProfilePayload = {
 
 export type StrategyProfileDraftPayload = {
   direction_notes: string;
+  model_id: string;
 };
 
 export type StrategyProfileDraftResponse = {
@@ -180,7 +181,7 @@ export type SceneAssetCandidateSource = "existing_material" | "ai_generated" | "
 export type SceneAssetCandidateStatus = "candidate" | "selected" | "rejected" | "failed";
 
 export type AssetGenerationRequestPayload = {
-  provider: AssetGenerationProvider;
+  model_id: string;
   image_candidates_per_scene: number;
   use_reference_materials: boolean;
 };
@@ -190,8 +191,8 @@ export type AssetGenerationPlanResponse = {
   scene_count: number;
   image_candidate_count: number;
   max_image_candidate_count: number;
+  model_id: string;
   provider: AssetGenerationProvider;
-  enabled_providers: AssetGenerationProvider[];
   reference_material_count: number;
   video_task_count: number;
   can_create: boolean;
@@ -203,6 +204,8 @@ export type AssetGenerationTask = {
   project_id: string;
   script_id: string | null;
   scene_id: string | null;
+  model_id: string | null;
+  model_snapshot: Record<string, unknown> | null;
   provider: AssetGenerationProvider;
   task_type: AssetGenerationTaskType;
   status: AssetGenerationTaskStatus;
@@ -457,6 +460,7 @@ export type ScriptListResponse = {
 
 export type GenerateScriptPayload = {
   project_id: string;
+  model_id: string;
   topic?: string;
   topic_id?: string | null;
   style?: ScriptStyle;
@@ -534,6 +538,7 @@ export type AgentMessageListResponse = {
 
 export type SendAgentMessagePayload = {
   content: string;
+  model_id: string;
   supplement_of_batch_id?: string | null;
 };
 
@@ -547,6 +552,19 @@ export type ApiClient = {
   baseUrl: string;
   fetcher: typeof fetch;
 };
+
+export type ModelType = "text" | "image" | "video";
+export type ModelOption = {
+  model_id: string;
+  display_name: string;
+  model_type: ModelType;
+  provider_name: string;
+  api_protocol: string;
+  upstream_model: string;
+  is_default: boolean;
+};
+
+export type ModelOptionListResponse = { models: ModelOption[] };
 
 export class ApiError extends Error {
   status: number;
@@ -607,6 +625,13 @@ export function createProject(client: ApiClient, payload: CreateProjectPayload) 
     method: "POST",
     body: payload,
   });
+}
+
+export function listModelOptions(client: ApiClient, modelType: ModelType) {
+  return request<ModelOptionListResponse>(
+    client,
+    `/api/model-options?type=${encodeURIComponent(modelType)}`,
+  );
 }
 
 export function updateProjectStrategyProfile(
@@ -855,9 +880,14 @@ export function listTopicGroups(
   );
 }
 
-export function createTopicGroupReview(client: ApiClient, rootBatchId: string) {
+export function createTopicGroupReview(
+  client: ApiClient,
+  rootBatchId: string,
+  payload: { model_id: string },
+) {
   return request<TopicReviewSnapshot>(client, `/api/topic-groups/${rootBatchId}/reviews`, {
     method: "POST",
+    body: payload,
   });
 }
 

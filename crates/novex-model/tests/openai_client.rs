@@ -1,5 +1,7 @@
 use axum::{http::header, response::IntoResponse, routing::post, Json, Router};
-use novex_model::{LLMClient, LLMError, LLMJsonSchema, LLMPrompt, OpenAIClient, OpenAIConfig};
+use novex_model::{
+    ApiProtocol, LLMClient, LLMError, LLMJsonSchema, LLMPrompt, OpenAIClient, OpenAIConfig,
+};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 
@@ -100,9 +102,10 @@ async fn openai_client_sends_chat_completion_request_and_reads_content() {
     });
 
     let client = OpenAIClient::new(OpenAIConfig {
+        api_protocol: ApiProtocol::OpenAiChatCompletions,
         api_key: "test-key".to_string(),
-        base_url: format!("http://{address}/v1"),
-        model: "test-model".to_string(),
+        request_base_url: format!("http://{address}/v1"),
+        upstream_model: "test-model".to_string(),
         timeout_seconds: 5,
         responses_reasoning_effort: Some("low".to_string()),
         responses_max_output_tokens: 3000,
@@ -157,9 +160,10 @@ async fn openai_client_sends_responses_request_and_reads_output_text() {
     });
 
     let client = OpenAIClient::new(OpenAIConfig {
+        api_protocol: ApiProtocol::OpenAiResponses,
         api_key: "test-key".to_string(),
-        base_url: format!("http://{address}/responses"),
-        model: "test-model".to_string(),
+        request_base_url: format!("http://{address}"),
+        upstream_model: "test-model".to_string(),
         timeout_seconds: 5,
         responses_reasoning_effort: Some("low".to_string()),
         responses_max_output_tokens: 3000,
@@ -202,9 +206,10 @@ async fn openai_client_sends_responses_json_schema_when_prompt_has_schema() {
     });
 
     let client = OpenAIClient::new(OpenAIConfig {
+        api_protocol: ApiProtocol::OpenAiResponses,
         api_key: "test-key".to_string(),
-        base_url: format!("http://{address}/responses"),
-        model: "test-model".to_string(),
+        request_base_url: format!("http://{address}"),
+        upstream_model: "test-model".to_string(),
         timeout_seconds: 5,
         responses_reasoning_effort: Some("low".to_string()),
         responses_max_output_tokens: 3000,
@@ -259,9 +264,10 @@ async fn openai_client_sends_chat_completion_json_schema_when_prompt_has_schema(
     });
 
     let client = OpenAIClient::new(OpenAIConfig {
+        api_protocol: ApiProtocol::OpenAiChatCompletions,
         api_key: "test-key".to_string(),
-        base_url: format!("http://{address}/v1"),
-        model: "test-model".to_string(),
+        request_base_url: format!("http://{address}/v1"),
+        upstream_model: "test-model".to_string(),
         timeout_seconds: 5,
         responses_reasoning_effort: Some("low".to_string()),
         responses_max_output_tokens: 3000,
@@ -299,9 +305,10 @@ async fn openai_client_uses_configured_responses_reasoning_and_token_limit() {
     });
 
     let client = OpenAIClient::new(OpenAIConfig {
+        api_protocol: ApiProtocol::OpenAiResponses,
         api_key: "test-key".to_string(),
-        base_url: format!("http://{address}/responses"),
-        model: "test-model".to_string(),
+        request_base_url: format!("http://{address}"),
+        upstream_model: "test-model".to_string(),
         timeout_seconds: 5,
         responses_reasoning_effort: Some("high".to_string()),
         responses_max_output_tokens: 4096,
@@ -337,9 +344,10 @@ async fn openai_client_uses_prompt_output_token_limit_when_present() {
     });
 
     let client = OpenAIClient::new(OpenAIConfig {
+        api_protocol: ApiProtocol::OpenAiResponses,
         api_key: "test-key".to_string(),
-        base_url: format!("http://{address}/responses"),
-        model: "test-model".to_string(),
+        request_base_url: format!("http://{address}"),
+        upstream_model: "test-model".to_string(),
         timeout_seconds: 5,
         responses_reasoning_effort: Some("xhigh".to_string()),
         responses_max_output_tokens: 3000,
@@ -377,9 +385,10 @@ async fn openai_client_omits_responses_reasoning_when_disabled() {
     });
 
     let client = OpenAIClient::new(OpenAIConfig {
+        api_protocol: ApiProtocol::OpenAiResponses,
         api_key: "test-key".to_string(),
-        base_url: format!("http://{address}/responses"),
-        model: "test-model".to_string(),
+        request_base_url: format!("http://{address}"),
+        upstream_model: "test-model".to_string(),
         timeout_seconds: 5,
         responses_reasoning_effort: None,
         responses_max_output_tokens: 3000,
@@ -413,9 +422,10 @@ async fn openai_client_formats_provider_errors_with_status_and_body() {
     });
 
     let client = OpenAIClient::new(OpenAIConfig {
+        api_protocol: ApiProtocol::OpenAiResponses,
         api_key: "test-key".to_string(),
-        base_url: format!("http://{address}/responses"),
-        model: "test-model".to_string(),
+        request_base_url: format!("http://{address}"),
+        upstream_model: "test-model".to_string(),
         timeout_seconds: 5,
         responses_reasoning_effort: None,
         responses_max_output_tokens: 3000,
@@ -435,5 +445,26 @@ async fn openai_client_formats_provider_errors_with_status_and_body() {
     assert_eq!(
         error,
         LLMError::Provider("502 Bad Gateway: upstream failed".to_string())
+    );
+}
+
+#[test]
+fn openai_client_rejects_non_text_protocols() {
+    let error = match OpenAIClient::new(OpenAIConfig {
+        api_protocol: ApiProtocol::OpenAiImages,
+        api_key: "test-key".to_string(),
+        request_base_url: "https://api.example.com/v1".to_string(),
+        upstream_model: "image-model".to_string(),
+        timeout_seconds: 5,
+        responses_reasoning_effort: None,
+        responses_max_output_tokens: 3000,
+    }) {
+        Ok(_) => panic!("image protocol must not create a text client"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        error,
+        LLMError::Config("unsupported text API protocol: openai_images".to_string())
     );
 }

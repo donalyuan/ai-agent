@@ -163,15 +163,19 @@ impl ConversationRepository for PostgresConversationRepository {
         let run_input = with_conversation_id(input.input, input.conversation_id);
         let row = sqlx::query(
             r#"
-            INSERT INTO agent_runs (project_id, agent_type, status, input)
-            VALUES ($1, $2, 'running', $3)
+            INSERT INTO agent_runs (
+                project_id, agent_type, status, input, model_id, model_snapshot
+            )
+            VALUES ($1, $2, 'running', $3, $4, $5)
             RETURNING id, project_id, agent_type, status, input, output,
-                      error_message, started_at, ended_at
+                      error_message, model_id, model_snapshot, started_at, ended_at
             "#,
         )
         .bind(input.project_id)
         .bind(input.agent_type)
         .bind(run_input)
+        .bind(input.model_id)
+        .bind(input.model_snapshot)
         .fetch_one(&self.pool)
         .await
         .map_err(ConversationRepositoryError::from)?;
@@ -218,7 +222,7 @@ impl ConversationRepository for PostgresConversationRepository {
                 ended_at = NOW()
             WHERE id = $1
             RETURNING id, project_id, agent_type, status, input, output,
-                      error_message, started_at, ended_at
+                      error_message, model_id, model_snapshot, started_at, ended_at
             "#,
         )
         .bind(input.agent_run_id)
@@ -315,6 +319,8 @@ fn run_from_row(row: PgRow) -> AgentRunRecord {
         input: row.get("input"),
         output: row.get("output"),
         error_message: row.get("error_message"),
+        model_id: row.get("model_id"),
+        model_snapshot: row.get("model_snapshot"),
         started_at: row.get("started_at"),
         ended_at: row.get("ended_at"),
     }

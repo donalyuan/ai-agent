@@ -16,9 +16,13 @@ from video_worker.asset_generation import (
     SceneGenerationContext,
     TemporaryProviderError,
     default_json_post,
-    image_provider_from_env,
+    image_provider_from_model,
     process_image_task,
     run_next_image_task,
+)
+from video_worker.model_registry import (
+    ImageModelRuntimeConfig,
+    ModelRegistryError,
 )
 
 
@@ -41,11 +45,19 @@ class MemoryAssetGenerationStore:
         self.created_materials: list[dict[str, object]] = []
         self.failed_candidates: list[dict[str, object]] = []
         self.completed: dict[str, object] | None = None
+        self.model_snapshot: dict[str, object] | None = None
 
     def claim_next_image_task(self) -> PendingImageGenerationTask | None:
         task = self.task
         self.task = None
         return task
+
+    def record_model_snapshot(
+        self,
+        task_id: str,
+        model_snapshot: dict[str, object],
+    ) -> None:
+        self.model_snapshot = model_snapshot
 
     def create_generated_image_candidate(
         self,
@@ -103,6 +115,7 @@ def pending_task() -> PendingImageGenerationTask:
         task_id="task-1",
         project_id="project-1",
         script_id="script-1",
+        model_id="model-1",
         provider="gpt-image-2",
         image_candidates_per_scene=2,
         reference_material_ids=["material-1"],
@@ -126,6 +139,7 @@ def two_scene_pending_task() -> PendingImageGenerationTask:
         task_id=task.task_id,
         project_id=task.project_id,
         script_id=task.script_id,
+        model_id=task.model_id,
         provider=task.provider,
         image_candidates_per_scene=task.image_candidates_per_scene,
         reference_material_ids=task.reference_material_ids,
@@ -142,6 +156,40 @@ def two_scene_pending_task() -> PendingImageGenerationTask:
             ),
         ],
     )
+
+
+def image_model_config(api_protocol: str = "openai_images") -> ImageModelRuntimeConfig:
+    return ImageModelRuntimeConfig(
+        model_id="model-1",
+        display_name="测试图片模型",
+        provider_name="test",
+        api_protocol=api_protocol,
+        protocol_version="v1",
+        auth_scheme="access_key_secret" if api_protocol == "jimeng_visual" else "bearer",
+        request_base_url="https://images.example/v1",
+        upstream_model="test-image",
+        api_key="test-key",
+        api_secret="test-secret" if api_protocol == "jimeng_visual" else None,
+        timeout_seconds=45,
+        settings={
+            "default_size": "1328x1328" if api_protocol == "jimeng_visual" else "1024x1024",
+            "request_key": "test-request-key",
+        },
+    )
+
+
+class FakeModelRegistry:
+    def __init__(self, result: ImageModelRuntimeConfig | Exception):
+        self.result = result
+        self.call_count = 0
+
+    def resolve_enabled(self, model_id: str, expected_type: str):
+        self.call_count += 1
+        assert model_id == "model-1"
+        assert expected_type == "image"
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
 
 
 def test_worker_writes_generated_image_to_local_storage(tmp_path: Path):
@@ -212,7 +260,8 @@ def test_run_next_image_task_claims_pending_task_and_writes_material_candidates(
 
     processed = run_next_image_task(
         store,
-        provider_factory=lambda provider_name: provider,
+        model_registry=FakeModelRegistry(image_model_config()),
+        provider_factory=lambda config: provider,
         storage=LocalAssetStorage(tmp_path, public_prefix="/assets"),
     )
 
@@ -226,6 +275,9 @@ def test_run_next_image_task_claims_pending_task_and_writes_material_candidates(
     assert store.completed is not None
     assert store.completed["status"] == "completed"
     assert store.completed["result"]["generated_count"] == 1  # type: ignore[index]
+    assert store.model_snapshot is not None
+    assert store.model_snapshot["model_id"] == "model-1"
+    assert "api_key" not in store.model_snapshot
 
 
 def test_run_next_image_task_records_failed_candidates_without_materials(tmp_path: Path):
@@ -234,7 +286,8 @@ def test_run_next_image_task_records_failed_candidates_without_materials(tmp_pat
 
     processed = run_next_image_task(
         store,
-        provider_factory=lambda provider_name: provider,
+        model_registry=FakeModelRegistry(image_model_config()),
+        provider_factory=lambda config: provider,
         storage=LocalAssetStorage(tmp_path, public_prefix="/assets"),
     )
 
@@ -246,15 +299,21 @@ def test_run_next_image_task_records_failed_candidates_without_materials(tmp_pat
     assert store.completed["result"]["failed_count"] == 2  # type: ignore[index]
 
 
-def test_run_next_image_task_marks_claimed_task_failed_when_provider_config_is_missing(tmp_path: Path):
+def test_run_next_image_task_marks_disabled_model_failed_without_provider_call(tmp_path: Path):
     store = MemoryAssetGenerationStore(pending_task())
+    provider_factory_calls = 0
 
-    def missing_provider(provider_name: str):
-        raise ProviderConfigError(f"{provider_name} credentials missing")
+    def provider_factory(config):
+        nonlocal provider_factory_calls
+        provider_factory_calls += 1
+        return FakeImageProvider([])
 
     processed = run_next_image_task(
         store,
-        provider_factory=missing_provider,
+        model_registry=FakeModelRegistry(
+            ModelRegistryError("model_disabled", "模型已停用或删除")
+        ),
+        provider_factory=provider_factory,
         storage=LocalAssetStorage(tmp_path, public_prefix="/assets"),
     )
 
@@ -263,7 +322,9 @@ def test_run_next_image_task_marks_claimed_task_failed_when_provider_config_is_m
     assert store.completed is not None
     assert store.completed["status"] == "failed"
     assert store.completed["result"]["failed_count"] == 2  # type: ignore[index]
-    assert "credentials missing" in str(store.completed["error_message"])
+    assert "模型已停用" in str(store.completed["error_message"])
+    assert provider_factory_calls == 0
+    assert store.model_snapshot is None
 
 
 def test_run_next_image_task_marks_permanent_provider_error_failed_without_retry(tmp_path: Path):
@@ -272,7 +333,8 @@ def test_run_next_image_task_marks_permanent_provider_error_failed_without_retry
 
     processed = run_next_image_task(
         store,
-        provider_factory=lambda provider_name: provider,
+        model_registry=FakeModelRegistry(image_model_config()),
+        provider_factory=lambda config: provider,
         storage=LocalAssetStorage(tmp_path, public_prefix="/assets"),
     )
 
@@ -314,7 +376,8 @@ def test_run_next_image_task_stops_after_first_permanent_http_error(
 
     processed = run_next_image_task(
         store,
-        provider_factory=lambda provider_name: provider,
+        model_registry=FakeModelRegistry(image_model_config()),
+        provider_factory=lambda config: provider,
         storage=LocalAssetStorage(tmp_path, public_prefix="/assets"),
     )
 
@@ -396,37 +459,21 @@ def test_openai_image_provider_requires_api_key():
         raise AssertionError("missing api key should fail fast")
 
 
-def test_openai_image_provider_uses_dedicated_image_base_url(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/v1/responses")
-    monkeypatch.setenv("OPENAI_IMAGE_BASE_URL", "https://images.example/v1")
-
-    provider = image_provider_from_env("gpt-image-2")
+def test_openai_image_provider_is_built_from_database_model_config():
+    provider = image_provider_from_model(image_model_config())
 
     assert isinstance(provider, OpenAIImageProvider)
     assert provider.base_url == "https://images.example/v1"
+    assert provider.model == "test-image"
 
 
-def test_openai_image_provider_removes_responses_suffix_from_fallback_base_url(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/v1/responses")
-    monkeypatch.delenv("OPENAI_IMAGE_BASE_URL", raising=False)
+def test_jimeng_image_provider_is_built_from_database_model_config():
+    provider = image_provider_from_model(image_model_config("jimeng_visual"))
 
-    provider = image_provider_from_env("gpt-image-2")
-
-    assert isinstance(provider, OpenAIImageProvider)
-    assert provider.base_url == "https://proxy.example/v1"
-
-
-def test_openai_image_provider_adds_v1_when_text_endpoint_has_no_version(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/responses")
-    monkeypatch.delenv("OPENAI_IMAGE_BASE_URL", raising=False)
-
-    provider = image_provider_from_env("gpt-image-2")
-
-    assert isinstance(provider, OpenAIImageProvider)
-    assert provider.base_url == "https://proxy.example/v1"
+    assert isinstance(provider, JimengImageProvider)
+    assert provider.req_key == "test-request-key"
+    assert provider.width == 1328
+    assert provider.height == 1328
 
 
 def test_default_json_post_preserves_permanent_http_error_status_and_summary(monkeypatch):

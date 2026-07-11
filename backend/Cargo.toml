@@ -19,6 +19,7 @@ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+url = "2"
 validator = { version = "0.20", features = ["derive"] }
 
 [dev-dependencies]

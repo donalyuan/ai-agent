@@ -156,6 +156,8 @@ async fn conversation_repository_persists_conversations_messages_runs_and_steps(
             project_id: Some(project_id),
             agent_type: "script".to_string(),
             input: json!({"user_message_id": user_message.id}),
+            model_id: None,
+            model_snapshot: None,
         })
         .await
         .unwrap();

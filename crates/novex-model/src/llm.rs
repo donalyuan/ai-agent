@@ -5,6 +5,8 @@ use serde_json::Value;
 use std::fmt;
 use std::time::Duration;
 
+use crate::ApiProtocol;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LLMPrompt {
     pub system: String,
@@ -50,46 +52,13 @@ impl std::error::Error for LLMError {}
 
 #[derive(Clone, Debug)]
 pub struct OpenAIConfig {
+    pub api_protocol: ApiProtocol,
     pub api_key: String,
-    pub base_url: String,
-    pub model: String,
+    pub request_base_url: String,
+    pub upstream_model: String,
     pub timeout_seconds: u64,
     pub responses_reasoning_effort: Option<String>,
     pub responses_max_output_tokens: u32,
-}
-
-impl OpenAIConfig {
-    pub fn from_env() -> Self {
-        Self {
-            api_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-            base_url: std::env::var("OPENAI_BASE_URL")
-                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string()),
-            model: std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4-turbo".to_string()),
-            timeout_seconds: std::env::var("OPENAI_TIMEOUT_SECONDS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(30),
-            responses_reasoning_effort: responses_reasoning_effort_from_env(),
-            responses_max_output_tokens: std::env::var("OPENAI_MAX_OUTPUT_TOKENS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value| *value > 0)
-                .unwrap_or(3000),
-        }
-    }
-}
-
-fn responses_reasoning_effort_from_env() -> Option<String> {
-    let effort = std::env::var("OPENAI_REASONING_EFFORT")
-        .unwrap_or_else(|_| "low".to_string())
-        .trim()
-        .to_string();
-
-    if effort.eq_ignore_ascii_case("none") || effort.is_empty() {
-        None
-    } else {
-        Some(effort)
-    }
 }
 
 #[derive(Clone)]
@@ -100,8 +69,25 @@ pub struct OpenAIClient {
 
 impl OpenAIClient {
     pub fn new(config: OpenAIConfig) -> Result<Self, LLMError> {
+        if !matches!(
+            config.api_protocol,
+            ApiProtocol::OpenAiResponses | ApiProtocol::OpenAiChatCompletions
+        ) {
+            return Err(LLMError::Config(format!(
+                "unsupported text API protocol: {}",
+                config.api_protocol
+            )));
+        }
         if config.api_key.trim().is_empty() {
             return Err(LLMError::Config("OPENAI_API_KEY is required".to_string()));
+        }
+        if config.request_base_url.trim().is_empty() {
+            return Err(LLMError::Config(
+                "request_base_url is required".to_string(),
+            ));
+        }
+        if config.upstream_model.trim().is_empty() {
+            return Err(LLMError::Config("upstream_model is required".to_string()));
         }
 
         let http_client = reqwest::Client::builder()
@@ -120,33 +106,31 @@ impl OpenAIClient {
 #[async_trait]
 impl LLMClient for OpenAIClient {
     async fn generate_script(&self, prompt: LLMPrompt) -> Result<String, LLMError> {
-        if self.uses_responses_api() {
-            self.generate_script_with_responses(prompt).await
-        } else {
-            self.generate_script_with_chat_completions(prompt).await
+        match self.config.api_protocol {
+            ApiProtocol::OpenAiResponses => self.generate_script_with_responses(prompt).await,
+            ApiProtocol::OpenAiChatCompletions => {
+                self.generate_script_with_chat_completions(prompt).await
+            }
+            _ => Err(LLMError::Config(format!(
+                "unsupported text API protocol: {}",
+                self.config.api_protocol
+            ))),
         }
     }
 }
 
 impl OpenAIClient {
-    fn uses_responses_api(&self) -> bool {
-        self.config
-            .base_url
-            .trim_end_matches('/')
-            .ends_with("/responses")
-    }
-
     async fn generate_script_with_chat_completions(
         &self,
         prompt: LLMPrompt,
     ) -> Result<String, LLMError> {
         let endpoint = format!(
             "{}/chat/completions",
-            self.config.base_url.trim_end_matches('/')
+            self.config.request_base_url.trim_end_matches('/')
         );
         let response_format = OpenAIResponseFormat::for_chat(prompt.output_schema.as_ref());
         let payload = OpenAIChatCompletionRequest {
-            model: self.config.model.clone(),
+            model: self.config.upstream_model.clone(),
             temperature: 0.8,
             response_format,
             messages: vec![
@@ -195,10 +179,13 @@ impl OpenAIClient {
     }
 
     async fn generate_script_with_responses(&self, prompt: LLMPrompt) -> Result<String, LLMError> {
-        let endpoint = self.config.base_url.trim_end_matches('/').to_string();
+        let endpoint = format!(
+            "{}/responses",
+            self.config.request_base_url.trim_end_matches('/')
+        );
         let response_format = OpenAIResponseFormat::for_responses(prompt.output_schema.as_ref());
         let payload = OpenAIResponsesRequest {
-            model: self.config.model.clone(),
+            model: self.config.upstream_model.clone(),
             temperature: 0.8,
             max_output_tokens: prompt
                 .max_output_tokens

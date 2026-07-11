@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import type {
   AgentMessage,
   Project,
@@ -19,6 +19,8 @@ type ScriptCreationPageProps = {
   loadingProjects: boolean;
   loadingScriptDetail: boolean;
   loadingScripts: boolean;
+  modelSelect: ReactNode;
+  modelUnavailable: boolean;
   projectError: string;
   scriptError: string;
   scripts: ScriptSummary[];
@@ -46,6 +48,8 @@ export function ScriptCreationPage({
   loadingProjects,
   loadingScriptDetail,
   loadingScripts,
+  modelSelect,
+  modelUnavailable,
   projectError,
   scriptError,
   scripts,
@@ -153,6 +157,8 @@ export function ScriptCreationPage({
           draft={agentDraft}
           error={agentError}
           messages={agentMessages}
+          modelSelect={modelSelect}
+          modelUnavailable={modelUnavailable}
           selectedProject={selectedProject}
           selectedScript={selectedScript}
           sending={sendingAgentMessage}
@@ -169,6 +175,8 @@ function ScriptAgentConversationPanel({
   draft,
   error,
   messages,
+  modelSelect,
+  modelUnavailable,
   selectedProject,
   selectedScript,
   sending,
@@ -179,13 +187,15 @@ function ScriptAgentConversationPanel({
   draft: string;
   error: string;
   messages: AgentMessage[];
+  modelSelect: ReactNode;
+  modelUnavailable: boolean;
   selectedProject?: Project;
   selectedScript: ScriptDetail | null;
   sending: boolean;
   setDraft: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  const inputDisabled = apiUnavailable || !selectedProject || sending;
+  const inputDisabled = apiUnavailable || !selectedProject || sending || modelUnavailable;
   const ready = Boolean(selectedProject) && !apiUnavailable;
   const stateLabel = apiUnavailable ? "不可用" : selectedScript ? "可对话" : selectedProject ? "可生成" : "未选择";
   const bindingText = selectedProject
@@ -229,6 +239,7 @@ function ScriptAgentConversationPanel({
       </div>
 
       <form className="agentChatForm" onSubmit={onSubmit}>
+        {modelSelect}
         <label>
           {label}
           <textarea

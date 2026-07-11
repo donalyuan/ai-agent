@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::{routing::post, Json, Router};
 use novex_api::{build_app_with_state, AppConfig, AppState};
+use novex_model::{ApiProtocol, OpenAIClient, OpenAIConfig};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::{Arc, Mutex};
@@ -11,7 +12,7 @@ use uuid::Uuid;
 
 mod support;
 
-use support::test_database::TestDatabase;
+use support::test_database::{insert_enabled_text_model, TestDatabase};
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -199,6 +200,16 @@ async fn local_topic_review_openai_base_url(
 }
 
 fn app_state(test_url: String, pool: PgPool, openai_base_url: String) -> AppState {
+    let llm_client = OpenAIClient::new(OpenAIConfig {
+        api_protocol: ApiProtocol::OpenAiChatCompletions,
+        api_key: "test-key".to_string(),
+        request_base_url: openai_base_url.clone(),
+        upstream_model: "test-model".to_string(),
+        timeout_seconds: 5,
+        responses_reasoning_effort: Some("low".to_string()),
+        responses_max_output_tokens: 3000,
+    })
+    .unwrap();
     AppState::new(
         AppConfig {
             environment: "test".to_string(),
@@ -217,6 +228,7 @@ fn app_state(test_url: String, pool: PgPool, openai_base_url: String) -> AppStat
         None,
     )
     .unwrap()
+    .with_llm_client(Arc::new(llm_client))
 }
 
 #[tokio::test]
@@ -236,6 +248,7 @@ async fn topic_review_routes_create_and_read_latest_snapshot() {
     )
     .await;
     let app = build_app_with_state(app_state(test_url, test_pool.clone(), openai_base_url));
+    let model_id = insert_enabled_text_model(&test_pool).await;
 
     let create_response = app
         .clone()
@@ -243,7 +256,8 @@ async fn topic_review_routes_create_and_read_latest_snapshot() {
             Request::builder()
                 .method("POST")
                 .uri(format!("/api/topic-groups/{root_batch_id}/reviews"))
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "model_id": model_id }).to_string()))
                 .unwrap(),
         )
         .await
@@ -304,6 +318,7 @@ async fn topic_review_routes_return_stable_errors_for_missing_cross_project_and_
     )
     .await;
     let app = build_app_with_state(app_state(test_url, test_pool.clone(), openai_base_url));
+    let model_id = Uuid::new_v4();
 
     let missing_batch_id = Uuid::new_v4();
     let missing_response = app
@@ -312,7 +327,8 @@ async fn topic_review_routes_return_stable_errors_for_missing_cross_project_and_
             Request::builder()
                 .method("POST")
                 .uri(format!("/api/topic-groups/{missing_batch_id}/reviews"))
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "model_id": model_id }).to_string()))
                 .unwrap(),
         )
         .await
@@ -327,7 +343,8 @@ async fn topic_review_routes_return_stable_errors_for_missing_cross_project_and_
                 .uri(format!(
                     "/api/topic-groups/{empty_batch_id}/reviews?project_id={other_project_id}"
                 ))
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "model_id": model_id }).to_string()))
                 .unwrap(),
         )
         .await
@@ -339,7 +356,8 @@ async fn topic_review_routes_return_stable_errors_for_missing_cross_project_and_
             Request::builder()
                 .method("POST")
                 .uri(format!("/api/topic-groups/{empty_batch_id}/reviews"))
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "model_id": model_id }).to_string()))
                 .unwrap(),
         )
         .await

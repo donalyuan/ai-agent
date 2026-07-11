@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Callable, Protocol
 from urllib import error as urllib_error
 from urllib import request as urllib_request
-from urllib.parse import urlsplit, urlunsplit
+
+from video_worker.model_registry import ImageModelRuntimeConfig, PostgresModelRegistry
 
 
 OPENAI_COMPATIBLE_USER_AGENT = "codex-cli/0.142.5"
@@ -43,6 +44,7 @@ class PendingImageGenerationTask:
     task_id: str
     project_id: str
     script_id: str
+    model_id: str
     provider: str
     image_candidates_per_scene: int
     reference_material_ids: list[str]
@@ -93,6 +95,13 @@ class ImageProvider(Protocol):
 
 class AssetGenerationStore(Protocol):
     def claim_next_image_task(self) -> PendingImageGenerationTask | None:
+        ...
+
+    def record_model_snapshot(
+        self,
+        task_id: str,
+        model_snapshot: dict[str, object],
+    ) -> None:
         ...
 
     def create_generated_image_candidate(
@@ -171,14 +180,28 @@ class OpenAIImageProvider:
             dict[str, object],
         ] | None = None,
         download_url: Callable[[str], bytes] | None = None,
+        timeout_seconds: int = 60,
     ):
         if not api_key:
             raise ProviderConfigError("OPENAI_API_KEY is required for gpt-image-2")
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
-        self.http_post = http_post or default_json_post
-        self.http_multipart_post = http_multipart_post or default_multipart_post
+        self.timeout_seconds = timeout_seconds
+        self.http_post = http_post or (
+            lambda url, headers, payload: default_json_post(
+                url, headers, payload, timeout_seconds=self.timeout_seconds
+            )
+        )
+        self.http_multipart_post = http_multipart_post or (
+            lambda url, headers, fields, files: default_multipart_post(
+                url,
+                headers,
+                fields,
+                files,
+                timeout_seconds=self.timeout_seconds,
+            )
+        )
         self.download_url = download_url or default_binary_get
 
     def generate_images(self, task: AssetGenerationTask) -> list[GeneratedImage]:
@@ -396,7 +419,8 @@ def process_image_task(
 
 def run_next_image_task(
     store: AssetGenerationStore,
-    provider_factory: Callable[[str], ImageProvider],
+    model_registry: PostgresModelRegistry,
+    provider_factory: Callable[[ImageModelRuntimeConfig], ImageProvider],
     storage: LocalAssetStorage,
 ) -> bool:
     task = store.claim_next_image_task()
@@ -404,7 +428,9 @@ def run_next_image_task(
         return False
 
     try:
-        provider = provider_factory(task.provider)
+        model_config = model_registry.resolve_enabled(task.model_id, "image")
+        store.record_model_snapshot(task.task_id, model_config.snapshot())
+        provider = provider_factory(model_config)
     except Exception as error:
         error_message = str(error) or error.__class__.__name__
         failed_count = 0
@@ -508,40 +534,31 @@ def scene_image_prompt(scene: SceneGenerationContext) -> str:
     )
 
 
-def image_provider_from_env(provider: str) -> ImageProvider:
-    if provider == "gpt-image-2":
+def image_provider_from_model(config: ImageModelRuntimeConfig) -> ImageProvider:
+    if config.api_protocol == "openai_images":
         return OpenAIImageProvider(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2"),
-            base_url=openai_image_base_url_from_env(),
+            api_key=config.api_key,
+            model=config.upstream_model,
+            base_url=config.request_base_url,
+            timeout_seconds=config.timeout_seconds,
         )
-    if provider == "jimeng":
+    if config.api_protocol == "jimeng_visual":
+        default_size = str(config.settings.get("default_size") or "1328x1328")
+        try:
+            width_text, height_text = default_size.lower().split("x", maxsplit=1)
+            width, height = int(width_text), int(height_text)
+        except (TypeError, ValueError) as error:
+            raise ProviderConfigError("invalid jimeng default_size") from error
         return JimengImageProvider(
-            access_key=os.getenv("JIMENG_ACCESS_KEY"),
-            secret_key=os.getenv("JIMENG_SECRET_KEY"),
-            req_key=os.getenv("JIMENG_REQ_KEY", "high_aes_general_v30l_zt2i"),
-            width=int(os.getenv("JIMENG_IMAGE_WIDTH", "1328")),
-            height=int(os.getenv("JIMENG_IMAGE_HEIGHT", "1328")),
+            access_key=config.api_key,
+            secret_key=config.api_secret,
+            req_key=str(
+                config.settings.get("request_key") or "high_aes_general_v30l_zt2i"
+            ),
+            width=width,
+            height=height,
         )
-    raise ProviderConfigError(f"unsupported image provider: {provider}")
-
-
-def openai_image_base_url_from_env() -> str:
-    dedicated_base_url = os.getenv("OPENAI_IMAGE_BASE_URL", "").strip()
-    if dedicated_base_url:
-        return dedicated_base_url.rstrip("/")
-
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    parsed = urlsplit(base_url)
-    path = parsed.path.rstrip("/")
-    for text_endpoint_suffix in ("/responses", "/chat/completions"):
-        if not path.endswith(text_endpoint_suffix):
-            continue
-        api_path = path[: -len(text_endpoint_suffix)].rstrip("/")
-        if not re.search(r"(?:^|/)v\d+$", api_path):
-            api_path = f"{api_path}/v1" if api_path else "/v1"
-        return urlunsplit((parsed.scheme, parsed.netloc, api_path, "", ""))
-    return base_url
+    raise ProviderConfigError(f"unsupported image protocol: {config.api_protocol}")
 
 
 class PostgresAssetGenerationStore:
@@ -579,7 +596,8 @@ class PostgresAssetGenerationStore:
                         updated_at = NOW()
                     FROM candidate
                     WHERE task.id = candidate.id
-                    RETURNING task.id, task.project_id, task.script_id, task.provider,
+                    RETURNING task.id, task.project_id, task.script_id, task.model_id,
+                              task.provider,
                               task.candidate_count, task.reference_material_ids, task.params
                     """,
                 ).fetchone()
@@ -609,12 +627,33 @@ class PostgresAssetGenerationStore:
                     task_id=str(row["id"]),
                     project_id=str(row["project_id"]),
                     script_id=str(row["script_id"]),
+                    model_id=str(row["model_id"] or ""),
                     provider=str(row["provider"]),
                     image_candidates_per_scene=per_scene,
                     reference_material_ids=reference_material_ids,
                     reference_material_urls=reference_urls,
                     scenes=scenes,
                 )
+
+    def record_model_snapshot(
+        self,
+        task_id: str,
+        model_snapshot: dict[str, object],
+    ) -> None:
+        import psycopg
+        from psycopg.types.json import Jsonb
+
+        with psycopg.connect(self.database_url) as connection:
+            connection.execute(
+                """
+                UPDATE asset_generation_tasks
+                SET model_snapshot = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND status = 'processing'
+                """,
+                (Jsonb(model_snapshot), task_id),
+            )
 
     def create_generated_image_candidate(
         self,
@@ -780,10 +819,11 @@ def default_json_post(
     url: str,
     headers: dict[str, str],
     payload: dict[str, object],
+    timeout_seconds: int = 60,
 ) -> dict[str, object]:
     data = json.dumps(payload).encode("utf-8")
     request = urllib_request.Request(url, data=data, headers=headers, method="POST")
-    return _send_json_request(request, timeout=60)
+    return _send_json_request(request, timeout=timeout_seconds)
 
 
 def default_multipart_post(
@@ -791,6 +831,7 @@ def default_multipart_post(
     headers: dict[str, str],
     fields: dict[str, object],
     files: list[tuple[str, str, bytes, str]],
+    timeout_seconds: int = 120,
 ) -> dict[str, object]:
     boundary = f"----novex-{uuid.uuid4().hex}"
     body = multipart_body(boundary, fields, files)
@@ -804,7 +845,7 @@ def default_multipart_post(
         headers=request_headers,
         method="POST",
     )
-    return _send_json_request(request, timeout=120)
+    return _send_json_request(request, timeout=timeout_seconds)
 
 
 def _send_json_request(

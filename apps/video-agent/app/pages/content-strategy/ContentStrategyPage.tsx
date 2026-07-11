@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import type {
   AgentMessage,
   ContentTopic,
@@ -45,6 +45,8 @@ type ContentStrategyPageProps = {
   showingAllTopicBatches: boolean;
   topicForm: TopicFormState;
   topics: ContentTopic[];
+  topicModelSelect: ReactNode;
+  topicModelUnavailable: boolean;
   writesDisabled: boolean;
   onCancelTopicForm: () => void;
   onClearTopicBatchFilter: () => void;
@@ -87,6 +89,8 @@ export function ContentStrategyPage({
   deletingTopicId,
   sendingAgentMessage,
   preparingScript,
+  topicModelSelect,
+  topicModelUnavailable,
   onSelectTopic,
   onClearTopicBatchFilter,
   onDeleteTopic,
@@ -123,6 +127,8 @@ export function ContentStrategyPage({
             messages={agentMessages}
             project={project}
             sending={sendingAgentMessage}
+            modelSelect={topicModelSelect}
+            modelUnavailable={topicModelUnavailable}
             writesDisabled={writesDisabled}
             setDraft={setAgentDraft}
             onSubmit={onSubmitAgentMessage}
@@ -241,6 +247,8 @@ function TopicAgentPanel({
   draft,
   error,
   messages,
+  modelSelect,
+  modelUnavailable,
   project,
   sending,
   writesDisabled,
@@ -250,13 +258,15 @@ function TopicAgentPanel({
   draft: string;
   error: string;
   messages: AgentMessage[];
+  modelSelect: ReactNode;
+  modelUnavailable: boolean;
   project?: Project;
   sending: boolean;
   writesDisabled: boolean;
   setDraft: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  const disabled = !project || writesDisabled || sending;
+  const disabled = !project || writesDisabled || sending || modelUnavailable;
   return (
     <section aria-label="选题 Agent" className="sidePanel topicAgentPanel">
       <div className="panelHeader">
@@ -269,6 +279,7 @@ function TopicAgentPanel({
       </div>
       {error ? <p className="errorText" role="alert">{error}</p> : null}
       <form className="agentChatForm" onSubmit={onSubmit}>
+        {modelSelect}
         <label>
           生成要求
           <textarea
@@ -556,6 +567,8 @@ export function ScriptPreparationDialog({
   generating,
   options,
   preparation,
+  modelSelect,
+  modelUnavailable,
   onClose,
   onConfirm,
   onOptionsChange,
@@ -564,6 +577,8 @@ export function ScriptPreparationDialog({
   generating: boolean;
   options: { style: ScriptStyle; scene_count: number };
   preparation: PrepareScriptFromTopicResponse;
+  modelSelect: ReactNode;
+  modelUnavailable: boolean;
   onClose: () => void;
   onConfirm: () => void;
   onOptionsChange: (options: { style: ScriptStyle; scene_count: number }) => void;
@@ -593,6 +608,7 @@ export function ScriptPreparationDialog({
         </div>
 
         <div className="confirmControls">
+          {modelSelect}
           <label>
             脚本风格
             <select
@@ -630,7 +646,7 @@ export function ScriptPreparationDialog({
           <button className="secondaryButton" disabled={generating} onClick={onClose} type="button">
             取消
           </button>
-          <button className="primaryButton" disabled={generating} onClick={onConfirm} type="button">
+          <button className="primaryButton" disabled={generating || modelUnavailable} onClick={onConfirm} type="button">
             {generating ? "生成中" : "确认生成"}
           </button>
         </div>
