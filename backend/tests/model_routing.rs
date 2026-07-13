@@ -1,5 +1,7 @@
 use axum::{response::IntoResponse, routing::post, Router};
-use novex_api::model_routing::{ModelClientResolver, ModelResolveError, PostgresModelClientResolver};
+use novex_api::model_routing::{
+    ModelClientResolver, ModelResolveError, PostgresModelClientResolver,
+};
 use novex_api::repositories::{
     AiModelRepository, AiModelStatus, ChangeAiModelStatusInput, CreateAiModelInput,
     PostgresAiModelRepository,
@@ -108,14 +110,20 @@ async fn resolver_builds_protocol_driven_client_and_non_sensitive_snapshot() {
             "event: response.completed\n",
             "data: {\"type\":\"response.completed\"}\n\n"
         );
-        ([ (axum::http::header::CONTENT_TYPE, "text/event-stream") ], body)
+        (
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            body,
+        )
     }
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/v1/responses", post(handler)))
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            Router::new().route("/v1/responses", post(handler)),
+        )
+        .await
+        .unwrap();
     });
     let (admin_pool, pool, database_name) = migrated_pool().await;
     let repository = PostgresAiModelRepository::new(pool.clone());
@@ -153,11 +161,17 @@ async fn resolver_rejects_disabled_and_non_text_models_before_client_creation() 
     let (admin_pool, pool, database_name) = migrated_pool().await;
     let repository = PostgresAiModelRepository::new(pool.clone());
     let text = repository
-        .create(model_input("https://example.invalid/v1".to_string(), ModelType::Text))
+        .create(model_input(
+            "https://example.invalid/v1".to_string(),
+            ModelType::Text,
+        ))
         .await
         .unwrap();
     let image = repository
-        .create(model_input("https://example.invalid/v1".to_string(), ModelType::Image))
+        .create(model_input(
+            "https://example.invalid/v1".to_string(),
+            ModelType::Image,
+        ))
         .await
         .unwrap();
     repository

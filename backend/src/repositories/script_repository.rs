@@ -1,4 +1,4 @@
-use crate::agents::models::{Scene, Script, ScriptListFilter, ScriptStatus, ScriptSummary};
+use crate::domain::script::{Scene, Script, ScriptListFilter, ScriptStatus, ScriptSummary};
 use async_trait::async_trait;
 use sqlx::{postgres::PgRow, PgPool, Row};
 use std::fmt;
@@ -14,10 +14,7 @@ impl PostgresScriptRepository {
         Self { pool }
     }
 
-    async fn load_scenes(
-        &self,
-        script_id: Uuid,
-    ) -> Result<Vec<crate::agents::models::Scene>, ScriptRepositoryError> {
+    async fn load_scenes(&self, script_id: Uuid) -> Result<Vec<Scene>, ScriptRepositoryError> {
         sqlx::query(
             r#"
             SELECT id, sequence, narration, visual_description, emotion, duration_sec
@@ -421,8 +418,8 @@ impl fmt::Display for ScriptRepositoryError {
 
 impl std::error::Error for ScriptRepositoryError {}
 
-fn scene_from_row(row: PgRow) -> Result<crate::agents::models::Scene, ScriptRepositoryError> {
-    Ok(crate::agents::models::Scene {
+fn scene_from_row(row: PgRow) -> Result<Scene, ScriptRepositoryError> {
+    Ok(Scene {
         id: row.get("id"),
         sequence: row.get("sequence"),
         narration: row.get("narration"),

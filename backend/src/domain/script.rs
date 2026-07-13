@@ -1,8 +1,11 @@
+//! 脚本聚合、分镜顺序、生成输入和状态解析等领域规则。
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
 use uuid::Uuid;
+use validator::Validate;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -10,6 +13,57 @@ pub enum ScriptStatus {
     Draft,
     Approved,
     Archived,
+}
+
+/// 脚本表达风格属于脚本领域语义，不由 HTTP DTO 或具体 Agent 实现持有。
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptStyle {
+    #[default]
+    Knowledge,
+    Story,
+    Tutorial,
+}
+
+impl ScriptStyle {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Knowledge => "knowledge",
+            Self::Story => "story",
+            Self::Tutorial => "tutorial",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Knowledge => "知识科普类",
+            Self::Story => "故事叙述类",
+            Self::Tutorial => "教程讲解类",
+        }
+    }
+}
+
+/// 交给脚本 Agent 的领域输入；模型选择由 Application Service 在调用前完成。
+#[derive(Clone, Debug, PartialEq, Validate)]
+pub struct ScriptGenerationInput {
+    pub project_id: Uuid,
+    #[validate(length(max = 200))]
+    pub topic: String,
+    pub topic_id: Option<Uuid>,
+    pub style: Option<ScriptStyle>,
+    #[validate(range(min = 3, max = 12))]
+    pub scene_count: Option<u8>,
+    pub parent_id: Option<Uuid>,
+}
+
+impl ScriptGenerationInput {
+    pub fn style_or_default(&self) -> ScriptStyle {
+        self.style.clone().unwrap_or_default()
+    }
+
+    pub fn scene_count_or_default(&self) -> u8 {
+        self.scene_count.unwrap_or(6)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,7 +166,7 @@ impl Script {
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> Self {
-        // Script owns scene ordering so downstream generation receives a stable storyboard.
+        // 由脚本聚合统一排序，确保下游素材与视频生成始终读取稳定的分镜顺序。
         scenes.sort_by_key(|scene| scene.sequence);
 
         Self {
@@ -143,4 +197,26 @@ pub struct Scene {
     pub visual_description: String,
     pub emotion: String,
     pub duration_sec: i32,
+}
+
+/// 脚本列表的领域查询条件，由应用层校验后交给 Repository 执行。
+#[derive(Clone, Debug, Deserialize, PartialEq, Validate)]
+pub struct ScriptListFilter {
+    #[serde(default)]
+    pub status: Option<ScriptStatus>,
+    #[serde(default)]
+    #[validate(range(min = 1, max = 100))]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: Option<u32>,
+}
+
+impl ScriptListFilter {
+    pub fn limit_or_default(&self) -> u32 {
+        self.limit.unwrap_or(20)
+    }
+
+    pub fn offset_or_default(&self) -> u32 {
+        self.offset.unwrap_or(0)
+    }
 }

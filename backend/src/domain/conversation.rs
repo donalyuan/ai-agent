@@ -1,3 +1,5 @@
+//! Agent 会话、消息、run 和 step 的领域记录及状态解析规则。
+
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::fmt;

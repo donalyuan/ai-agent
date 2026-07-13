@@ -1,15 +1,13 @@
 use async_trait::async_trait;
-use novex_api::agents::conversation::{
+use novex_api::agents::{LLMClient, LLMError};
+use novex_api::application::agents::runtime::{AgentRuntime, AgentRuntimeError, AgentTurnRequest};
+use novex_api::domain::conversation::{
     AgentMessageRole, CreateAgentConversationInput, CreateAgentMessageInput,
 };
-use novex_api::agents::conversational_runtime::{
-    AgentRuntime, AgentRuntimeError, AgentTurnRequest,
-};
-use novex_api::agents::models::{
+use novex_api::domain::topic::{
     ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatchStatus,
     TopicQualityEvaluationStatus, TopicReviewPriority, TopicReviewRiskFlag,
 };
-use novex_api::agents::{LLMClient, LLMError};
 use novex_api::repositories::{
     ConversationRepository, CreateContentTopicInput, CreateTopicGenerationBatchInput,
     PostgresConversationRepository, PostgresProjectRepository, PostgresScriptRepository,

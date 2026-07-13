@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use novex_api::agents::models::{
-    GenerateScriptRequest, Scene, Script, ScriptListFilter, ScriptStatus, ScriptStyle,
+use novex_api::agents::{LLMClient, LLMError, ScriptAgentError, ScriptAgentService};
+use novex_api::domain::script::{
+    Scene, Script, ScriptGenerationInput, ScriptListFilter, ScriptStatus, ScriptStyle,
     ScriptSummary,
 };
-use novex_api::agents::{LLMClient, LLMError, ScriptAgentError, ScriptAgentService};
 use novex_api::repositories::{
     AccountStrategyProfile, CreateProjectInput, Project, ProjectRepository, ProjectRepositoryError,
     ScriptRepository, ScriptRepositoryError, UpdateProjectStrategyProfileInput,
@@ -339,9 +339,8 @@ fn valid_llm_json() -> String {
     .to_string()
 }
 
-fn request(project_id: Uuid) -> GenerateScriptRequest {
-    GenerateScriptRequest {
-        model_id: Uuid::nil(),
+fn request(project_id: Uuid) -> ScriptGenerationInput {
+    ScriptGenerationInput {
         project_id,
         topic: "ChatGPT如何改变程序员工作流".to_string(),
         topic_id: None,
@@ -421,8 +420,7 @@ async fn generate_script_stepwise_requests_metadata_then_single_scenes() {
             Ok(valid_scene_json(3)),
         ],
     );
-    let request = GenerateScriptRequest {
-        model_id: Uuid::nil(),
+    let request = ScriptGenerationInput {
         project_id,
         topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
         topic_id: None,
@@ -466,8 +464,7 @@ async fn generate_script_stepwise_retries_transient_provider_errors_for_single_s
             Ok(valid_scene_json(3)),
         ],
     );
-    let request = GenerateScriptRequest {
-        model_id: Uuid::nil(),
+    let request = ScriptGenerationInput {
         project_id,
         topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
         topic_id: None,

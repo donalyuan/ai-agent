@@ -1,5 +1,5 @@
 use chrono::Utc;
-use novex_api::agents::models::{Scene, Script, ScriptStatus};
+use novex_api::domain::script::{Scene, Script, ScriptStatus};
 use serde_json::json;
 use uuid::Uuid;
 

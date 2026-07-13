@@ -1,4 +1,4 @@
-use crate::agents::conversation::{
+use crate::domain::conversation::{
     AgentConversation, AgentConversationStatus, AgentMessage, AgentMessageRole, AgentRunRecord,
     BindAgentConversationSubjectInput, CreateAgentConversationInput, CreateAgentMessageInput,
     CreateAgentRunInput, CreateAgentStepInput, FinishAgentRunInput,

@@ -1,6 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use novex_api::{build_app_with_state, AppConfig, AppState};
+use novex_api::bootstrap::{AppConfig, AppState};
+use novex_api::build_app_with_state;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use tower::ServiceExt;

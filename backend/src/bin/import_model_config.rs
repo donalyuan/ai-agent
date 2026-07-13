@@ -1,6 +1,4 @@
-use novex_api::model_config_import::{
-    import_legacy_model_config, LegacyModelImportConfig,
-};
+use novex_api::model_config_import::{import_legacy_model_config, LegacyModelImportConfig};
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::main]

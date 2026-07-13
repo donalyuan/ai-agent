@@ -1,6 +1,4 @@
-use novex_api::model_config_import::{
-    import_legacy_model_config, LegacyModelImportConfig,
-};
+use novex_api::model_config_import::{import_legacy_model_config, LegacyModelImportConfig};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use uuid::Uuid;
 
@@ -94,12 +92,18 @@ async fn import_creates_three_models_once_and_never_overwrites_admin_edits() {
         .find(|row| row.get::<String, _>("source_key") == "legacy:text-openai")
         .unwrap();
     assert_eq!(text.get::<String, _>("api_protocol"), "openai_responses");
-    assert_eq!(text.get::<String, _>("request_base_url"), "https://text.example/v1");
+    assert_eq!(
+        text.get::<String, _>("request_base_url"),
+        "https://text.example/v1"
+    );
     let image = rows
         .iter()
         .find(|row| row.get::<String, _>("source_key") == "legacy:image-openai")
         .unwrap();
-    assert_eq!(image.get::<String, _>("request_base_url"), "https://images.example/v1");
+    assert_eq!(
+        image.get::<String, _>("request_base_url"),
+        "https://images.example/v1"
+    );
 
     sqlx::query("UPDATE ai_models SET request_base_url = 'https://admin-edited.example/v1' WHERE source_key = 'legacy:text-openai'")
         .execute(&pool)

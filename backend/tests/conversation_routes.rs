@@ -1,7 +1,8 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::{routing::post, Json, Router};
-use novex_api::{build_app_with_state, AppConfig, AppState};
+use novex_api::bootstrap::{AppConfig, AppState};
+use novex_api::build_app_with_state;
 use novex_model::{ApiProtocol, OpenAIClient, OpenAIConfig};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};

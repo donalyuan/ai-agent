@@ -1,8 +1,9 @@
 use chrono::Utc;
-use novex_api::agents::models::{
-    AccountStrategyProfileRequest, CreateProjectRequest, GenerateScriptRequest, ProjectResponse,
-    Scene, Script, ScriptListFilter, ScriptResponse, ScriptStatus, ScriptStyle,
+use novex_api::api::projects::dto::{
+    AccountStrategyProfileRequest, CreateProjectRequest, ProjectResponse,
 };
+use novex_api::api::scripts::dto::{GenerateScriptRequest, ScriptResponse};
+use novex_api::domain::script::{Scene, Script, ScriptListFilter, ScriptStatus, ScriptStyle};
 use novex_api::repositories::{AccountStrategyProfile, Project};
 use serde_json::{json, Value};
 use uuid::Uuid;

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use novex_api::agents::models::{
+use novex_api::domain::topic::{
     ContentTopic, ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatch,
     TopicGenerationBatchStatus, TopicGenerationBatchSummary, TopicGroupReviewFreshness,
     TopicGroupScriptPriority, TopicGroupScriptPriorityMetrics, TopicGroupScriptPriorityStatus,

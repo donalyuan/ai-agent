@@ -1,4 +1,4 @@
-use crate::agents::models::GenerateScriptRequest;
+use crate::domain::script::ScriptGenerationInput;
 use novex_model::LLMJsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -15,7 +15,7 @@ pub struct ScriptPrompt {
 pub struct ScriptPromptBuilder;
 
 impl ScriptPromptBuilder {
-    pub fn build(request: &GenerateScriptRequest) -> ScriptPrompt {
+    pub fn build(request: &ScriptGenerationInput) -> ScriptPrompt {
         let style = request.style_or_default();
         let scene_count = request.scene_count_or_default();
         let variant_instruction = if request.parent_id.is_some() {
@@ -65,7 +65,7 @@ JSON Schema：
         }
     }
 
-    pub fn build_metadata(request: &GenerateScriptRequest) -> ScriptPrompt {
+    pub fn build_metadata(request: &ScriptGenerationInput) -> ScriptPrompt {
         let style = request.style_or_default();
         let variant_instruction = if request.parent_id.is_some() {
             "\n5. 这是 A/B 测试差异化版本，标题和 hook 必须避免复用父版本的表达结构。"
@@ -102,7 +102,7 @@ JSON Schema：
         }
     }
 
-    pub fn build_single_scene(request: &GenerateScriptRequest, sequence: u8) -> ScriptPrompt {
+    pub fn build_single_scene(request: &ScriptGenerationInput, sequence: u8) -> ScriptPrompt {
         let style = request.style_or_default();
         let scene_count = request.scene_count_or_default();
         let variant_instruction = if request.parent_id.is_some() {

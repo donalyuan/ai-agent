@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use novex_api::agents::models::{Scene, Script, ScriptListFilter, ScriptStatus, ScriptSummary};
+use novex_api::domain::script::{Scene, Script, ScriptListFilter, ScriptStatus, ScriptSummary};
 use novex_api::repositories::{ScriptRepository, ScriptRepositoryError};
 use serde_json::json;
 use uuid::Uuid;

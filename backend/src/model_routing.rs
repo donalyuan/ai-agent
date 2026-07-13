@@ -1,6 +1,4 @@
-use crate::repositories::{
-    AiModelRepository, AiModelRepositoryError, PostgresAiModelRepository,
-};
+use crate::repositories::{AiModelRepository, AiModelRepositoryError, PostgresAiModelRepository};
 use async_trait::async_trait;
 use novex_model::{
     ApiProtocol, LLMClient, ModelExecutionSnapshot, ModelType, OpenAIClient, OpenAIConfig,

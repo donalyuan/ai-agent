@@ -1,5 +1,5 @@
 use chrono::Utc;
-use novex_api::agents::models::{Scene, Script, ScriptListFilter, ScriptStatus};
+use novex_api::domain::script::{Scene, Script, ScriptListFilter, ScriptStatus};
 use novex_api::repositories::{PostgresScriptRepository, ScriptRepository, ScriptRepositoryError};
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};

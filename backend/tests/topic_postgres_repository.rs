@@ -1,4 +1,4 @@
-use novex_api::agents::models::{
+use novex_api::domain::topic::{
     ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatchStatus,
     TopicQualityDecision, TopicQualityEvaluationStatus, TopicQualityFlag, TopicQualityGateItem,
     TopicQualityGateResult,

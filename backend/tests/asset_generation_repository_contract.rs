@@ -243,7 +243,14 @@ async fn asset_repository_dismisses_only_failed_tasks_and_hides_failed_candidate
     assert_eq!(listed_candidates.len(), 1);
     assert_eq!(listed_candidates[0].id, visible_candidate.id);
 
-    let persisted = sqlx::query_as::<_, (String, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
+    let persisted = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ),
+    >(
         "SELECT status, error_message, dismissed_at FROM asset_generation_tasks WHERE id = $1",
     )
     .bind(failed_task.id)

@@ -2,10 +2,10 @@ use crate::agents::llm::{
     LLMOutputError, ScriptLLMOutput, ScriptLLMScene, ScriptMetadataLLMOutput, ScriptPromptBuilder,
     ScriptSceneLLMOutput,
 };
-use crate::agents::models::{
-    ContentTopic, ContentTopicStatus, GenerateScriptRequest, Scene, Script, ScriptListFilter,
-    ScriptStatus, ScriptSummary,
+use crate::domain::script::{
+    Scene, Script, ScriptGenerationInput, ScriptListFilter, ScriptStatus, ScriptSummary,
 };
+use crate::domain::topic::{ContentTopic, ContentTopicStatus};
 use crate::repositories::{
     ProjectRepository, ProjectRepositoryError, ScriptRepository, ScriptRepositoryError,
     TopicRepository, TopicRepositoryError,
@@ -63,7 +63,7 @@ impl ScriptAgentService {
 
     pub async fn generate_script(
         &self,
-        request: GenerateScriptRequest,
+        request: ScriptGenerationInput,
     ) -> Result<Script, ScriptAgentError> {
         if self.generation_mode == ScriptGenerationMode::StepwiseSingleScene {
             return self.generate_script_stepwise(request).await;
@@ -108,7 +108,7 @@ impl ScriptAgentService {
 
     pub async fn generate_script_stepwise(
         &self,
-        request: GenerateScriptRequest,
+        request: ScriptGenerationInput,
     ) -> Result<Script, ScriptAgentError> {
         let (request, topic_context) = self.prepare_generate_request(request).await?;
 
@@ -196,8 +196,8 @@ impl ScriptAgentService {
 
     async fn prepare_generate_request(
         &self,
-        mut request: GenerateScriptRequest,
-    ) -> Result<(GenerateScriptRequest, Option<ContentTopic>), ScriptAgentError> {
+        mut request: ScriptGenerationInput,
+    ) -> Result<(ScriptGenerationInput, Option<ContentTopic>), ScriptAgentError> {
         request.validate().map_err(|error| {
             ScriptAgentError::Validation(format!("invalid generate script request: {error}"))
         })?;
@@ -243,7 +243,7 @@ impl ScriptAgentService {
 
     async fn generate_metadata(
         &self,
-        request: &GenerateScriptRequest,
+        request: &ScriptGenerationInput,
     ) -> Result<(ScriptMetadataLLMOutput, usize), ScriptAgentError> {
         let prompt: LLMPrompt = ScriptPromptBuilder::build_metadata(request).into();
         let mut last_parse_error: Option<LLMOutputError> = None;
@@ -272,7 +272,7 @@ impl ScriptAgentService {
 
     async fn generate_single_scene(
         &self,
-        request: &GenerateScriptRequest,
+        request: &ScriptGenerationInput,
         sequence: u8,
     ) -> Result<(ScriptLLMScene, usize), ScriptAgentError> {
         let prompt: LLMPrompt = ScriptPromptBuilder::build_single_scene(request, sequence).into();
@@ -339,7 +339,7 @@ impl ScriptAgentService {
 
     fn build_script(
         &self,
-        request: GenerateScriptRequest,
+        request: ScriptGenerationInput,
         output: ScriptLLMOutput,
         retry_count: usize,
         generation_mode: &str,

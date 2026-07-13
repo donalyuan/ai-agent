@@ -82,9 +82,7 @@ impl OpenAIClient {
             return Err(LLMError::Config("OPENAI_API_KEY is required".to_string()));
         }
         if config.request_base_url.trim().is_empty() {
-            return Err(LLMError::Config(
-                "request_base_url is required".to_string(),
-            ));
+            return Err(LLMError::Config("request_base_url is required".to_string()));
         }
         if config.upstream_model.trim().is_empty() {
             return Err(LLMError::Config("upstream_model is required".to_string()));

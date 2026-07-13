@@ -228,20 +228,19 @@ impl ModelSettings {
                 }
                 Ok(())
             }
-            Self::Video(settings) => match (
-                settings.min_duration_seconds,
-                settings.max_duration_seconds,
-            ) {
-                (Some(minimum), Some(maximum)) if minimum == 0 || minimum > maximum => {
-                    Err(ModelSettingsError::InvalidSettings(
-                        "video duration range is invalid".to_string(),
-                    ))
+            Self::Video(settings) => {
+                match (settings.min_duration_seconds, settings.max_duration_seconds) {
+                    (Some(minimum), Some(maximum)) if minimum == 0 || minimum > maximum => {
+                        Err(ModelSettingsError::InvalidSettings(
+                            "video duration range is invalid".to_string(),
+                        ))
+                    }
+                    (Some(_), None) | (None, Some(_)) => Err(ModelSettingsError::InvalidSettings(
+                        "video duration range requires both minimum and maximum".to_string(),
+                    )),
+                    _ => Ok(()),
                 }
-                (Some(_), None) | (None, Some(_)) => Err(ModelSettingsError::InvalidSettings(
-                    "video duration range requires both minimum and maximum".to_string(),
-                )),
-                _ => Ok(()),
-            },
+            }
         }
     }
 }

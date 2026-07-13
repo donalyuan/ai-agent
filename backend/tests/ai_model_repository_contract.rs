@@ -167,8 +167,17 @@ async fn changing_model_type_reconciles_old_and_new_type_defaults() {
     let moved = repository.update(text_default.id, update).await.unwrap();
 
     assert_eq!(moved.model_type, ModelType::Image);
-    assert!(!moved.is_default, "existing image default must remain stable");
-    assert!(repository.get(text_replacement.id).await.unwrap().is_default);
+    assert!(
+        !moved.is_default,
+        "existing image default must remain stable"
+    );
+    assert!(
+        repository
+            .get(text_replacement.id)
+            .await
+            .unwrap()
+            .is_default
+    );
     assert!(repository.get(image_default.id).await.unwrap().is_default);
 
     pool.close().await;

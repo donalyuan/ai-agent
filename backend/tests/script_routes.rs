@@ -1,7 +1,8 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::{routing::post, Json, Router};
-use novex_api::{build_app_with_state, AppConfig, AppState};
+use novex_api::bootstrap::{AppConfig, AppState};
+use novex_api::build_app_with_state;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::collections::VecDeque;
@@ -278,8 +279,7 @@ async fn script_routes_generate_read_list_and_update_status() {
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
     let project_id = insert_project(&test_pool).await;
     let openai_base_url = local_openai_base_url().await;
-    let model_id =
-        insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
+    let model_id = insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
     let app = build_app_with_state(
         AppState::new(
             AppConfig {
@@ -430,8 +430,7 @@ async fn generate_route_uses_stepwise_single_scene_mode_for_xhigh() {
         requests.clone(),
     )
     .await;
-    let model_id =
-        insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
+    let model_id = insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
     sqlx::query("UPDATE ai_models SET reasoning_effort = 'xhigh' WHERE id = $1")
         .bind(model_id)
         .execute(&test_pool)
@@ -512,8 +511,7 @@ async fn generate_route_persists_topic_link_snapshot_and_marks_topic_scripted() 
     let project_id = insert_project(&test_pool).await;
     let topic_id = insert_content_topic(&test_pool, project_id, "approved").await;
     let openai_base_url = local_openai_base_url().await;
-    let model_id =
-        insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
+    let model_id = insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
     let app = build_app_with_state(
         AppState::new(
             AppConfig {
@@ -614,8 +612,7 @@ async fn generate_route_rejects_non_approved_or_cross_project_topics_without_cre
     let other_project_topic_id =
         insert_content_topic(&test_pool, other_project_id, "approved").await;
     let openai_base_url = local_openai_base_url().await;
-    let model_id =
-        insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
+    let model_id = insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
     let app = build_app_with_state(
         AppState::new(
             AppConfig {
@@ -694,8 +691,7 @@ async fn generate_route_returns_script_generation_error_when_llm_output_is_inval
         requests,
     )
     .await;
-    let model_id =
-        insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
+    let model_id = insert_enabled_text_model_with_base_url(&test_pool, &openai_base_url).await;
     let app = build_app_with_state(
         AppState::new(
             AppConfig {
@@ -745,13 +741,12 @@ async fn generate_route_returns_script_generation_error_when_llm_output_is_inval
         .as_str()
         .unwrap()
         .contains("script parse error"));
-    let run_status = sqlx::query_scalar::<_, String>(
-        "SELECT status FROM agent_runs WHERE project_id = $1",
-    )
-    .bind(project_id)
-    .fetch_one(&test_pool)
-    .await
-    .unwrap();
+    let run_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM agent_runs WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_one(&test_pool)
+            .await
+            .unwrap();
     assert_eq!(run_status, "failed");
 
     test_pool.close().await;

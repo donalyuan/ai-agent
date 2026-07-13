@@ -1,10 +1,10 @@
 use async_trait::async_trait;
-use novex_api::agents::conversation::{
+use novex_api::agents::{LLMClient, LLMError};
+use novex_api::application::agents::runtime::{AgentRuntime, AgentTurnRequest};
+use novex_api::domain::conversation::{
     AgentConversationStatus, AgentMessageRole, CreateAgentConversationInput,
 };
-use novex_api::agents::conversational_runtime::{AgentRuntime, AgentTurnRequest};
-use novex_api::agents::models::ScriptListFilter;
-use novex_api::agents::{LLMClient, LLMError};
+use novex_api::domain::script::ScriptListFilter;
 use novex_api::repositories::{
     ConversationRepository, PostgresConversationRepository, PostgresProjectRepository,
     ScriptRepository,

@@ -732,7 +732,7 @@ async fn runtime_postgres_connection_applies_pending_migrations_before_serving()
         .expect("admin database should be reachable");
     let database_name = create_database(&admin_pool, &admin_url, &database_name).await;
 
-    let runtime_pool = novex_api::connect_runtime_pg_pool(&test_url, 1)
+    let runtime_pool = novex_api::bootstrap::connect_runtime_pg_pool(&test_url, 1)
         .await
         .expect("runtime postgres connection should apply pending migrations");
 
@@ -791,7 +791,7 @@ async fn runtime_postgres_connection_syncs_content_strategy_menu_state() {
     .expect("stale content strategy menu fixture should update");
     setup_pool.close().await;
 
-    let runtime_pool = novex_api::connect_runtime_pg_pool(&test_url, 1)
+    let runtime_pool = novex_api::bootstrap::connect_runtime_pg_pool(&test_url, 1)
         .await
         .expect("runtime postgres connection should sync menu state");
 

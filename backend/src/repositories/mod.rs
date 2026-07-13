@@ -7,6 +7,11 @@ pub mod script_repository;
 pub mod topic_repository;
 pub mod workspace_menu_repository;
 
+pub use ai_model_repository::{
+    AiModel, AiModelListFilter, AiModelRepository, AiModelRepositoryError, AiModelStatus,
+    ChangeAiModelStatusInput, CreateAiModelInput, DeleteAiModelInput, DeleteAiModelOutcome,
+    PostgresAiModelRepository, UpdateAiModelInput,
+};
 pub use asset_generation_repository::{
     AssetCandidateSource, AssetCandidateStatus, AssetCandidateType, AssetGenerationParseError,
     AssetGenerationProvider, AssetGenerationRepository, AssetGenerationRepositoryError,
@@ -35,9 +40,4 @@ pub use topic_repository::{
 pub use workspace_menu_repository::{
     PostgresWorkspaceMenuRepository, WorkspaceMenu, WorkspaceMenuRepositoryError,
     WorkspaceMenuTreeNode,
-};
-pub use ai_model_repository::{
-    AiModel, AiModelListFilter, AiModelRepository, AiModelRepositoryError, AiModelStatus,
-    ChangeAiModelStatusInput, CreateAiModelInput, DeleteAiModelInput, DeleteAiModelOutcome,
-    PostgresAiModelRepository, UpdateAiModelInput,
 };

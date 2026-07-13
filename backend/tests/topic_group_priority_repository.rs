@@ -1,4 +1,4 @@
-use novex_api::agents::models::{
+use novex_api::domain::topic::{
     ContentTopicSource, TopicGenerationBatchStatus, TopicGroupReviewFreshness,
     TopicGroupScriptPriorityStatus, TopicGroupSort, TopicReviewItem, TopicReviewPriority,
     TopicReviewResult, TopicReviewRiskFlag, TopicReviewSnapshotStatus,

@@ -1,4 +1,4 @@
-use novex_api::agents::conversation::{
+use novex_api::domain::conversation::{
     AgentConversationStatus, AgentMessageRole, CreateAgentConversationInput,
     CreateAgentMessageInput, CreateAgentRunInput, CreateAgentStepInput, FinishAgentRunInput,
 };

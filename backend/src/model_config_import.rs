@@ -244,14 +244,11 @@ fn parse_url(value: &str) -> Result<Url, AiModelRepositoryError> {
 
 fn set_versioned_root(url: &mut Url, root_path: &str) {
     let root_path = root_path.trim_end_matches('/');
-    let versioned = root_path
-        .rsplit('/')
-        .next()
-        .is_some_and(|segment| {
-            segment
-                .strip_prefix('v')
-                .is_some_and(|version| !version.is_empty() && version.chars().all(|ch| ch.is_ascii_digit()))
-        });
+    let versioned = root_path.rsplit('/').next().is_some_and(|segment| {
+        segment.strip_prefix('v').is_some_and(|version| {
+            !version.is_empty() && version.chars().all(|ch| ch.is_ascii_digit())
+        })
+    });
     let path = if versioned {
         root_path.to_string()
     } else if root_path.is_empty() || root_path == "/" {
@@ -265,7 +262,9 @@ fn set_versioned_root(url: &mut Url, root_path: &str) {
 }
 
 fn env_non_empty(name: &str) -> Option<String> {
-    std::env::var(name).ok().and_then(|value| non_empty(Some(value)))
+    std::env::var(name)
+        .ok()
+        .and_then(|value| non_empty(Some(value)))
 }
 
 fn env_i32(name: &str, fallback: i32) -> i32 {
@@ -283,5 +282,7 @@ fn env_u32(name: &str, fallback: u32) -> u32 {
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {
-    value.map(|item| item.trim().to_string()).filter(|item| !item.is_empty())
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
 }

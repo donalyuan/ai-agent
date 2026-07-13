@@ -150,7 +150,7 @@ pub struct DeleteAiModelInput {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DeleteAiModelOutcome {
     Physical,
-    Logical(AiModel),
+    Logical(Box<AiModel>),
 }
 
 #[derive(Clone)]
@@ -168,20 +168,14 @@ impl PostgresAiModelRepository {
 pub trait AiModelRepository: Send + Sync {
     async fn create(&self, input: CreateAiModelInput) -> Result<AiModel, AiModelRepositoryError>;
     async fn get(&self, id: Uuid) -> Result<AiModel, AiModelRepositoryError>;
-    async fn list(
-        &self,
-        filter: AiModelListFilter,
-    ) -> Result<Vec<AiModel>, AiModelRepositoryError>;
+    async fn list(&self, filter: AiModelListFilter)
+        -> Result<Vec<AiModel>, AiModelRepositoryError>;
     async fn update(
         &self,
         id: Uuid,
         input: UpdateAiModelInput,
     ) -> Result<AiModel, AiModelRepositoryError>;
-    async fn set_default(
-        &self,
-        id: Uuid,
-        version: i64,
-    ) -> Result<AiModel, AiModelRepositoryError>;
+    async fn set_default(&self, id: Uuid, version: i64) -> Result<AiModel, AiModelRepositoryError>;
     async fn change_status(
         &self,
         input: ChangeAiModelStatusInput,
@@ -444,11 +438,7 @@ impl AiModelRepository for PostgresAiModelRepository {
         Ok(model)
     }
 
-    async fn set_default(
-        &self,
-        id: Uuid,
-        version: i64,
-    ) -> Result<AiModel, AiModelRepositoryError> {
+    async fn set_default(&self, id: Uuid, version: i64) -> Result<AiModel, AiModelRepositoryError> {
         let mut transaction = self.pool.begin().await?;
         let current = get_for_update(&mut transaction, id).await?;
         ensure_version(&current, version)?;
@@ -542,7 +532,7 @@ impl AiModelRepository for PostgresAiModelRepository {
         let current = get_for_update(&mut transaction, input.id).await?;
         ensure_version(&current, input.version)?;
         if current.status == AiModelStatus::Deleted {
-            return Ok(DeleteAiModelOutcome::Logical(current));
+            return Ok(DeleteAiModelOutcome::Logical(Box::new(current)));
         }
         lock_model_type(&mut transaction, current.model_type).await?;
         if current.is_default {
@@ -590,7 +580,7 @@ impl AiModelRepository for PostgresAiModelRepository {
             .fetch_optional(&mut *transaction)
             .await?
             .ok_or(AiModelRepositoryError::VersionConflict(input.id))?;
-            DeleteAiModelOutcome::Logical(model_from_row(row)?)
+            DeleteAiModelOutcome::Logical(Box::new(model_from_row(row)?))
         };
         transaction.commit().await?;
         Ok(outcome)
@@ -713,7 +703,8 @@ fn validate_configuration(config: ModelConfiguration<'_>) -> Result<(), AiModelR
             )));
         }
     }
-    if !matches!(config.request_base_url.trim(), value if value.starts_with("http://") || value.starts_with("https://")) {
+    if !matches!(config.request_base_url.trim(), value if value.starts_with("http://") || value.starts_with("https://"))
+    {
         return Err(AiModelRepositoryError::InvalidConfig(
             "request_base_url must use HTTP or HTTPS".to_string(),
         ));
@@ -847,8 +838,8 @@ async fn replace_or_clear_default(
         }
         return Err(AiModelRepositoryError::NoDefaultConfirmation(current.id));
     }
-    let replacement_id = replacement_model_id
-        .ok_or(AiModelRepositoryError::ReplacementRequired(current.id))?;
+    let replacement_id =
+        replacement_model_id.ok_or(AiModelRepositoryError::ReplacementRequired(current.id))?;
     let replacement = get_for_update(transaction, replacement_id).await?;
     if replacement.id == current.id
         || replacement.model_type != current.model_type
@@ -868,12 +859,10 @@ async fn replace_or_clear_default(
     .bind(replacement.id)
     .execute(&mut **transaction)
     .await?;
-    sqlx::query(
-        "UPDATE ai_models SET is_default = TRUE, version = version + 1 WHERE id = $1",
-    )
-    .bind(replacement.id)
-    .execute(&mut **transaction)
-    .await?;
+    sqlx::query("UPDATE ai_models SET is_default = TRUE, version = version + 1 WHERE id = $1")
+        .bind(replacement.id)
+        .execute(&mut **transaction)
+        .await?;
     Ok(())
 }
 
@@ -974,7 +963,10 @@ impl fmt::Display for AiModelRepositoryError {
             }
             Self::InvalidReplacement(id) => write!(formatter, "invalid replacement model: {id}"),
             Self::NoDefaultConfirmation(id) => {
-                write!(formatter, "explicit no-default confirmation is required for {id}")
+                write!(
+                    formatter,
+                    "explicit no-default confirmation is required for {id}"
+                )
             }
             Self::InvalidConfig(message) => write!(formatter, "invalid model config: {message}"),
             Self::Storage(message) => write!(formatter, "model storage error: {message}"),

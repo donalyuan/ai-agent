@@ -1,13 +1,12 @@
 use novex_api::agents::llm::{ScriptLLMOutput, ScriptPromptBuilder, ScriptSceneLLMOutput};
-use novex_api::agents::models::{GenerateScriptRequest, ScriptStyle};
+use novex_api::domain::script::{ScriptGenerationInput, ScriptStyle};
 use novex_model::LLMPrompt;
 use serde_json::json;
 use uuid::Uuid;
 
 #[test]
 fn script_prompt_builder_includes_topic_style_and_scene_count() {
-    let request = GenerateScriptRequest {
-        model_id: Uuid::nil(),
+    let request = ScriptGenerationInput {
         project_id: Uuid::new_v4(),
         topic: "ChatGPT如何改变程序员工作流".to_string(),
         topic_id: None,
@@ -27,8 +26,7 @@ fn script_prompt_builder_includes_topic_style_and_scene_count() {
 
 #[test]
 fn script_prompt_builder_marks_parent_requests_as_variants() {
-    let request = GenerateScriptRequest {
-        model_id: Uuid::nil(),
+    let request = ScriptGenerationInput {
         project_id: Uuid::new_v4(),
         topic: "ChatGPT如何改变程序员工作流".to_string(),
         topic_id: None,
@@ -45,8 +43,7 @@ fn script_prompt_builder_marks_parent_requests_as_variants() {
 
 #[test]
 fn script_prompt_builder_can_create_small_metadata_and_scene_prompts() {
-    let request = GenerateScriptRequest {
-        model_id: Uuid::nil(),
+    let request = ScriptGenerationInput {
         project_id: Uuid::new_v4(),
         topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
         topic_id: None,
@@ -69,8 +66,7 @@ fn script_prompt_builder_can_create_small_metadata_and_scene_prompts() {
 
 #[test]
 fn script_prompts_request_strict_structured_output() {
-    let request = GenerateScriptRequest {
-        model_id: Uuid::nil(),
+    let request = ScriptGenerationInput {
         project_id: Uuid::new_v4(),
         topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
         topic_id: None,

@@ -2,7 +2,8 @@ use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use novex_api::agents::{LLMClient, LLMError};
-use novex_api::{build_app_with_state, AppConfig, AppState};
+use novex_api::bootstrap::{AppConfig, AppState};
+use novex_api::build_app_with_state;
 use novex_model::LLMPrompt;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -585,13 +586,12 @@ async fn project_routes_reject_invalid_strategy_profile_draft_without_saving() {
             .await
             .unwrap();
     assert_eq!(stored_profile["target_audience"], "旧受众");
-    let run_status = sqlx::query_scalar::<_, String>(
-        "SELECT status FROM agent_runs WHERE project_id = $1",
-    )
-    .bind(project_id)
-    .fetch_one(&test_pool)
-    .await
-    .unwrap();
+    let run_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM agent_runs WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_one(&test_pool)
+            .await
+            .unwrap();
     assert_eq!(run_status, "failed");
 
     test_pool.close().await;

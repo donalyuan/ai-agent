@@ -1,6 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use novex_api::{build_app_with_state, AppConfig, AppState};
+use novex_api::bootstrap::{AppConfig, AppState};
+use novex_api::build_app_with_state;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use tower::ServiceExt;
@@ -126,7 +127,12 @@ fn text_payload(name: &str) -> Value {
     })
 }
 
-async fn send(app: &axum::Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+async fn send(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let mut builder = Request::builder().method(method).uri(uri);
     let request_body = match body {
         Some(value) => {
@@ -148,22 +154,29 @@ async fn send(app: &axum::Router, method: &str, uri: &str, body: Option<Value>) 
 async fn admin_crud_masks_credentials_and_options_omit_sensitive_configuration() {
     let (admin_pool, pool, database_name, test_url) = migrated_pool().await;
     let app = build_app_with_state(app_state(test_url, pool.clone()));
-    let (status, created) = send(&app, "POST", "/api/admin/models", Some(text_payload("Text A"))).await;
-    assert_eq!(status, StatusCode::CREATED, "unexpected response: {created}");
+    let (status, created) = send(
+        &app,
+        "POST",
+        "/api/admin/models",
+        Some(text_payload("Text A")),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "unexpected response: {created}"
+    );
     assert_eq!(created["api_key_masked"], "secr****1234");
     assert_eq!(created["api_key_configured"], true);
     assert!(created.get("api_key").is_none());
     assert!(created.get("api_secret").is_none());
-    assert_eq!(created["is_default"], true, "first enabled model is default");
+    assert_eq!(
+        created["is_default"], true,
+        "first enabled model is default"
+    );
     let model_id = created["model_id"].as_str().unwrap();
 
-    let (status, detail) = send(
-        &app,
-        "GET",
-        &format!("/api/admin/models/{model_id}"),
-        None,
-    )
-    .await;
+    let (status, detail) = send(&app, "GET", &format!("/api/admin/models/{model_id}"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(detail["api_key_masked"], "secr****1234");
 
@@ -190,7 +203,10 @@ async fn admin_crud_masks_credentials_and_options_omit_sensitive_configuration()
         "settings",
         "timeout_seconds",
     ] {
-        assert!(option.get(forbidden).is_none(), "options leaked {forbidden}");
+        assert!(
+            option.get(forbidden).is_none(),
+            "options leaked {forbidden}"
+        );
     }
 
     pool.close().await;
@@ -202,7 +218,13 @@ async fn admin_crud_masks_credentials_and_options_omit_sensitive_configuration()
 async fn update_keeps_blank_credentials_and_returns_stable_version_errors() {
     let (admin_pool, pool, database_name, test_url) = migrated_pool().await;
     let app = build_app_with_state(app_state(test_url, pool.clone()));
-    let (_, created) = send(&app, "POST", "/api/admin/models", Some(text_payload("Text A"))).await;
+    let (_, created) = send(
+        &app,
+        "POST",
+        "/api/admin/models",
+        Some(text_payload("Text A")),
+    )
+    .await;
     let model_id = created["model_id"].as_str().unwrap();
     let version = created["version"].as_i64().unwrap();
     let mut update = text_payload("Text A Updated");
@@ -246,8 +268,20 @@ async fn update_keeps_blank_credentials_and_returns_stable_version_errors() {
 async fn status_and_delete_routes_preserve_default_and_history_rules() {
     let (admin_pool, pool, database_name, test_url) = migrated_pool().await;
     let app = build_app_with_state(app_state(test_url, pool.clone()));
-    let (_, first) = send(&app, "POST", "/api/admin/models", Some(text_payload("Text A"))).await;
-    let (_, second) = send(&app, "POST", "/api/admin/models", Some(text_payload("Text B"))).await;
+    let (_, first) = send(
+        &app,
+        "POST",
+        "/api/admin/models",
+        Some(text_payload("Text A")),
+    )
+    .await;
+    let (_, second) = send(
+        &app,
+        "POST",
+        "/api/admin/models",
+        Some(text_payload("Text B")),
+    )
+    .await;
     let first_id = first["model_id"].as_str().unwrap();
     let second_id = second["model_id"].as_str().unwrap();
 

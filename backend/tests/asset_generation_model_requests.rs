@@ -1,4 +1,6 @@
-use novex_api::agents::models::{AssetGenerationPlanRequest, AssetGenerationTaskRequest};
+use novex_api::api::asset_generation::dto::{
+    AssetGenerationPlanRequest, AssetGenerationTaskRequest,
+};
 use serde_json::json;
 use uuid::Uuid;
 

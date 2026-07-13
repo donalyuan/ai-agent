@@ -1,3 +1,5 @@
+//! 选题、生成批次、质量评估、主题组评审及其状态流转规则。
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -1,4 +1,4 @@
-use crate::agents::models::{
+use crate::domain::topic::{
     ContentTopic, ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatch,
     TopicGenerationBatchStatus, TopicGenerationBatchSummary, TopicGroupReviewFreshness,
     TopicGroupScriptPriority, TopicGroupScriptPriorityMetrics, TopicGroupScriptPriorityStatus,
