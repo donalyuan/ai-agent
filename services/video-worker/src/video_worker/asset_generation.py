@@ -1,20 +1,29 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
+import logging
 import os
 import re
+import shlex
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Protocol
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+from video_worker.generated_image_filename import (
+    DEFAULT_SCRIPT_TITLE,
+    MAX_FILENAME_BYTES,
+    generated_image_filename,
+)
 from video_worker.model_registry import ImageModelRuntimeConfig, PostgresModelRegistry
 
 
 OPENAI_COMPATIBLE_USER_AGENT = "codex-cli/0.142.5"
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 @dataclass(frozen=True)
@@ -27,6 +36,9 @@ class AssetGenerationTask:
     reference_material_ids: list[str] = field(default_factory=list)
     generation_task_id: str | None = None
     scene_id: str | None = None
+    script_title_snapshot: str = DEFAULT_SCRIPT_TITLE
+    scene_sequence: int = 1
+    candidate_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -50,12 +62,14 @@ class PendingImageGenerationTask:
     reference_material_ids: list[str]
     reference_material_urls: list[str]
     scenes: list[SceneGenerationContext]
+    script_title_snapshot: str = DEFAULT_SCRIPT_TITLE
 
 
 @dataclass(frozen=True)
 class GeneratedImage:
     filename: str
     content: bytes | None
+    candidate_index: int = 1
 
 
 @dataclass(frozen=True)
@@ -63,6 +77,13 @@ class GeneratedMaterial:
     file_url: str
     file_name: str
     metadata: dict[str, object]
+    candidate_index: int
+
+
+@dataclass(frozen=True)
+class FailedImageCandidate:
+    candidate_index: int
+    error_message: str
 
 
 @dataclass(frozen=True)
@@ -74,6 +95,7 @@ class ImageTaskResult:
     partial: bool = False
     error_message: str | None = None
     fatal: bool = False
+    failures: list[FailedImageCandidate] = field(default_factory=list)
 
 
 class TemporaryProviderError(RuntimeError):
@@ -89,6 +111,8 @@ class ProviderConfigError(RuntimeError):
 
 
 class ImageProvider(Protocol):
+    request_mode: str
+
     def generate_images(self, task: AssetGenerationTask) -> list[GeneratedImage]:
         ...
 
@@ -117,6 +141,7 @@ class AssetGenerationStore(Protocol):
         self,
         task: PendingImageGenerationTask,
         scene: SceneGenerationContext,
+        candidate_index: int,
         rank: int,
         error_message: str,
     ) -> None:
@@ -134,6 +159,8 @@ class AssetGenerationStore(Protocol):
 
 
 class FakeImageProvider:
+    request_mode = "batch"
+
     def __init__(self, responses: list[GeneratedImage | Exception]):
         self._responses = list(responses)
         self.call_count = 0
@@ -148,7 +175,10 @@ class FakeImageProvider:
         images = [response]
         while self._responses and not isinstance(self._responses[0], Exception):
             images.append(self._responses.pop(0))  # type: ignore[arg-type]
-        return images[: task.candidate_count]
+        return [
+            replace(image, candidate_index=index)
+            for index, image in enumerate(images[: task.candidate_count], start=1)
+        ]
 
 
 class LocalAssetStorage:
@@ -159,7 +189,16 @@ class LocalAssetStorage:
     def save_image(self, task_id: str, image: GeneratedImage) -> str:
         if image.content is None:
             raise ValueError("generated image content is empty")
-        filename = safe_filename(image.filename)
+        filename = image.filename.strip()
+        if (
+            not filename
+            or filename in {".", ".."}
+            or Path(filename).name != filename
+            or "\\" in filename
+        ):
+            raise ValueError("generated image filename must be a safe basename")
+        if len(filename.encode("utf-8")) > MAX_FILENAME_BYTES:
+            raise ValueError("generated image filename exceeds 255 UTF-8 bytes")
         path = self.root / "generated" / "images" / task_id / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(image.content)
@@ -167,6 +206,8 @@ class LocalAssetStorage:
 
 
 class OpenAIImageProvider:
+    request_mode = "batch"
+
     def __init__(
         self,
         api_key: str | None,
@@ -265,71 +306,70 @@ class OpenAIImageProvider:
                 GeneratedImage(
                     filename=f"{task.task_id}-{index}.png",
                     content=base64.b64decode(b64_json),
+                    candidate_index=index,
                 )
             )
         return images
 
 
-class JimengImageProvider:
+class VolcengineArkImageProvider:
+    request_mode = "per_candidate"
+
     def __init__(
         self,
-        access_key: str | None,
-        secret_key: str | None,
-        req_key: str = "high_aes_general_v30l_zt2i",
-        width: int = 1328,
-        height: int = 1328,
-        submit_task: Callable[[dict[str, object]], dict[str, object]] | None = None,
+        api_key: str | None,
+        model: str = "doubao-seedream-5-0-260128",
+        base_url: str = "https://ark.cn-beijing.volces.com/api/v3",
+        http_post: Callable[
+            [str, dict[str, str], dict[str, object]], dict[str, object]
+        ]
+        | None = None,
         download_url: Callable[[str], bytes] | None = None,
+        timeout_seconds: int = 120,
     ):
-        if not access_key or not secret_key:
-            raise ProviderConfigError("JIMENG_ACCESS_KEY and JIMENG_SECRET_KEY are required")
-        self.access_key = access_key
-        self.secret_key = secret_key
-        self.req_key = req_key
-        self.width = width
-        self.height = height
-        self.submit_task = submit_task
+        if not api_key:
+            raise ProviderConfigError("Volcengine Ark API key is required")
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+        self.http_post = http_post or (
+            lambda url, headers, payload: default_json_post(
+                url,
+                headers,
+                payload,
+                timeout_seconds=self.timeout_seconds,
+            )
+        )
         self.download_url = download_url or default_binary_get
 
     def generate_images(self, task: AssetGenerationTask) -> list[GeneratedImage]:
-        form: dict[str, object] = {
-            "req_key": self.req_key,
-            "prompt": task.prompt,
-            "return_url": True,
-            "width": self.width,
-            "height": self.height,
-            "logo_info": {"add_logo": False},
-        }
-        if task.candidate_count > 1:
-            form["batch_size"] = task.candidate_count
-        response = self._submit_task(form)
-        urls = extract_jimeng_image_urls(response)
-        images = []
-        for index, url in enumerate(urls[: task.candidate_count], start=1):
-            images.append(
-                GeneratedImage(
-                    filename=f"{task.task_id}-{index}.png",
-                    content=self.download_url(url),
-                )
-            )
-        return images
+        if task.candidate_count != 1:
+            raise ProviderConfigError("Volcengine Ark provider requires one candidate")
 
-    def _submit_task(self, form: dict[str, object]) -> dict[str, object]:
-        if self.submit_task is not None:
-            return self.submit_task(form)
-        try:
-            from volcengine.visual.VisualService import VisualService  # type: ignore
-        except ImportError as error:
-            raise ProviderConfigError(
-                "volcengine SDK is required for Jimeng image generation"
-            ) from error
-        visual_service = VisualService()
-        visual_service.set_ak(self.access_key)
-        visual_service.set_sk(self.secret_key)
-        response = visual_service.cv_sync2async_submit_task(form)
-        if not isinstance(response, dict):
-            raise RuntimeError("Jimeng SDK response must be an object")
-        return response
+        payload: dict[str, object] = {
+            "model": self.model,
+            "prompt": task.prompt,
+            "sequential_image_generation": "disabled",
+            "response_format": "b64_json",
+            "stream": False,
+            "watermark": False,
+        }
+        if task.reference_material_urls:
+            payload["image"] = [
+                image_data_url(self.download_url(url))
+                for url in task.reference_material_urls
+            ]
+
+        url = f"{self.base_url}/images/generations"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        log_ark_request(task.task_id, url, payload)
+        response = self.http_post(url, headers, payload)
+        log_ark_response(task.task_id, response)
+        return [parse_ark_image(task.task_id, response)]
 
 
 def process_image_task(
@@ -337,6 +377,33 @@ def process_image_task(
     provider: ImageProvider,
     storage: LocalAssetStorage,
 ) -> ImageTaskResult:
+    if provider.request_mode == "per_candidate":
+        return process_per_candidate_image_task(task, provider, storage)
+    if provider.request_mode != "batch":
+        error_message = (
+            f"unsupported image provider request mode: {provider.request_mode}"
+        )
+        failures = [
+            FailedImageCandidate(candidate_index=index, error_message=error_message)
+            for index in _task_candidate_indices(task)
+        ]
+        return ImageTaskResult(
+            status="failed",
+            materials=[],
+            failed_count=len(failures),
+            error_message=error_message,
+            fatal=True,
+            failures=failures,
+        )
+    return process_batch_image_task(task, provider, storage)
+
+
+def process_batch_image_task(
+    task: AssetGenerationTask,
+    provider: ImageProvider,
+    storage: LocalAssetStorage,
+) -> ImageTaskResult:
+    requested_indices = _task_candidate_indices(task)
     retry_count = 0
     try:
         images = provider.generate_images(task)
@@ -345,49 +412,70 @@ def process_image_task(
         try:
             images = provider.generate_images(task)
         except TemporaryProviderError as error:
-            return ImageTaskResult(
-                status="failed",
-                materials=[],
+            return _failed_image_task_result(
+                requested_indices,
+                error,
                 retry_count=retry_count,
-                failed_count=task.candidate_count,
-                partial=False,
-                error_message=str(error),
             )
         except Exception as error:
-            return ImageTaskResult(
-                status="failed",
-                materials=[],
+            return _failed_image_task_result(
+                requested_indices,
+                error,
                 retry_count=retry_count,
-                failed_count=task.candidate_count,
-                partial=False,
-                error_message=str(error),
                 fatal=True,
             )
     except Exception as error:
-        return ImageTaskResult(
-            status="failed",
-            materials=[],
+        return _failed_image_task_result(
+            requested_indices,
+            error,
             retry_count=retry_count,
-            failed_count=task.candidate_count,
-            partial=False,
-            error_message=str(error),
             fatal=True,
         )
 
     materials: list[GeneratedMaterial] = []
-    failed_count = 0
+    failures: list[FailedImageCandidate] = []
     error_messages: list[str] = []
+    seen_indices: set[int] = set()
     for image in images[: task.candidate_count]:
+        candidate_index = task.candidate_index or image.candidate_index
+        if candidate_index not in requested_indices or candidate_index in seen_indices:
+            error_messages.append(
+                f"图片供应商返回无效候选序号: {candidate_index}"
+            )
+            continue
+        seen_indices.add(candidate_index)
         try:
-            file_url = storage.save_image(task.task_id, image)
-        except (OSError, ValueError) as error:
-            failed_count += 1
+            if image.content is None:
+                raise ValueError("generated image content is empty")
+            _, extension = detect_image_type(image.content)
+            filename = generated_image_filename(
+                task.script_title_snapshot,
+                task.scene_sequence,
+                candidate_index,
+                extension,
+            )
+            storage_task_id = task.generation_task_id or task.task_id
+            file_url = storage.save_image(
+                storage_task_id,
+                replace(
+                    image,
+                    filename=filename,
+                    candidate_index=candidate_index,
+                ),
+            )
+        except (OSError, ValueError, PermanentProviderError) as error:
+            failures.append(
+                FailedImageCandidate(
+                    candidate_index=candidate_index,
+                    error_message=str(error),
+                )
+            )
             error_messages.append(str(error))
             continue
         materials.append(
             GeneratedMaterial(
                 file_url=file_url,
-                file_name=safe_filename(image.filename),
+                file_name=filename,
                 metadata={
                     "storage_provider": "local",
                     "source": "ai_generated",
@@ -396,24 +484,124 @@ def process_image_task(
                     "reference_material_ids": task.reference_material_ids,
                     "reference_material_urls": task.reference_material_urls,
                     "candidate_status": "candidate",
+                    "script_title_snapshot": task.script_title_snapshot,
+                    "scene_sequence": task.scene_sequence,
+                    "candidate_index": candidate_index,
                 },
+                candidate_index=candidate_index,
             )
         )
 
-    if materials and failed_count:
-        status = "completed"
-    elif materials:
-        status = "completed"
-    else:
-        status = "failed"
+    for candidate_index in requested_indices:
+        if candidate_index in seen_indices:
+            continue
+        error_message = "图片生成未返回有效文件"
+        failures.append(
+            FailedImageCandidate(
+                candidate_index=candidate_index,
+                error_message=error_message,
+            )
+        )
+        error_messages.append(error_message)
+
+    failures.sort(key=lambda failure: failure.candidate_index)
+    failed_count = len(failures)
 
     return ImageTaskResult(
-        status=status,
+        status="completed" if materials else "failed",
         materials=materials,
         retry_count=retry_count,
         failed_count=failed_count,
         partial=bool(materials and failed_count),
         error_message="; ".join(error_messages) or None,
+        failures=failures,
+    )
+
+
+def process_per_candidate_image_task(
+    task: AssetGenerationTask,
+    provider: ImageProvider,
+    storage: LocalAssetStorage,
+) -> ImageTaskResult:
+    materials: list[GeneratedMaterial] = []
+    failures: list[FailedImageCandidate] = []
+    retry_count = 0
+    error_messages: list[str] = []
+    fatal = False
+
+    for candidate_index in range(1, task.candidate_count + 1):
+        single_task = replace(
+            task,
+            task_id=f"{task.task_id}-{candidate_index}",
+            candidate_count=1,
+            candidate_index=candidate_index,
+        )
+        result = process_batch_image_task(single_task, provider, storage)
+        materials.extend(result.materials)
+        failures.extend(result.failures)
+        retry_count += result.retry_count
+        if result.error_message:
+            error_messages.append(result.error_message)
+
+        if result.fatal:
+            fatal = True
+            fatal_error = result.error_message or "图片供应商返回永久错误"
+            failures.extend(
+                FailedImageCandidate(
+                    candidate_index=remaining_index,
+                    error_message=fatal_error,
+                )
+                for remaining_index in range(
+                    candidate_index + 1,
+                    task.candidate_count + 1,
+                )
+            )
+            break
+
+    failures.sort(key=lambda failure: failure.candidate_index)
+    failed_count = len(failures)
+    return ImageTaskResult(
+        status="completed" if materials else "failed",
+        materials=materials,
+        retry_count=retry_count,
+        failed_count=failed_count,
+        partial=bool(materials and failed_count),
+        error_message="; ".join(error_messages) or None,
+        fatal=fatal,
+        failures=failures,
+    )
+
+
+def _task_candidate_indices(task: AssetGenerationTask) -> list[int]:
+    if task.candidate_index is not None:
+        return [task.candidate_index]
+    return list(range(1, task.candidate_count + 1))
+
+
+def _failed_image_task_result(
+    candidate_indices: list[int],
+    error: Exception,
+    *,
+    retry_count: int,
+    fatal: bool = False,
+) -> ImageTaskResult:
+    error_message = str(error) or error.__class__.__name__
+    failures = [
+        FailedImageCandidate(
+            candidate_index=candidate_index,
+            error_message=error_message,
+        )
+        for candidate_index in candidate_indices
+    ]
+    return ImageTaskResult(
+        status="failed",
+        materials=[],
+        retry_count=retry_count,
+        failed_count=len(failures),
+        partial=False,
+        error_message=error_message,
+        fatal=fatal,
+        failures=failures,
     )
 
 
@@ -435,12 +623,13 @@ def run_next_image_task(
         error_message = str(error) or error.__class__.__name__
         failed_count = 0
         for scene in task.scenes:
-            for index in range(task.image_candidates_per_scene):
+            for candidate_index in range(1, task.image_candidates_per_scene + 1):
                 failed_count += 1
                 store.create_failed_image_candidate(
                     task,
                     scene,
-                    rank=9000 + index,
+                    candidate_index=candidate_index,
+                    rank=9000 + candidate_index,
                     error_message=error_message,
                 )
         store.complete_image_task(
@@ -466,43 +655,46 @@ def run_next_image_task(
             reference_material_ids=list(task.reference_material_ids),
             generation_task_id=task.task_id,
             scene_id=scene.scene_id,
+            script_title_snapshot=task.script_title_snapshot,
+            scene_sequence=scene.sequence,
         )
         result = process_image_task(image_task, provider, storage)
         retry_count += result.retry_count
         if result.error_message:
             error_messages.append(result.error_message)
 
-        for index, material in enumerate(result.materials, start=1):
+        for material in result.materials:
             generated_count += 1
             store.create_generated_image_candidate(
                 task,
                 scene,
                 material,
-                rank=1000 + index,
+                rank=1000 + material.candidate_index,
             )
 
-        scene_failed_count = result.failed_count + max(
-            0,
-            task.image_candidates_per_scene - len(result.materials) - result.failed_count,
-        )
-        failed_count += scene_failed_count
-        for index in range(scene_failed_count):
+        failed_count += len(result.failures)
+        for failure in result.failures:
             store.create_failed_image_candidate(
                 task,
                 scene,
-                rank=9000 + index,
-                error_message=result.error_message or "图片生成未返回有效文件",
+                candidate_index=failure.candidate_index,
+                rank=9000 + failure.candidate_index,
+                error_message=failure.error_message,
             )
 
         if result.fatal:
             fatal_error = result.error_message or "图片供应商返回永久错误"
             for remaining_scene in task.scenes[scene_index + 1 :]:
-                for index in range(task.image_candidates_per_scene):
+                for candidate_index in range(
+                    1,
+                    task.image_candidates_per_scene + 1,
+                ):
                     failed_count += 1
                     store.create_failed_image_candidate(
                         task,
                         remaining_scene,
-                        rank=9000 + index,
+                        candidate_index=candidate_index,
+                        rank=9000 + candidate_index,
                         error_message=fatal_error,
                     )
             break
@@ -542,21 +734,12 @@ def image_provider_from_model(config: ImageModelRuntimeConfig) -> ImageProvider:
             base_url=config.request_base_url,
             timeout_seconds=config.timeout_seconds,
         )
-    if config.api_protocol == "jimeng_visual":
-        default_size = str(config.settings.get("default_size") or "1328x1328")
-        try:
-            width_text, height_text = default_size.lower().split("x", maxsplit=1)
-            width, height = int(width_text), int(height_text)
-        except (TypeError, ValueError) as error:
-            raise ProviderConfigError("invalid jimeng default_size") from error
-        return JimengImageProvider(
-            access_key=config.api_key,
-            secret_key=config.api_secret,
-            req_key=str(
-                config.settings.get("request_key") or "high_aes_general_v30l_zt2i"
-            ),
-            width=width,
-            height=height,
+    if config.api_protocol == "volcengine_ark_images":
+        return VolcengineArkImageProvider(
+            api_key=config.api_key,
+            model=config.upstream_model,
+            base_url=config.request_base_url,
+            timeout_seconds=config.timeout_seconds,
         )
     raise ProviderConfigError(f"unsupported image protocol: {config.api_protocol}")
 
@@ -583,12 +766,13 @@ class PostgresAssetGenerationStore:
                 row = connection.execute(
                     """
                     WITH candidate AS (
-                        SELECT id
-                        FROM asset_generation_tasks
-                        WHERE task_type = 'image_candidates'
-                          AND status = 'pending'
-                        ORDER BY created_at ASC, id ASC
-                        FOR UPDATE SKIP LOCKED
+                        SELECT task.id, script.title AS script_title_snapshot
+                        FROM asset_generation_tasks task
+                        JOIN scripts script ON script.id = task.script_id
+                        WHERE task.task_type = 'image_candidates'
+                          AND task.status = 'pending'
+                        ORDER BY task.created_at ASC, task.id ASC
+                        FOR UPDATE OF task SKIP LOCKED
                         LIMIT 1
                     )
                     UPDATE asset_generation_tasks task
@@ -598,7 +782,8 @@ class PostgresAssetGenerationStore:
                     WHERE task.id = candidate.id
                     RETURNING task.id, task.project_id, task.script_id, task.model_id,
                               task.provider,
-                              task.candidate_count, task.reference_material_ids, task.params
+                              task.candidate_count, task.reference_material_ids, task.params,
+                              candidate.script_title_snapshot
                     """,
                 ).fetchone()
                 if row is None:
@@ -633,6 +818,7 @@ class PostgresAssetGenerationStore:
                     reference_material_ids=reference_material_ids,
                     reference_material_urls=reference_urls,
                     scenes=scenes,
+                    script_title_snapshot=str(row["script_title_snapshot"]),
                 )
 
     def record_model_snapshot(
@@ -705,6 +891,7 @@ class PostgresAssetGenerationStore:
         self,
         task: PendingImageGenerationTask,
         scene: SceneGenerationContext,
+        candidate_index: int,
         rank: int,
         error_message: str,
     ) -> None:
@@ -718,6 +905,9 @@ class PostgresAssetGenerationStore:
             "reference_material_ids": task.reference_material_ids,
             "candidate_status": "failed",
             "error_message": error_message,
+            "script_title_snapshot": task.script_title_snapshot,
+            "scene_sequence": scene.sequence,
+            "candidate_index": candidate_index,
         }
         with psycopg.connect(self.database_url) as connection:
             connection.execute(
@@ -937,21 +1127,129 @@ def multipart_body(
 
 
 def default_binary_get(url: str) -> bytes:
+    public_prefix = os.getenv("ASSET_PUBLIC_PREFIX", "/assets").rstrip("/")
+    if url == public_prefix or url.startswith(f"{public_prefix}/"):
+        storage_root = Path(
+            os.getenv("ASSET_STORAGE_ROOT", "/app/storage/assets")
+        ).resolve()
+        relative_path = url[len(public_prefix) :].lstrip("/")
+        local_path = (storage_root / relative_path).resolve()
+        try:
+            local_path.relative_to(storage_root)
+        except ValueError as error:
+            raise PermanentProviderError(
+                "reference material path escapes asset storage root"
+            ) from error
+        return local_path.read_bytes()
     with urllib_request.urlopen(url, timeout=60) as response:
         return response.read()
 
 
-def extract_jimeng_image_urls(response: dict[str, object]) -> list[str]:
+def detect_image_type(content: bytes) -> tuple[str, str]:
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ("image/png", ".png")
+    if content.startswith(b"\xff\xd8\xff"):
+        return ("image/jpeg", ".jpg")
+    if len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return ("image/webp", ".webp")
+    raise PermanentProviderError("unsupported image type")
+
+
+def image_data_url(content: bytes) -> str:
+    media_type, _ = detect_image_type(content)
+    encoded = base64.b64encode(content).decode("ascii")
+    return f"data:{media_type};base64,{encoded}"
+
+
+def parse_ark_image(task_id: str, response: dict[str, object]) -> GeneratedImage:
     data = response.get("data")
-    if not isinstance(data, dict):
-        return []
-    for key in ("image_urls", "image_url", "urls"):
-        value = data.get(key)
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, str)]
-        if isinstance(value, str):
-            return [value]
-    binary_data_base64 = data.get("binary_data_base64")
-    if isinstance(binary_data_base64, list):
-        return []
-    return []
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        raise PermanentProviderError(
+            "Ark image response must contain exactly one data item"
+        )
+    item = data[0]
+    if item.get("error") is not None:
+        summary = json.dumps(
+            item["error"], ensure_ascii=False, separators=(",", ":")
+        )
+        raise PermanentProviderError(f"Ark image response error: {summary}")
+    encoded = item.get("b64_json")
+    if not isinstance(encoded, str) or not encoded:
+        raise PermanentProviderError("Ark image response missing b64_json")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise PermanentProviderError("invalid Ark image base64") from error
+    _, extension = detect_image_type(content)
+    return GeneratedImage(filename=f"{task_id}-1{extension}", content=content)
+
+
+def log_ark_request(task_id: str, url: str, payload: dict[str, object]) -> None:
+    safe_payload = dict(payload)
+    references = safe_payload.get("image")
+    reference_count = len(references) if isinstance(references, list) else 0
+    if reference_count:
+        safe_payload["image"] = f"<redacted:{reference_count} reference image(s)>"
+    safe_json = json.dumps(safe_payload, ensure_ascii=False, separators=(",", ":"))
+    curl = " ".join(
+        [
+            "curl",
+            "-X",
+            "POST",
+            shlex.quote(url),
+            "-H",
+            shlex.quote("Authorization: Bearer ***"),
+            "-H",
+            shlex.quote("Content-Type: application/json"),
+            "--data-raw",
+            shlex.quote(safe_json),
+        ]
+    )
+    LOGGER.info(
+        json.dumps(
+            {
+                "event": "ark_image_request",
+                "task_id": task_id,
+                "url": url,
+                "headers": {
+                    "Authorization": "Bearer ***",
+                    "Content-Type": "application/json",
+                },
+                "payload": safe_payload,
+                "curl": curl,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
+
+
+def log_ark_response(task_id: str, response: dict[str, object]) -> None:
+    data = response.get("data")
+    items = data if isinstance(data, list) else []
+    image_bytes = sum(
+        base64_decoded_size(item.get("b64_json", ""))
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("b64_json"), str)
+    )
+    error_count = sum(
+        1 for item in items if isinstance(item, dict) and item.get("error") is not None
+    )
+    LOGGER.info(
+        json.dumps(
+            {
+                "event": "ark_image_response",
+                "task_id": task_id,
+                "data_count": len(items),
+                "error_count": error_count,
+                "image_bytes": image_bytes,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
+
+
+def base64_decoded_size(encoded: str) -> int:
+    padding = len(encoded) - len(encoded.rstrip("="))
+    return max(0, len(encoded) * 3 // 4 - padding)

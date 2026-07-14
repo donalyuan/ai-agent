@@ -19,11 +19,6 @@ pub struct LegacyModelImportConfig {
     pub image_api_key: Option<String>,
     pub image_base_url: Option<String>,
     pub image_model: Option<String>,
-    pub jimeng_access_key: Option<String>,
-    pub jimeng_secret_key: Option<String>,
-    pub jimeng_request_key: Option<String>,
-    pub jimeng_width: u32,
-    pub jimeng_height: u32,
 }
 
 impl LegacyModelImportConfig {
@@ -38,11 +33,6 @@ impl LegacyModelImportConfig {
             image_api_key: env_non_empty("OPENAI_IMAGE_KEY"),
             image_base_url: env_non_empty("OPENAI_IMAGE_BASE_URL"),
             image_model: env_non_empty("OPENAI_IMAGE_MODEL"),
-            jimeng_access_key: env_non_empty("JIMENG_ACCESS_KEY"),
-            jimeng_secret_key: env_non_empty("JIMENG_SECRET_KEY"),
-            jimeng_request_key: env_non_empty("JIMENG_REQ_KEY"),
-            jimeng_width: env_u32("JIMENG_IMAGE_WIDTH", 1328),
-            jimeng_height: env_u32("JIMENG_IMAGE_HEIGHT", 1328),
         }
     }
 }
@@ -142,47 +132,6 @@ pub async fn import_legacy_model_config(
         .await?;
     }
 
-    if let (Some(api_key), Some(api_secret)) = (
-        non_empty(config.jimeng_access_key),
-        non_empty(config.jimeng_secret_key),
-    ) {
-        let size = format!("{}x{}", config.jimeng_width, config.jimeng_height);
-        create_or_skip(
-            pool,
-            &repository,
-            &mut outcome,
-            "legacy:image-jimeng",
-            CreateAiModelInput {
-                display_name: "环境导入 / 即梦图片".to_string(),
-                model_type: ModelType::Image,
-                provider_name: "火山引擎即梦".to_string(),
-                api_protocol: ApiProtocol::JimengVisual,
-                protocol_version: "v1".to_string(),
-                auth_scheme: AuthScheme::AccessKeySecret,
-                request_base_url: "https://visual.volcengineapi.com".to_string(),
-                upstream_model: "jimeng-visual".to_string(),
-                api_key,
-                api_secret: Some(api_secret),
-                timeout_seconds: 120,
-                reasoning_effort: None,
-                max_output_tokens: None,
-                settings: json!({
-                    "supported_sizes": [size],
-                    "default_size": size,
-                    "max_images_per_request": 4,
-                    "request_key": non_empty(config.jimeng_request_key)
-                        .unwrap_or_else(|| "high_aes_general_v30l_zt2i".to_string())
-                }),
-                sort_order: 10,
-                remark: "由一次性环境配置导入命令创建".to_string(),
-                status: AiModelStatus::Enabled,
-                source: "environment_import".to_string(),
-                source_key: Some("legacy:image-jimeng".to_string()),
-            },
-        )
-        .await?;
-    }
-
     Ok(outcome)
 }
 
@@ -268,13 +217,6 @@ fn env_non_empty(name: &str) -> Option<String> {
 }
 
 fn env_i32(name: &str, fallback: i32) -> i32 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(fallback)
-}
-
-fn env_u32(name: &str, fallback: u32) -> u32 {
     std::env::var(name)
         .ok()
         .and_then(|value| value.parse().ok())

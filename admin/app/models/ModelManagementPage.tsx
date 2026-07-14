@@ -27,7 +27,7 @@ const protocolOptions: Record<AiModelType, { value: AiModelProtocol; label: stri
   ],
   image: [
     { value: "openai_images", label: "OpenAI Images" },
-    { value: "jimeng_visual", label: "即梦 Visual" },
+    { value: "volcengine_ark_images", label: "火山方舟图片生成" },
   ],
   video: [
     { value: "runway_api", label: "Runway API" },
@@ -46,7 +46,7 @@ function emptyForm(modelType: AiModelType): FormState {
     provider_name: "",
     api_protocol: protocol,
     protocol_version: "v1",
-    auth_scheme: protocol === "jimeng_visual" || protocol === "kling_api" ? "access_key_secret" : "bearer",
+    auth_scheme: protocol === "kling_api" ? "access_key_secret" : "bearer",
     request_base_url: "",
     upstream_model: "",
     api_key: "",
@@ -83,6 +83,25 @@ function formFromModel(model: AiModel): FormState {
     remark: model.remark,
     is_default: model.is_default,
     version: model.version,
+  };
+}
+
+function normalizedForm(form: FormState): FormState {
+  if (form.model_type !== "image") return form;
+  const defaultSize = String(form.settings.default_size ?? "").trim();
+  const isArk = form.api_protocol === "volcengine_ark_images";
+  return {
+    ...form,
+    auth_scheme: "bearer",
+    api_secret: isArk ? null : form.api_secret,
+    settings: {
+      ...form.settings,
+      supported_sizes: defaultSize ? [defaultSize] : [],
+      default_size: defaultSize || null,
+      max_images_per_request: isArk
+        ? 1
+        : Number(form.settings.max_images_per_request ?? 4),
+    },
   };
 }
 
@@ -147,7 +166,13 @@ export function ModelManagementPage({ client }: { client?: ApiClient }) {
     setForm((current) => ({
       ...current,
       api_protocol: nextProtocol,
-      auth_scheme: nextProtocol === "jimeng_visual" || nextProtocol === "kling_api" ? "access_key_secret" : "bearer",
+      auth_scheme: nextProtocol === "kling_api" ? "access_key_secret" : "bearer",
+      api_secret: nextProtocol === "volcengine_ark_images" ? null : current.api_secret,
+      settings: current.model_type !== "image"
+        ? current.settings
+        : nextProtocol === "volcengine_ark_images"
+          ? { supported_sizes: [], default_size: null, max_images_per_request: 1 }
+          : { supported_sizes: ["1024x1024"], default_size: "1024x1024", max_images_per_request: 4 },
     }));
   }
 
@@ -156,10 +181,11 @@ export function ModelManagementPage({ client }: { client?: ApiClient }) {
     setSaving(true);
     setError("");
     try {
+      const payload = normalizedForm(form);
       if (editing) {
-        await updateAiModel(apiClient, editing.model_id, { ...form, version: editing.version });
+        await updateAiModel(apiClient, editing.model_id, { ...payload, version: editing.version });
       } else {
-        await createAiModel(apiClient, form);
+        await createAiModel(apiClient, payload);
       }
       setDrawerOpen(false);
       await loadModels();
@@ -282,7 +308,7 @@ export function ModelManagementPage({ client }: { client?: ApiClient }) {
               <fieldset><legend>API 调用协议与凭据</legend><label>API 调用协议<select value={form.api_protocol} onChange={(event) => changeProtocol(event.target.value as AiModelProtocol)}>{protocolOptions[form.model_type].map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label><label>协议版本<input value={form.protocol_version} onChange={(event) => setForm({ ...form, protocol_version: event.target.value })} /></label><label>请求地址<input required type="url" value={form.request_base_url} onChange={(event) => setForm({ ...form, request_base_url: event.target.value })} /></label><label>API Key<input aria-label="API Key" required={!editing} type="password" autoComplete="new-password" value={form.api_key} onChange={(event) => setForm({ ...form, api_key: event.target.value })} />{editing?.api_key_configured && <small>已配置：{editing.api_key_masked}</small>}</label>{form.auth_scheme === "access_key_secret" && <label>API Secret<input aria-label="API Secret" required={!editing} type="password" autoComplete="new-password" value={form.api_secret ?? ""} onChange={(event) => setForm({ ...form, api_secret: event.target.value })} />{editing?.api_secret_configured && <small>已配置：{editing.api_secret_masked}</small>}</label>}</fieldset>
               <fieldset><legend>运行配置</legend><label>超时时间（秒）<input type="number" min="1" max="3600" value={form.timeout_seconds} onChange={(event) => setForm({ ...form, timeout_seconds: Number(event.target.value) })} /></label><label>排序值<input type="number" value={form.sort_order} onChange={(event) => setForm({ ...form, sort_order: Number(event.target.value) })} /></label><label className="checkboxLabel"><input type="checkbox" checked={form.is_default} onChange={(event) => setForm({ ...form, is_default: event.target.checked })} />设为该类型默认模型</label></fieldset>
               {form.model_type === "text" && <fieldset><legend>文本推理配置</legend><label>推理等级<select aria-label="推理等级" value={form.reasoning_effort ?? ""} onChange={(event) => setForm({ ...form, reasoning_effort: event.target.value || null })}><option value="">不设置</option>{["low", "medium", "high", "xhigh"].map((value) => <option key={value}>{value}</option>)}</select></label><label>最大输出 Token<input type="number" min="1" value={form.max_output_tokens ?? ""} onChange={(event) => setForm({ ...form, max_output_tokens: event.target.value ? Number(event.target.value) : null })} /></label></fieldset>}
-              {form.model_type === "image" && <fieldset><legend>图片配置</legend><label>默认图片尺寸<input aria-label="默认图片尺寸" value={String(form.settings.default_size ?? "")} onChange={(event) => setForm({ ...form, settings: { ...form.settings, default_size: event.target.value, supported_sizes: [event.target.value] } })} /></label><label>单次最大图片数<input type="number" min="1" max="48" value={Number(form.settings.max_images_per_request ?? 4)} onChange={(event) => setForm({ ...form, settings: { ...form.settings, max_images_per_request: Number(event.target.value) } })} /></label></fieldset>}
+              {form.model_type === "image" && <fieldset><legend>图片配置</legend><label>默认图片尺寸<input aria-label="默认图片尺寸" value={String(form.settings.default_size ?? "")} onChange={(event) => { const value = event.target.value; setForm({ ...form, settings: { ...form.settings, default_size: value, supported_sizes: value.trim() ? [value.trim()] : [] } }); }} /></label><label>单次最大图片数<input aria-label="单次最大图片数" type="number" min="1" max="48" disabled={form.api_protocol === "volcengine_ark_images"} value={form.api_protocol === "volcengine_ark_images" ? 1 : Number(form.settings.max_images_per_request ?? 4)} onChange={(event) => setForm({ ...form, settings: { ...form.settings, max_images_per_request: Number(event.target.value) } })} /></label></fieldset>}
               {form.model_type === "video" && <fieldset><legend>视频配置</legend><label>支持分辨率<input placeholder="1080p, 720p" value={String((form.settings.resolutions as string[] | undefined)?.join(", ") ?? "")} onChange={(event) => setForm({ ...form, settings: { ...form.settings, resolutions: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) } })} /></label><div className="fieldRow"><label>最短时长<input type="number" min="1" value={Number(form.settings.min_duration_seconds ?? 5)} onChange={(event) => setForm({ ...form, settings: { ...form.settings, min_duration_seconds: Number(event.target.value) } })} /></label><label>最长时长<input type="number" min="1" value={Number(form.settings.max_duration_seconds ?? 10)} onChange={(event) => setForm({ ...form, settings: { ...form.settings, max_duration_seconds: Number(event.target.value) } })} /></label></div></fieldset>}
               <label>备注<textarea rows={3} value={form.remark} onChange={(event) => setForm({ ...form, remark: event.target.value })} /></label>
               <footer><button type="button" onClick={() => setDrawerOpen(false)}>取消</button><button className="primaryButton" disabled={saving} type="submit">{saving ? "保存中..." : "保存模型"}</button></footer>

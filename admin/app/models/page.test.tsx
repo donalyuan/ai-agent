@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createApiClient } from "../lib/api";
 import { ModelManagementPage } from "./ModelManagementPage";
@@ -69,6 +69,124 @@ describe("AI 模型管理页面", () => {
     fireEvent.change(screen.getByLabelText("模型类型"), { target: { value: "image" } });
     expect(screen.getByLabelText("默认图片尺寸")).toBeInTheDocument();
     expect(screen.queryByLabelText("推理等级")).not.toBeInTheDocument();
+  });
+
+  it("按模型类型限制 API 协议和凭据", async () => {
+    const fetcher = vi.fn(() => jsonResponse({ models: [] }));
+    render(
+      <ModelManagementPage
+        client={createApiClient({ baseUrl: "http://api.test", fetcher })}
+      />,
+    );
+    await screen.findByText("当前类型暂无模型");
+
+    fireEvent.click(screen.getByRole("button", { name: "添加模型" }));
+    const dialog = screen.getByRole("dialog", { name: "添加 AI 模型" });
+    const modelType = within(dialog).getByLabelText("模型类型");
+    const protocolNames = () => within(
+      within(dialog).getByLabelText("API 调用协议"),
+    ).getAllByRole("option").map((option) => option.textContent);
+
+    expect(protocolNames()).toEqual([
+      "OpenAI Responses",
+      "OpenAI Chat Completions",
+    ]);
+
+    fireEvent.change(modelType, { target: { value: "image" } });
+    expect(protocolNames()).toEqual(["OpenAI Images", "火山方舟图片生成"]);
+    const protocol = within(dialog).getByLabelText("API 调用协议");
+    fireEvent.change(protocol, { target: { value: "volcengine_ark_images" } });
+    expect(within(dialog).queryByLabelText("API Secret")).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText("单次最大图片数")).toHaveValue(1);
+    expect(within(dialog).getByLabelText("单次最大图片数")).toBeDisabled();
+
+    fireEvent.change(modelType, { target: { value: "video" } });
+    expect(protocolNames()).toEqual(["Runway API", "可灵 API"]);
+  });
+
+  it("提交 Ark Bearer 配置并保持空图片尺寸", async () => {
+    const fetcher = vi.fn(
+      (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ models: [] }),
+    );
+    render(
+      <ModelManagementPage
+        client={createApiClient({ baseUrl: "http://api.test", fetcher })}
+      />,
+    );
+    await screen.findByText("当前类型暂无模型");
+
+    fireEvent.click(screen.getByRole("button", { name: "添加模型" }));
+    const dialog = screen.getByRole("dialog", { name: "添加 AI 模型" });
+    fireEvent.change(within(dialog).getByLabelText("模型类型"), {
+      target: { value: "image" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("API 调用协议"), {
+      target: { value: "volcengine_ark_images" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("显示名称"), {
+      target: { value: "Seedream Ark" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("供应商"), {
+      target: { value: "火山引擎" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("上游模型标识"), {
+      target: { value: "doubao-seedream-5-0-260128" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("请求地址"), {
+      target: { value: "https://ark.cn-beijing.volces.com/api/v3" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("API Key"), {
+      target: { value: "test-key" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("默认图片尺寸"), {
+      target: { value: "" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存模型" }));
+
+    await waitFor(() => {
+      const createCall = fetcher.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(createCall).toBeDefined();
+      const payload = JSON.parse(String(createCall?.[1]?.body));
+      expect(payload.api_protocol).toBe("volcengine_ark_images");
+      expect(payload.auth_scheme).toBe("bearer");
+      expect(payload.api_secret).toBeNull();
+      expect(payload.settings).toEqual({
+        supported_sizes: [],
+        default_size: null,
+        max_images_per_request: 1,
+      });
+    });
+  });
+
+  it("设为默认使用 POST 并在成功后刷新列表", async () => {
+    const replacement = {
+      ...textModel,
+      model_id: "22222222-2222-4222-8222-222222222222",
+      display_name: "GPT Backup",
+      is_default: false,
+      version: 3,
+    };
+    const fetcher = vi.fn(() => jsonResponse({ models: [textModel, replacement] }));
+    render(
+      <ModelManagementPage
+        client={createApiClient({ baseUrl: "http://api.test", fetcher })}
+      />,
+    );
+    await screen.findByText("GPT Backup");
+
+    fireEvent.click(screen.getByRole("button", { name: "设为默认" }));
+
+    await waitFor(() => {
+      expect(fetcher).toHaveBeenCalledWith(
+        `http://api.test/api/admin/models/${replacement.model_id}/default`,
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ version: 3 }),
+        }),
+      );
+    });
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("编辑凭据留空并为默认停用展示替代确认", async () => {

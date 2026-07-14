@@ -78,7 +78,7 @@ pub enum ApiProtocol {
     OpenAiChatCompletions,
     #[serde(rename = "openai_images")]
     OpenAiImages,
-    JimengVisual,
+    VolcengineArkImages,
     RunwayApi,
     KlingApi,
 }
@@ -89,7 +89,7 @@ impl ApiProtocol {
             Self::OpenAiResponses => "openai_responses",
             Self::OpenAiChatCompletions => "openai_chat_completions",
             Self::OpenAiImages => "openai_images",
-            Self::JimengVisual => "jimeng_visual",
+            Self::VolcengineArkImages => "volcengine_ark_images",
             Self::RunwayApi => "runway_api",
             Self::KlingApi => "kling_api",
         }
@@ -101,17 +101,20 @@ impl ApiProtocol {
             (
                 Self::OpenAiResponses | Self::OpenAiChatCompletions,
                 ModelType::Text
-            ) | (Self::OpenAiImages | Self::JimengVisual, ModelType::Image)
-                | (Self::RunwayApi | Self::KlingApi, ModelType::Video)
+            ) | (
+                Self::OpenAiImages | Self::VolcengineArkImages,
+                ModelType::Image
+            ) | (Self::RunwayApi | Self::KlingApi, ModelType::Video)
         )
     }
 
     pub const fn required_auth(self) -> AuthScheme {
         match self {
-            Self::JimengVisual | Self::KlingApi => AuthScheme::AccessKeySecret,
+            Self::KlingApi => AuthScheme::AccessKeySecret,
             Self::OpenAiResponses
             | Self::OpenAiChatCompletions
             | Self::OpenAiImages
+            | Self::VolcengineArkImages
             | Self::RunwayApi => AuthScheme::Bearer,
         }
     }
@@ -131,7 +134,7 @@ impl FromStr for ApiProtocol {
             "openai_responses" => Ok(Self::OpenAiResponses),
             "openai_chat_completions" => Ok(Self::OpenAiChatCompletions),
             "openai_images" => Ok(Self::OpenAiImages),
-            "jimeng_visual" => Ok(Self::JimengVisual),
+            "volcengine_ark_images" => Ok(Self::VolcengineArkImages),
             "runway_api" => Ok(Self::RunwayApi),
             "kling_api" => Ok(Self::KlingApi),
             _ => Err(ModelSettingsError::InvalidProtocol(value.to_string())),
@@ -152,8 +155,6 @@ pub struct ImageModelSettings {
     pub default_size: Option<String>,
     #[serde(default)]
     pub max_images_per_request: Option<u32>,
-    #[serde(default)]
-    pub request_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]

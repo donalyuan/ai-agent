@@ -80,12 +80,69 @@ def test_loader_returns_openai_images_runtime_config_and_safe_snapshot():
     assert "api_secret" not in snapshot
 
 
+def test_loader_returns_volcengine_ark_images_with_bearer_authentication():
+    registry, _ = registry_for(
+        image_model_row(
+            display_name="Seedream Ark",
+            provider_name="火山引擎",
+            api_protocol="volcengine_ark_images",
+            protocol_version="v3",
+            auth_scheme="bearer",
+            request_base_url="https://ark.cn-beijing.volces.com/api/v3",
+            upstream_model="doubao-seedream-5-0-260128",
+            settings={
+                "supported_sizes": [],
+                "default_size": None,
+                "max_images_per_request": 1,
+            },
+        )
+    )
+
+    config = registry.resolve_enabled(MODEL_ID, "image")
+
+    assert config.api_protocol == "volcengine_ark_images"
+    assert config.auth_scheme == "bearer"
+    assert config.request_base_url == "https://ark.cn-beijing.volces.com/api/v3"
+
+
 @pytest.mark.parametrize(
     ("row", "code"),
     [
         (None, "model_not_found"),
         (image_model_row(status="disabled"), "model_disabled"),
         (image_model_row(model_type="text"), "model_type_mismatch"),
+        (image_model_row(api_protocol="openai_responses"), "invalid_model_config"),
+        (image_model_row(api_protocol="jimeng_visual"), "invalid_model_config"),
+        (
+            image_model_row(
+                api_protocol="volcengine_ark_images",
+                auth_scheme="access_key_secret",
+            ),
+            "invalid_model_config",
+        ),
+        (
+            image_model_row(
+                api_protocol="volcengine_ark_images",
+                request_base_url="https://ark.cn-beijing.volces.com/api/v3?region=test",
+                settings={"max_images_per_request": 1},
+            ),
+            "invalid_model_config",
+        ),
+        (
+            image_model_row(
+                api_protocol="volcengine_ark_images",
+                request_base_url="https://ark.cn-beijing.volces.com/v1",
+                settings={"max_images_per_request": 1},
+            ),
+            "invalid_model_config",
+        ),
+        (
+            image_model_row(
+                api_protocol="volcengine_ark_images",
+                settings={"max_images_per_request": 4},
+            ),
+            "invalid_model_config",
+        ),
         (image_model_row(api_protocol="runway_api"), "invalid_model_config"),
     ],
 )

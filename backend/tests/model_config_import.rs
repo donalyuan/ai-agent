@@ -63,22 +63,17 @@ fn complete_config() -> LegacyModelImportConfig {
         image_api_key: Some("image-secret".to_string()),
         image_base_url: Some("https://images.example/v1/images/generations".to_string()),
         image_model: Some("image-upstream".to_string()),
-        jimeng_access_key: Some("jimeng-ak".to_string()),
-        jimeng_secret_key: Some("jimeng-sk".to_string()),
-        jimeng_request_key: Some("jimeng-request".to_string()),
-        jimeng_width: 1328,
-        jimeng_height: 1328,
     }
 }
 
 #[tokio::test]
-async fn import_creates_three_models_once_and_never_overwrites_admin_edits() {
+async fn import_creates_two_models_once_and_never_overwrites_admin_edits() {
     let (admin_pool, pool, database_name) = migrated_pool().await;
 
     let first = import_legacy_model_config(&pool, complete_config())
         .await
         .unwrap();
-    assert_eq!(first.created.len(), 3);
+    assert_eq!(first.created.len(), 2);
     assert!(first.skipped.is_empty());
     let rows = sqlx::query(
         "SELECT source_key, api_protocol, request_base_url, api_key, api_secret FROM ai_models ORDER BY source_key",
@@ -86,7 +81,7 @@ async fn import_creates_three_models_once_and_never_overwrites_admin_edits() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 2);
     let text = rows
         .iter()
         .find(|row| row.get::<String, _>("source_key") == "legacy:text-openai")
@@ -113,7 +108,7 @@ async fn import_creates_three_models_once_and_never_overwrites_admin_edits() {
         .await
         .unwrap();
     assert!(second.created.is_empty());
-    assert_eq!(second.skipped.len(), 3);
+    assert_eq!(second.skipped.len(), 2);
     let edited = sqlx::query_scalar::<_, String>(
         "SELECT request_base_url FROM ai_models WHERE source_key = 'legacy:text-openai'",
     )
@@ -133,7 +128,6 @@ async fn import_skips_incomplete_credentials_instead_of_creating_enabled_models(
     let mut config = complete_config();
     config.text_api_key = None;
     config.image_api_key = None;
-    config.jimeng_secret_key = None;
 
     let outcome = import_legacy_model_config(&pool, config).await.unwrap();
 

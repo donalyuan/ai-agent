@@ -127,6 +127,58 @@ fn text_payload(name: &str) -> Value {
     })
 }
 
+fn image_responses_payload(name: &str) -> Value {
+    json!({
+        "display_name": name,
+        "model_type": "image",
+        "provider_name": "zeek-ai",
+        "api_protocol": "openai_responses",
+        "protocol_version": "v1",
+        "auth_scheme": "bearer",
+        "request_base_url": "https://api.example.com/v1",
+        "upstream_model": "gpt-image-2",
+        "api_key": "secret-key-1234",
+        "api_secret": null,
+        "timeout_seconds": 120,
+        "reasoning_effort": null,
+        "max_output_tokens": null,
+        "settings": {
+            "supported_sizes": ["1024x1024"],
+            "default_size": "1024x1024",
+            "max_images_per_request": 4
+        },
+        "sort_order": 10,
+        "remark": "Responses 图片模型",
+        "is_default": false
+    })
+}
+
+fn ark_image_payload(name: &str, request_base_url: &str) -> Value {
+    json!({
+        "display_name": name,
+        "model_type": "image",
+        "provider_name": "火山引擎",
+        "api_protocol": "volcengine_ark_images",
+        "protocol_version": "v3",
+        "auth_scheme": "bearer",
+        "request_base_url": request_base_url,
+        "upstream_model": "doubao-seedream-5-0-260128",
+        "api_key": "ark-secret-key-1234",
+        "api_secret": null,
+        "timeout_seconds": 120,
+        "reasoning_effort": null,
+        "max_output_tokens": null,
+        "settings": {
+            "supported_sizes": [],
+            "default_size": null,
+            "max_images_per_request": 1
+        },
+        "sort_order": 10,
+        "remark": "Seedream Ark",
+        "is_default": false
+    })
+}
+
 async fn send(
     app: &axum::Router,
     method: &str,
@@ -208,6 +260,68 @@ async fn admin_crud_masks_credentials_and_options_omit_sensitive_configuration()
             "options leaked {forbidden}"
         );
     }
+
+    pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn admin_rejects_image_responses_protocol() {
+    let (admin_pool, pool, database_name, test_url) = migrated_pool().await;
+    let app = build_app_with_state(app_state(test_url, pool.clone()));
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/admin/models",
+        Some(image_responses_payload("Responses Image")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"]["code"], "invalid_model_config");
+
+    pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn admin_accepts_and_normalizes_volcengine_ark_images_protocol() {
+    let (admin_pool, pool, database_name, test_url) = migrated_pool().await;
+    let app = build_app_with_state(app_state(test_url, pool.clone()));
+
+    let mut payload = ark_image_payload(
+        "Seedream Ark",
+        "https://ark.cn-beijing.volces.com/api/v3/images/generations/",
+    );
+    payload["api_secret"] = json!("legacy-secret-must-not-be-stored");
+    let (status, created) = send(&app, "POST", "/api/admin/models", Some(payload)).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "unexpected response: {created}"
+    );
+    assert_eq!(created["api_protocol"], "volcengine_ark_images");
+    assert_eq!(created["auth_scheme"], "bearer");
+    assert_eq!(
+        created["request_base_url"],
+        "https://ark.cn-beijing.volces.com/api/v3"
+    );
+    assert_eq!(created["api_secret_configured"], false);
+
+    let (invalid_status, invalid) = send(
+        &app,
+        "POST",
+        "/api/admin/models",
+        Some(ark_image_payload(
+            "Invalid Ark URL",
+            "https://ark.cn-beijing.volces.com/api/v3?region=cn-beijing",
+        )),
+    )
+    .await;
+    assert_eq!(invalid_status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(invalid["error"]["code"], "invalid_model_config");
 
     pool.close().await;
     drop_database(&admin_pool, &database_name).await;

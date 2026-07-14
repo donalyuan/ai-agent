@@ -481,7 +481,7 @@ fn image_provider_for_protocol(
 ) -> Result<AssetGenerationProvider, AssetGenerationApplicationError> {
     match protocol {
         ApiProtocol::OpenAiImages => Ok(AssetGenerationProvider::GptImage2),
-        ApiProtocol::JimengVisual => Ok(AssetGenerationProvider::Jimeng),
+        ApiProtocol::VolcengineArkImages => Ok(AssetGenerationProvider::VolcengineArk),
         _ => Err(ModelResolveError::InvalidConfig(Uuid::nil()).into()),
     }
 }

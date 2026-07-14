@@ -83,7 +83,7 @@ export type AiModelProtocol =
   | "openai_responses"
   | "openai_chat_completions"
   | "openai_images"
-  | "jimeng_visual"
+  | "volcengine_ark_images"
   | "runway_api"
   | "kling_api";
 export type AuthScheme = "bearer" | "access_key_secret";
@@ -271,7 +271,7 @@ export function setDefaultAiModel(
   payload: { version: number },
 ) {
   return request<AiModel>(client, `/api/admin/models/${modelId}/default`, {
-    method: "PUT",
+    method: "POST",
     body: payload,
   });
 }

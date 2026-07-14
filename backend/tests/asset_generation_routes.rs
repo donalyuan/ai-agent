@@ -91,7 +91,7 @@ fn app_state(test_url: String, pool: PgPool) -> AppState {
         test_url,
         pool,
         "/app/storage/assets".to_string(),
-        vec!["gpt-image-2".to_string(), "jimeng".to_string()],
+        vec!["gpt-image-2".to_string(), "volcengine-ark".to_string()],
     )
 }
 
@@ -140,21 +140,19 @@ fn openai_image_model_id() -> Uuid {
     Uuid::from_u128(1)
 }
 
-fn jimeng_image_model_id() -> Uuid {
+fn ark_image_model_id() -> Uuid {
     Uuid::from_u128(2)
 }
 
 async fn insert_image_model(pool: &PgPool, model_id: Uuid, protocol: &str, status: &str) {
-    let (auth_scheme, api_secret, settings) = if protocol == "jimeng_visual" {
+    let (request_base_url, settings) = if protocol == "volcengine_ark_images" {
         (
-            "access_key_secret",
-            Some("test-secret"),
-            json!({"supported_sizes":["1328x1328"],"default_size":"1328x1328","request_key":"test"}),
+            "https://ark.cn-beijing.volces.com/api/v3",
+            json!({"supported_sizes":[],"default_size":null,"max_images_per_request":1}),
         )
     } else {
         (
-            "bearer",
-            None,
+            "https://example.invalid/v1",
             json!({"supported_sizes":["1024x1024"],"default_size":"1024x1024"}),
         )
     };
@@ -162,15 +160,14 @@ async fn insert_image_model(pool: &PgPool, model_id: Uuid, protocol: &str, statu
         r#"
         INSERT INTO ai_models (
             id, display_name, model_type, provider_name, api_protocol, auth_scheme,
-            request_base_url, upstream_model, api_key, api_secret, status, settings
-        ) VALUES ($1, '测试图片模型', 'image', 'test', $2, $3,
-                  'https://example.invalid/v1', 'test-image', 'test-key', $4, $5, $6)
+            request_base_url, upstream_model, api_key, status, settings
+        ) VALUES ($1, '测试图片模型', 'image', 'test', $2, 'bearer',
+                  $3, 'test-image', 'test-key', $4, $5)
         "#,
     )
     .bind(model_id)
     .bind(protocol)
-    .bind(auth_scheme)
-    .bind(api_secret)
+    .bind(request_base_url)
     .bind(status)
     .bind(settings)
     .execute(pool)
@@ -297,7 +294,7 @@ async fn assets_route_serves_generated_files_from_configured_storage_root() {
         .join("generated")
         .join("images")
         .join("task-1")
-        .join("scene-1.png");
+        .join("别硬扛，用Debug解决烦心事-镜头01-第01张.png");
     std::fs::create_dir_all(image_path.parent().unwrap()).unwrap();
     std::fs::write(&image_path, b"png").unwrap();
 
@@ -305,13 +302,15 @@ async fn assets_route_serves_generated_files_from_configured_storage_root() {
         test_url,
         test_pool.clone(),
         path_to_string(asset_root.clone()),
-        vec!["gpt-image-2".to_string(), "jimeng".to_string()],
+        vec!["gpt-image-2".to_string(), "volcengine-ark".to_string()],
     ));
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/assets/generated/images/task-1/scene-1.png")
+                .uri(
+                    "/assets/generated/images/task-1/%E5%88%AB%E7%A1%AC%E6%89%9B%EF%BC%8C%E7%94%A8Debug%E8%A7%A3%E5%86%B3%E7%83%A6%E5%BF%83%E4%BA%8B-%E9%95%9C%E5%A4%B401-%E7%AC%AC01%E5%BC%A0.png",
+                )
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -573,8 +572,8 @@ async fn asset_generation_plan_uses_enabled_database_model_configuration() {
     let (script_id, _) = insert_script_with_scenes(&test_pool, project_id, 1).await;
     insert_image_model(
         &test_pool,
-        jimeng_image_model_id(),
-        "jimeng_visual",
+        ark_image_model_id(),
+        "volcengine_ark_images",
         "enabled",
     )
     .await;
@@ -585,7 +584,7 @@ async fn asset_generation_plan_uses_enabled_database_model_configuration() {
         .unwrap();
     let app = build_app_with_state(app_state(test_url, test_pool.clone()));
 
-    let jimeng_response = app
+    let ark_response = app
         .clone()
         .oneshot(
             Request::builder()
@@ -594,7 +593,7 @@ async fn asset_generation_plan_uses_enabled_database_model_configuration() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "model_id": jimeng_image_model_id(),
+                        "model_id": ark_image_model_id(),
                         "image_candidates_per_scene": 3,
                         "use_reference_materials": false
                     })
@@ -604,10 +603,10 @@ async fn asset_generation_plan_uses_enabled_database_model_configuration() {
         )
         .await
         .unwrap();
-    assert_eq!(jimeng_response.status(), StatusCode::OK);
-    let jimeng_plan = response_json(jimeng_response).await;
-    assert_eq!(jimeng_plan["model_id"], jimeng_image_model_id().to_string());
-    assert_eq!(jimeng_plan["provider"], "jimeng");
+    assert_eq!(ark_response.status(), StatusCode::OK);
+    let ark_plan = response_json(ark_response).await;
+    assert_eq!(ark_plan["model_id"], ark_image_model_id().to_string());
+    assert_eq!(ark_plan["provider"], "volcengine-ark");
 
     let disabled_response = app
         .oneshot(
@@ -644,8 +643,8 @@ async fn asset_generation_routes_validate_provider_reject_and_scene_regenerate()
     let project_id = insert_project(&test_pool).await;
     insert_image_model(
         &test_pool,
-        jimeng_image_model_id(),
-        "jimeng_visual",
+        ark_image_model_id(),
+        "volcengine_ark_images",
         "enabled",
     )
     .await;
@@ -742,7 +741,7 @@ async fn asset_generation_routes_validate_provider_reject_and_scene_regenerate()
                 .header("idempotency-key", Uuid::new_v4().to_string())
                 .body(Body::from(
                     json!({
-                        "model_id": jimeng_image_model_id(),
+                        "model_id": ark_image_model_id(),
                         "image_candidates_per_scene": 2,
                         "use_reference_materials": false
                     })
@@ -754,8 +753,8 @@ async fn asset_generation_routes_validate_provider_reject_and_scene_regenerate()
         .unwrap();
     assert_eq!(scene_task_response.status(), StatusCode::CREATED);
     let scene_task = response_json(scene_task_response).await;
-    assert_eq!(scene_task["provider"], "jimeng");
-    assert_eq!(scene_task["model_id"], jimeng_image_model_id().to_string());
+    assert_eq!(scene_task["provider"], "volcengine-ark");
+    assert_eq!(scene_task["model_id"], ark_image_model_id().to_string());
     assert_eq!(scene_task["task_type"], "image_candidates");
     assert_eq!(scene_task["status"], "pending");
     assert_eq!(scene_task["candidate_count"], 2);

@@ -8,14 +8,14 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AssetGenerationProvider {
     GptImage2,
-    Jimeng,
+    VolcengineArk,
 }
 
 impl AssetGenerationProvider {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::GptImage2 => "gpt-image-2",
-            Self::Jimeng => "jimeng",
+            Self::VolcengineArk => "volcengine-ark",
         }
     }
 }
@@ -26,7 +26,7 @@ impl TryFrom<&str> for AssetGenerationProvider {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "gpt-image-2" => Ok(Self::GptImage2),
-            "jimeng" => Ok(Self::Jimeng),
+            "volcengine-ark" => Ok(Self::VolcengineArk),
             other => Err(AssetGenerationParseError::Provider(other.to_string())),
         }
     }

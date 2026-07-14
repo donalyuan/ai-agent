@@ -303,6 +303,10 @@ describe("api client", () => {
       method: "PUT",
       body: JSON.stringify({ ...payload, version: 2, api_key: "" }),
     });
+    expect(fetchMock.mock.calls[3][1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ version: 3 }),
+    });
     expect(fetchMock.mock.calls[5][1]).toMatchObject({ method: "DELETE" });
   });
 });

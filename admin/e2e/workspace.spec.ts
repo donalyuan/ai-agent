@@ -59,6 +59,25 @@ test("admin 首屏是平台管理后台，不展示视频生产流程", async ({
   await expect(page.getByRole("heading", { name: "平台管理后台" })).toBeVisible();
 });
 
+test("火山方舟图片协议表单固定 Bearer 与单候选", async ({ page }) => {
+  await page.route(/\/api\/admin\/models(?:\?.*)?$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { models: [] } });
+  });
+  await page.goto("/models");
+
+  await page.getByRole("button", { name: "添加模型" }).click();
+  const drawer = page.getByRole("dialog", { name: "添加 AI 模型" });
+  await drawer.getByLabel("模型类型").selectOption("image");
+  await expect(drawer.getByRole("option", { name: "火山方舟图片生成" })).toHaveCount(1);
+  await expect(drawer.getByRole("option", { name: "即梦 Visual" })).toHaveCount(0);
+  await drawer.getByLabel("API 调用协议").selectOption("volcengine_ark_images");
+
+  await expect(drawer.getByLabel("API Secret")).toHaveCount(0);
+  await expect(drawer.getByLabel("默认图片尺寸")).toHaveValue("");
+  await expect(drawer.getByLabel("单次最大图片数")).toHaveValue("1");
+  await expect(drawer.getByLabel("单次最大图片数")).toBeDisabled();
+});
+
 test("AI 模型管理使用 mocked API 完成创建、编辑、默认替换、停用和删除", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 948 });
   const replacementModel = {
@@ -110,7 +129,7 @@ test("AI 模型管理使用 mocked API 完成创建、编辑、默认替换、�
       await route.fulfill({ contentType: "application/json", json: updated });
       return;
     }
-    if (method === "PUT" && path.endsWith("/default")) {
+    if (method === "POST" && path.endsWith("/default")) {
       models = models.map((item) => ({
         ...item,
         is_default: item.model_id === modelId,

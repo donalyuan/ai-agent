@@ -115,6 +115,25 @@ async fn constraint_exists(pool: &PgPool, table_name: &str, constraint_name: &st
     .expect("constraint existence query should run")
 }
 
+async fn constraint_definition(pool: &PgPool, table_name: &str, constraint_name: &str) -> String {
+    sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT pg_get_constraintdef(constraint_info.oid)
+        FROM pg_constraint constraint_info
+        JOIN pg_class table_info ON table_info.oid = constraint_info.conrelid
+        JOIN pg_namespace namespace ON namespace.oid = table_info.relnamespace
+        WHERE namespace.nspname = 'public'
+          AND table_info.relname = $1
+          AND constraint_info.conname = $2
+        "#,
+    )
+    .bind(table_name)
+    .bind(constraint_name)
+    .fetch_one(pool)
+    .await
+    .expect("constraint definition should be queryable")
+}
+
 async fn create_database(
     admin_pool: &PgPool,
     admin_url: &str,
@@ -277,6 +296,92 @@ async fn migrations_create_video_agent_core_schema() {
             "{constraint} should constrain model configuration"
         );
     }
+    let protocol_constraint =
+        constraint_definition(&test_pool, "ai_models", "ai_models_protocol_check").await;
+    let type_protocol_constraint =
+        constraint_definition(&test_pool, "ai_models", "ai_models_type_protocol_check").await;
+    assert!(protocol_constraint.contains("volcengine_ark_images"));
+    assert!(!protocol_constraint.contains("jimeng_visual"));
+    assert!(type_protocol_constraint.contains("volcengine_ark_images"));
+    assert!(!type_protocol_constraint.contains("jimeng_visual"));
+
+    let ark_insert = sqlx::query(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key, settings
+        )
+        VALUES (
+            'Seedream Ark', 'image', '火山引擎', 'volcengine_ark_images', 'bearer',
+            'https://ark.cn-beijing.volces.com/api/v3',
+            'doubao-seedream-5-0-260128', 'test-key',
+            '{"supported_sizes":[],"default_size":null,"max_images_per_request":1}'
+        )
+        "#,
+    )
+    .execute(&test_pool)
+    .await;
+    assert!(ark_insert.is_ok(), "Ark image model should be accepted");
+
+    let legacy_jimeng_insert = sqlx::query(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key, api_secret
+        )
+        VALUES (
+            'Legacy Jimeng', 'image', '火山引擎', 'jimeng_visual', 'access_key_secret',
+            'https://visual.volcengineapi.com', 'jimeng-visual', 'test-ak', 'test-sk'
+        )
+        "#,
+    )
+    .execute(&test_pool)
+    .await;
+    assert!(
+        legacy_jimeng_insert.is_err(),
+        "legacy jimeng_visual should be rejected"
+    );
+    let image_responses_insert = sqlx::query(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key
+        )
+        VALUES (
+            'Responses 图片模型', 'image', 'test', 'openai_responses', 'bearer',
+            'https://example.invalid/v1', 'gpt-image-2', 'test-key'
+        )
+        "#,
+    )
+    .execute(&test_pool)
+    .await;
+    assert!(
+        image_responses_insert.is_err(),
+        "image models should reject openai_responses after the rollback migration"
+    );
+    for (name, model_type, protocol) in [
+        ("Invalid Image Chat", "image", "openai_chat_completions"),
+        ("Invalid Video Responses", "video", "openai_responses"),
+    ] {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO ai_models (
+                display_name, model_type, provider_name, api_protocol, auth_scheme,
+                request_base_url, upstream_model, api_key
+            )
+            VALUES ($1, $2, 'test', $3, 'bearer', 'https://example.invalid/v1', 'test-model', 'test-key')
+            "#,
+        )
+        .bind(name)
+        .bind(model_type)
+        .bind(protocol)
+        .execute(&test_pool)
+        .await;
+        assert!(
+            result.is_err(),
+            "{model_type} should reject incompatible protocol {protocol}"
+        );
+    }
     let default_model_predicate =
         unique_partial_index_predicate(&test_pool, "ai_models_one_default_per_type")
             .await
@@ -323,14 +428,23 @@ async fn migrations_create_video_agent_core_schema() {
         "in-flight scene image task index should cover pending and processing image tasks, got {in_flight_scene_task_predicate}"
     );
     assert!(
-        !constraint_exists(
+        constraint_exists(
             &test_pool,
             "asset_generation_tasks",
             "asset_generation_tasks_provider_check"
         )
         .await,
-        "legacy provider audit value must not restrict database-backed model providers"
+        "task provider audit values should be constrained"
     );
+    let provider_constraint = constraint_definition(
+        &test_pool,
+        "asset_generation_tasks",
+        "asset_generation_tasks_provider_check",
+    )
+    .await;
+    assert!(provider_constraint.contains("volcengine-ark"));
+    assert!(provider_constraint.contains("gpt-image-2"));
+    assert!(!provider_constraint.contains("jimeng"));
     assert!(
         constraint_exists(
             &test_pool,

@@ -7,6 +7,7 @@ use serde_json::Value;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
 use std::fmt;
 use std::str::FromStr;
+use url::Url;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -198,16 +199,23 @@ pub trait AiModelRepository: Send + Sync {
 #[async_trait]
 impl AiModelRepository for PostgresAiModelRepository {
     async fn create(&self, input: CreateAiModelInput) -> Result<AiModel, AiModelRepositoryError> {
+        let request_base_url =
+            normalize_request_base_url(input.api_protocol, &input.request_base_url)?;
+        let api_secret = if input.auth_scheme == AuthScheme::AccessKeySecret {
+            input.api_secret.clone().filter(|value| !value.is_empty())
+        } else {
+            None
+        };
         validate_configuration(ModelConfiguration {
             model_type: input.model_type,
             api_protocol: input.api_protocol,
             auth_scheme: input.auth_scheme,
             display_name: &input.display_name,
             provider_name: &input.provider_name,
-            request_base_url: &input.request_base_url,
+            request_base_url: &request_base_url,
             upstream_model: &input.upstream_model,
             api_key: &input.api_key,
-            api_secret: input.api_secret.as_deref(),
+            api_secret: api_secret.as_deref(),
             timeout_seconds: input.timeout_seconds,
             reasoning_effort: input.reasoning_effort.as_deref(),
             max_output_tokens: input.max_output_tokens,
@@ -255,10 +263,10 @@ impl AiModelRepository for PostgresAiModelRepository {
         .bind(input.api_protocol.as_str())
         .bind(input.protocol_version.trim())
         .bind(input.auth_scheme.as_str())
-        .bind(normalize_base_url(&input.request_base_url))
+        .bind(request_base_url)
         .bind(input.upstream_model.trim())
         .bind(input.api_key)
-        .bind(input.api_secret.filter(|value| !value.is_empty()))
+        .bind(api_secret)
         .bind(input.timeout_seconds)
         .bind(normalize_optional(input.reasoning_effort))
         .bind(input.max_output_tokens)
@@ -341,6 +349,8 @@ impl AiModelRepository for PostgresAiModelRepository {
         id: Uuid,
         input: UpdateAiModelInput,
     ) -> Result<AiModel, AiModelRepositoryError> {
+        let request_base_url =
+            normalize_request_base_url(input.api_protocol, &input.request_base_url)?;
         let mut transaction = self.pool.begin().await?;
         let current = get_for_update(&mut transaction, id).await?;
         ensure_version(&current, input.version)?;
@@ -353,12 +363,16 @@ impl AiModelRepository for PostgresAiModelRepository {
             .filter(|value| !value.is_empty())
             .unwrap_or(&current.api_key)
             .clone();
-        let api_secret = input
-            .api_secret
-            .as_ref()
-            .filter(|value| !value.is_empty())
-            .cloned()
-            .or_else(|| current.api_secret.clone());
+        let api_secret = if input.auth_scheme == AuthScheme::AccessKeySecret {
+            input
+                .api_secret
+                .as_ref()
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .or_else(|| current.api_secret.clone())
+        } else {
+            None
+        };
         lock_model_types(&mut transaction, current.model_type, input.model_type).await?;
         validate_configuration(ModelConfiguration {
             model_type: input.model_type,
@@ -366,7 +380,7 @@ impl AiModelRepository for PostgresAiModelRepository {
             auth_scheme: input.auth_scheme,
             display_name: &input.display_name,
             provider_name: &input.provider_name,
-            request_base_url: &input.request_base_url,
+            request_base_url: &request_base_url,
             upstream_model: &input.upstream_model,
             api_key: &api_key,
             api_secret: api_secret.as_deref(),
@@ -418,7 +432,7 @@ impl AiModelRepository for PostgresAiModelRepository {
         .bind(input.api_protocol.as_str())
         .bind(input.protocol_version.trim())
         .bind(input.auth_scheme.as_str())
-        .bind(normalize_base_url(&input.request_base_url))
+        .bind(request_base_url)
         .bind(input.upstream_model.trim())
         .bind(api_key)
         .bind(api_secret)
@@ -733,8 +747,20 @@ fn validate_configuration(config: ModelConfiguration<'_>) -> Result<(), AiModelR
             "text inference fields are only valid for text models".to_string(),
         ));
     }
-    ModelSettings::parse(config.model_type, config.settings.clone())
+    let settings = ModelSettings::parse(config.model_type, config.settings.clone())
         .map_err(|error| AiModelRepositoryError::InvalidConfig(error.to_string()))?;
+    if config.api_protocol == ApiProtocol::VolcengineArkImages {
+        let ModelSettings::Image(settings) = settings else {
+            return Err(AiModelRepositoryError::InvalidConfig(
+                "Ark Images protocol requires image settings".to_string(),
+            ));
+        };
+        if settings.max_images_per_request != Some(1) {
+            return Err(AiModelRepositoryError::InvalidConfig(
+                "Ark Images max_images_per_request must be 1".to_string(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -908,6 +934,41 @@ fn model_from_row(row: sqlx::postgres::PgRow) -> Result<AiModel, AiModelReposito
 
 fn normalize_base_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_string()
+}
+
+/// Ark 配置只保存请求根地址，稳定生成路径由 Worker adapter 追加。
+fn normalize_request_base_url(
+    protocol: ApiProtocol,
+    value: &str,
+) -> Result<String, AiModelRepositoryError> {
+    if protocol != ApiProtocol::VolcengineArkImages {
+        return Ok(normalize_base_url(value));
+    }
+
+    let mut url = Url::parse(value.trim()).map_err(|error| {
+        AiModelRepositoryError::InvalidConfig(format!("invalid Ark request URL: {error}"))
+    })?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "Ark request URL must be HTTP(S) without query or fragment".to_string(),
+        ));
+    }
+
+    let path = url.path().trim_end_matches('/').to_string();
+    let root_path = path
+        .strip_suffix("/images/generations")
+        .unwrap_or(path.as_str());
+    if !root_path.ends_with("/api/v3") {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "Ark request URL path must end with /api/v3 or /api/v3/images/generations".to_string(),
+        ));
+    }
+    url.set_path(root_path);
+    Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
 fn normalize_optional(value: Option<String>) -> Option<String> {

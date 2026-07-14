@@ -16,6 +16,7 @@
 /apps/video-agent/playwright-report/
 /apps/video-agent/test-results/
 /apps/video-agent/*.tsbuildinfo
+/.playwright-mcp/
 /services/video-worker/.pytest_cache/
 /services/video-worker/**/__pycache__/
 /services/video-worker/src/*.egg-info/

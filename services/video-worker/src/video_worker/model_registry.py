@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
+from urllib.parse import urlsplit
 
 
 class ModelRegistryError(RuntimeError):
@@ -84,9 +85,9 @@ class PostgresModelRegistry:
 
         protocol = str(row["api_protocol"])
         auth_scheme = str(row["auth_scheme"])
-        if protocol not in {"openai_images", "jimeng_visual"}:
+        if protocol not in {"openai_images", "volcengine_ark_images"}:
             raise ModelRegistryError("invalid_model_config", "图片模型协议无效")
-        expected_auth = "access_key_secret" if protocol == "jimeng_visual" else "bearer"
+        expected_auth = "bearer"
         if auth_scheme != expected_auth:
             raise ModelRegistryError("invalid_model_config", "图片模型认证协议无效")
 
@@ -102,9 +103,19 @@ class PostgresModelRegistry:
             or not upstream_model
             or timeout_seconds <= 0
             or not isinstance(settings, dict)
-            or (expected_auth == "access_key_secret" and not api_secret)
         ):
             raise ModelRegistryError("invalid_model_config", "图片模型配置无效")
+        if protocol == "volcengine_ark_images":
+            parsed_url = urlsplit(request_base_url)
+            if (
+                parsed_url.scheme not in {"http", "https"}
+                or not parsed_url.netloc
+                or parsed_url.query
+                or parsed_url.fragment
+                or not parsed_url.path.rstrip("/").endswith("/api/v3")
+                or settings.get("max_images_per_request") != 1
+            ):
+                raise ModelRegistryError("invalid_model_config", "火山方舟图片模型配置无效")
 
         return ImageModelRuntimeConfig(
             model_id=str(row["id"]),
