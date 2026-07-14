@@ -5,6 +5,7 @@ pub mod ai_models;
 pub mod asset_generation;
 pub mod conversations;
 pub mod health;
+pub mod material_upload;
 pub mod materials;
 pub mod projects;
 pub mod scripts;

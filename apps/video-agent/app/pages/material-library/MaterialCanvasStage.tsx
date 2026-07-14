@@ -9,6 +9,7 @@ import type { Material, MaterialType } from "../../lib/api";
 import { getMaterialPreview, materialStatusLabels, materialTypeLabels } from "./materialModel";
 
 export type MaterialCanvasStageProps = {
+  detailOpen: boolean;
   materials: Material[];
   selectedMaterialId: string | null;
   width: number;
@@ -16,20 +17,24 @@ export type MaterialCanvasStageProps = {
   onSelectMaterial: (materialId: string) => void;
 };
 
-type CanvasNode = {
+export type CanvasNode = {
   material: Material;
   x: number;
   y: number;
 };
 
 export function MaterialCanvasStage({
+  detailOpen,
   materials,
   selectedMaterialId,
   width,
   height,
   onSelectMaterial,
 }: MaterialCanvasStageProps) {
-  const nodes = useMemo(() => materialCanvasNodes(materials), [materials]);
+  const nodes = useMemo(
+    () => materialCanvasNodes(materials, width, detailOpen),
+    [detailOpen, materials, width],
+  );
 
   return (
     <Stage className="materialKonvaStage" height={height} width={width}>
@@ -56,11 +61,31 @@ export function MaterialCanvasStage({
   );
 }
 
-function materialCanvasNodes(materials: Material[]): CanvasNode[] {
+export const MATERIAL_CANVAS_NODE_WIDTH = 206;
+export const MATERIAL_CANVAS_NODE_HEIGHT = 154;
+
+export function materialCanvasNodes(
+  materials: Material[],
+  width: number,
+  detailOpen: boolean,
+): CanvasNode[] {
+  const leftInset = 340;
+  const rightInset = detailOpen ? 376 : 24;
+  const columnGap = 24;
+  const rowGap = 30;
+  const availableWidth = Math.max(
+    MATERIAL_CANVAS_NODE_WIDTH,
+    width - leftInset - rightInset,
+  );
+  const columnCount = Math.max(
+    1,
+    Math.floor((availableWidth + columnGap) / (MATERIAL_CANVAS_NODE_WIDTH + columnGap)),
+  );
+
   return materials.map((material, index) => ({
     material,
-    x: 360 + (index % 3) * 210,
-    y: 120 + Math.floor(index / 3) * 170,
+    x: leftInset + (index % columnCount) * (MATERIAL_CANVAS_NODE_WIDTH + columnGap),
+    y: 96 + Math.floor(index / columnCount) * (MATERIAL_CANVAS_NODE_HEIGHT + rowGap),
   }));
 }
 
@@ -87,22 +112,22 @@ function MaterialCanvasNode({
       <Rect
         cornerRadius={8}
         fill="#ffffff"
-        height={132}
+        height={MATERIAL_CANVAS_NODE_HEIGHT}
         shadowBlur={selected ? 14 : 4}
         shadowColor={selected ? "#2f6df6" : "#9aa7b2"}
         shadowOpacity={selected ? 0.22 : 0.12}
         stroke={selected ? "#2f6df6" : "#cfd8e3"}
         strokeWidth={selected ? 2 : 1}
-        width={176}
+        width={MATERIAL_CANVAS_NODE_WIDTH}
       />
       {image ? (
-        <KonvaImage height={72} image={image} width={152} x={12} y={12} />
+        <KonvaImage height={76} image={image} width={182} x={12} y={12} />
       ) : (
         <Rect
           cornerRadius={6}
           fill={materialTypeColor(node.material.material_type)}
-          height={72}
-          width={152}
+          height={76}
+          width={182}
           x={12}
           y={12}
         />
@@ -111,21 +136,33 @@ function MaterialCanvasNode({
         fill="#f8fafc"
         fontSize={14}
         fontStyle="bold"
-        height={72}
+        height={76}
         text={image ? "" : typeLabel}
         verticalAlign="middle"
-        width={152}
+        width={182}
         x={12}
         y={12}
       />
-      <Text fill="#172033" fontSize={13} fontStyle="bold" text={node.material.file_name} width={152} x={12} y={92} />
+      <Text
+        ellipsis
+        fill="#172033"
+        fontSize={12}
+        fontStyle="bold"
+        height={32}
+        lineHeight={1.15}
+        text={node.material.file_name}
+        width={182}
+        wrap="char"
+        x={12}
+        y={96}
+      />
       <Text
         fill="#5f6c7b"
-        fontSize={11}
+        fontSize={10}
         text={`${typeLabel} · ${materialStatusLabels[node.material.status]}`}
-        width={152}
+        width={182}
         x={12}
-        y={112}
+        y={134}
       />
     </Group>
   );

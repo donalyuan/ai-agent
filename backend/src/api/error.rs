@@ -162,6 +162,10 @@ impl From<MaterialApplicationError> for ScriptApiError {
             MaterialApplicationError::ProjectNotFound(project_id) => {
                 Self::Agent(ScriptAgentError::ProjectNotFound(project_id))
             }
+            MaterialApplicationError::UploadValidation(error) => {
+                Self::MaterialValidation(error.to_string())
+            }
+            MaterialApplicationError::UploadStorage(message) => Self::State(message),
         }
     }
 }

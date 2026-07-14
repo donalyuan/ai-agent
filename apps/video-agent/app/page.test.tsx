@@ -101,6 +101,7 @@ vi.mock("./lib/api", async (importOriginal) => {
     getLatestTopicQualityEvaluation: vi.fn(),
     createContentTopic: vi.fn(),
     createMaterial: vi.fn(),
+    uploadMaterial: vi.fn(),
     deleteContentTopic: vi.fn(),
     getMaterial: vi.fn(),
     updateMaterial: vi.fn(),
@@ -715,6 +716,24 @@ const archivedSubtitleMaterial: Material = {
   updated_at: "2026-07-09T00:10:00Z",
 };
 
+const uploadedImageMaterial: Material = {
+  ...subtitleMaterial,
+  material_id: "cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd",
+  material_type: "image",
+  file_url: "http://api.test/assets/uploads/project/cover.png",
+  file_name: "办公桌面近景",
+  tags: ["办公", "场景"],
+  metadata: {
+    source: "user_upload",
+    storage_provider: "local",
+    mime_type: "image/png",
+    format: "png",
+    file_size_bytes: 2_515_456,
+    width: 1920,
+    height: 1080,
+  },
+};
+
 const assetGenerationPlan: AssetGenerationPlanResponse = {
   script_id: scriptDetail.script_id,
   scene_count: scriptDetail.scenes.length,
@@ -1181,7 +1200,7 @@ describe("video-agent 视频工作台页面", () => {
     expect(screen.getByText("还没有素材")).toBeInTheDocument();
     expect(screen.getByLabelText("素材画布")).toBeInTheDocument();
     expect(screen.getByLabelText("素材资产浮层")).toBeInTheDocument();
-    expect(screen.getByLabelText("素材详情浮层")).toBeInTheDocument();
+    expect(screen.queryByLabelText("素材详情浮层")).not.toBeInTheDocument();
     expect(api.listMaterials).toHaveBeenCalledWith(expect.anything(), project.project_id, {
       material_type: "all",
       status: "active",
@@ -1190,23 +1209,24 @@ describe("video-agent 视频工作台页面", () => {
     });
   });
 
-  it("素材库空状态点击开始登记后进入新建状态并聚焦名称", async () => {
+  it("素材库空状态点击上传后进入文件选择状态", async () => {
     vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
     mockProjects({ projects: [project] });
     mockMaterials([]);
 
     render(createElement(Home));
     fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "开始登记" }));
+    fireEvent.click(await screen.findByRole("button", { name: "上传素材" }));
 
-    expect(screen.getByText("正在登记新素材")).toBeInTheDocument();
-    expect(screen.getByText("填写右侧表单后保存到当前账号素材库。")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.getByLabelText("素材名称")).toHaveFocus();
-    });
+    expect(screen.getByRole("heading", { name: "上传素材" })).toBeInTheDocument();
+    expect(screen.getByLabelText("素材文件")).toBeInTheDocument();
+    expect(screen.queryByLabelText("素材 URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("缩略图 URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("来源备注")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("授权备注")).not.toBeInTheDocument();
   });
 
-  it("素材库画布展示字幕素材、资产浮层、详情浮层和底部工具栏", async () => {
+  it("素材库默认隐藏详情，选择字幕素材后打开并可关闭", async () => {
     vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
     mockProjects({ projects: [project] });
     mockMaterials([subtitleMaterial]);
@@ -1215,49 +1235,108 @@ describe("video-agent 视频工作台页面", () => {
     fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
 
     expect(await screen.findByRole("heading", { name: "素材库" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /demo.vtt/ })).toBeInTheDocument();
+    const materialButton = screen.getByRole("button", { name: /demo.vtt/ });
+    expect(materialButton).toBeInTheDocument();
     expect(screen.getAllByText("字幕").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByLabelText("素材 URL")).toHaveValue(subtitleMaterial.file_url);
+    expect(screen.queryByLabelText("素材详情浮层")).not.toBeInTheDocument();
+
+    fireEvent.click(materialButton);
+
+    expect(screen.getByLabelText("素材详情浮层")).toBeInTheDocument();
+    expect(screen.getByLabelText("素材名称")).toHaveValue(subtitleMaterial.file_name);
+    expect(screen.getByLabelText("标签")).toHaveValue("字幕, 中英双语");
+    expect(screen.getByText("字幕 · VTT")).toBeInTheDocument();
+    expect(screen.queryByLabelText("素材 URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("缩略图 URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("来源备注")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("授权备注")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("时长")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("格式")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("宽度")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("高度")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看demo.vtt大图" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("画布工具栏")).toBeInTheDocument();
     expect(screen.queryByText("Assets")).not.toBeInTheDocument();
     expect(screen.queryByText("Detail")).not.toBeInTheDocument();
     expect(screen.queryByText("语义检索")).not.toBeInTheDocument();
     expect(screen.queryByText("分镜候选")).not.toBeInTheDocument();
     expect(screen.queryByText("素材清单确认")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭素材详情" }));
+    expect(screen.queryByLabelText("素材详情浮层")).not.toBeInTheDocument();
   });
 
-  it("素材库可新增素材并选中新素材", async () => {
+  it("素材库选择文件后自动填充名称并上传素材", async () => {
     vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
     mockProjects({ projects: [project] });
     mockMaterials([]);
 
+    vi.mocked(api.uploadMaterial).mockResolvedValue(uploadedImageMaterial);
+
     render(createElement(Home));
     fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "新增素材" }));
-    fireEvent.change(screen.getByLabelText("素材名称"), { target: { value: "demo.vtt" } });
-    fireEvent.change(screen.getByLabelText("素材 URL"), {
-      target: { value: "https://cdn.example.com/subtitles/demo.vtt" },
-    });
-    fireEvent.click(screen.getByLabelText("类型：字幕"));
-    fireEvent.change(screen.getByLabelText("标签"), { target: { value: "字幕, 中英双语" } });
-    fireEvent.change(screen.getByLabelText("字幕语言"), { target: { value: "zh-CN" } });
-    fireEvent.change(screen.getByLabelText("字幕格式"), { target: { value: "vtt" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存素材" }));
+    fireEvent.click(await screen.findByRole("button", { name: "上传素材" }));
+    const file = new File(["png"], "办公桌面近景.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("素材文件"), { target: { files: [file] } });
+
+    expect(screen.getByLabelText("素材名称")).toHaveValue("办公桌面近景");
+    fireEvent.change(screen.getByLabelText("标签（选填）"), { target: { value: "办公, 场景" } });
+    fireEvent.click(screen.getByRole("button", { name: "上传并保存" }));
 
     await waitFor(() => {
-      expect(api.createMaterial).toHaveBeenCalledWith(expect.anything(), project.project_id, {
-        material_type: "subtitle",
-        file_url: "https://cdn.example.com/subtitles/demo.vtt",
-        thumbnail_url: null,
-        file_name: "demo.vtt",
-        tags: ["字幕", "中英双语"],
-        metadata: {
-          language: "zh-CN",
-          subtitle_format: "vtt",
-        },
+      expect(api.uploadMaterial).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+        file,
+        file_name: "办公桌面近景",
+        tags: ["办公", "场景"],
       });
     });
-    expect(await screen.findByRole("button", { name: /demo.vtt/ })).toBeInTheDocument();
+    expect(
+      await within(screen.getByLabelText("素材资产浮层")).findByRole("button", {
+        name: /办公桌面近景/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("图片详情可打开、缩放并关闭大图预览", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockMaterials([uploadedImageMaterial]);
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /办公桌面近景/ }));
+    const previewTrigger = screen.getByRole("button", { name: "查看办公桌面近景大图" });
+    fireEvent.click(previewTrigger);
+
+    expect(screen.getByRole("dialog", { name: "图片大图预览" })).toBeInTheDocument();
+    expect(screen.getByText("100%")).toBeInTheDocument();
+    const zoomIn = screen.getByRole("button", { name: "放大图片" });
+    for (let index = 0; index < 4; index += 1) {
+      fireEvent.click(zoomIn);
+    }
+    expect(screen.getByText("200%")).toBeInTheDocument();
+    expect(zoomIn).toBeDisabled();
+    const zoomOut = screen.getByRole("button", { name: "缩小图片" });
+    for (let index = 0; index < 6; index += 1) {
+      fireEvent.click(zoomOut);
+    }
+    expect(screen.getByText("50%")).toBeInTheDocument();
+    expect(zoomOut).toBeDisabled();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "图片大图预览" })).not.toBeInTheDocument();
+    await waitFor(() => expect(previewTrigger).toHaveFocus());
+
+    fireEvent.click(previewTrigger);
+    fireEvent.click(screen.getByRole("button", { name: "关闭大图预览" }));
+    expect(screen.queryByRole("dialog", { name: "图片大图预览" })).not.toBeInTheDocument();
+    await waitFor(() => expect(previewTrigger).toHaveFocus());
+
+    fireEvent.click(previewTrigger);
+    const dialog = screen.getByRole("dialog", { name: "图片大图预览" });
+    fireEvent.mouseDown(dialog.parentElement as HTMLElement);
+    expect(screen.queryByRole("dialog", { name: "图片大图预览" })).not.toBeInTheDocument();
+    await waitFor(() => expect(previewTrigger).toHaveFocus());
   });
 
   it("素材库可归档、查看归档并恢复素材", async () => {

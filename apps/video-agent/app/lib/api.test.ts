@@ -40,6 +40,7 @@ import {
   updateMaterialStatus,
   updateProjectStrategyProfile,
   updateScriptStatus,
+  uploadMaterial,
 } from "./api";
 import type { MaterialPayload } from "./api";
 
@@ -795,6 +796,64 @@ describe("video-agent api client", () => {
     expect(detail.file_name).toBe("demo.vtt");
     expect(updated.file_name).toBe("demo-updated.vtt");
     expect(archived.status).toBe("archived");
+  });
+
+  it("使用 multipart 上传素材且不手工设置 content-type", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        ...material,
+        material_type: "image",
+        file_url: "/assets/uploads/project/upload.png",
+        thumbnail_url: null,
+        file_name: "封面素材",
+      }),
+    );
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+    const file = new File(["png"], "cover.png", { type: "image/png" });
+
+    const uploaded = await uploadMaterial(client, project.project_id, {
+      file,
+      file_name: "封面素材",
+      tags: ["封面", "办公"],
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`http://api.test/api/projects/${project.project_id}/materials/upload`);
+    expect(init?.method).toBe("POST");
+    expect(init?.headers).toEqual({ accept: "application/json" });
+    expect(init?.body).toBeInstanceOf(FormData);
+    const body = init?.body as FormData;
+    expect(body.get("file")).toBe(file);
+    expect(body.get("file_name")).toBe("封面素材");
+    expect(body.get("tags")).toBe(JSON.stringify(["封面", "办公"]));
+    expect(uploaded.file_url).toBe("http://api.test/assets/uploads/project/upload.png");
+  });
+
+  it("编辑自管素材时回传稳定相对地址且不改写外部地址", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(material))
+      .mockResolvedValueOnce(jsonResponse(material));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await updateMaterial(client, material.material_id, {
+      ...materialPayload,
+      file_url: "http://api.test/assets/uploads/project/upload.png",
+      thumbnail_url: "http://api.test/assets/uploads/project/thumb.png",
+    });
+    await updateMaterial(client, material.material_id, {
+      ...materialPayload,
+      file_url: "https://cdn.example.com/assets/external.png",
+      thumbnail_url: null,
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      file_url: "/assets/uploads/project/upload.png",
+      thumbnail_url: "/assets/uploads/project/thumb.png",
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+      file_url: "https://cdn.example.com/assets/external.png",
+      thumbnail_url: null,
+    });
   });
 
   it("创建素材生成计划和批量任务", async () => {

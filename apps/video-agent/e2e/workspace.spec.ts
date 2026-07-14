@@ -643,6 +643,30 @@ const subtitleMaterial = {
   updated_at: "2026-07-09T00:00:00Z",
 };
 
+const uploadedImageMaterial = {
+  ...subtitleMaterial,
+  material_id: "cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd",
+  material_type: "image",
+  file_url: `/assets/uploads/${projectId}/office.png`,
+  thumbnail_url: null,
+  file_name: "办公桌面近景",
+  tags: ["办公", "场景"],
+  metadata: {
+    source: "user_upload",
+    storage_provider: "local",
+    mime_type: "image/png",
+    format: "png",
+    file_size_bytes: 68,
+    width: 1,
+    height: 1,
+  },
+};
+
+const png1x1 = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+
 const assetGenerationPayload = {
   model_id: imageModelId,
   image_candidates_per_scene: 3,
@@ -1284,6 +1308,7 @@ async function mockEmptyContentStrategyWorkflow(page: Page) {
 }
 
 async function mockMaterialLibraryWorkflow(page: Page) {
+  const materials: typeof uploadedImageMaterial[] = [];
   await page.unroute(/\/api\/video-workspace\/menus$/);
   await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
     await route.fulfill({ contentType: "application/json", json: { menus: materialWorkspaceMenus } });
@@ -1306,8 +1331,17 @@ async function mockMaterialLibraryWorkflow(page: Page) {
       json: { scripts: [], total: 0, limit: 20, offset: 0 },
     });
   });
+  await page.route(new RegExp(`/api/projects/${projectId}/materials/upload$`), async (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().headers()["content-type"]).toContain("multipart/form-data; boundary=");
+    materials.splice(0, materials.length, uploadedImageMaterial);
+    await route.fulfill({ status: 201, contentType: "application/json", json: uploadedImageMaterial });
+  });
   await page.route(new RegExp(`/api/projects/${projectId}/materials(\\?.*)?$`), async (route) => {
-    await route.fulfill({ contentType: "application/json", json: { materials: [subtitleMaterial] } });
+    await route.fulfill({ contentType: "application/json", json: { materials } });
+  });
+  await page.route(/\/assets\/uploads\/.*\/office\.png$/, async (route) => {
+    await route.fulfill({ status: 200, contentType: "image/png", body: png1x1 });
   });
 }
 
@@ -1767,7 +1801,7 @@ test("内容策略空选题池布局贴近原型顶部", async ({ page }) => {
   expect(emptyHeight).toBeLessThanOrEqual(150);
 });
 
-test("素材库画布展示第一版素材管理闭环", async ({ page }) => {
+test("素材库上传后回填系统信息并支持大图预览", async ({ page }) => {
   await mockMaterialLibraryWorkflow(page);
   await page.goto("/");
   await page.getByRole("navigation", { name: "视频工作台菜单" }).getByRole("button", { name: /素材管理/ }).click();
@@ -1782,9 +1816,52 @@ test("素材库画布展示第一版素材管理闭环", async ({ page }) => {
   expect(headingInset!).toBeGreaterThanOrEqual(16);
   await expect(page.getByLabel("素材画布")).toBeVisible();
   await expect(page.getByLabel("素材资产浮层")).toBeVisible();
-  await expect(page.getByLabel("素材详情浮层")).toBeVisible();
+  await expect(page.getByLabel("素材详情浮层")).toHaveCount(0);
   await expect(page.getByLabel("画布工具栏")).toBeVisible();
   await expect(page.locator(".materialCanvasWorkspace canvas")).toBeVisible();
+  await page.getByRole("button", { name: "上传素材" }).click();
+  await expect(page.getByLabel("素材详情浮层")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "上传素材" })).toBeVisible();
+  await page.getByLabel("素材文件").setInputFiles({
+    name: "办公桌面近景.png",
+    mimeType: "image/png",
+    buffer: png1x1,
+  });
+  await expect(page.getByLabel("素材名称")).toHaveValue("办公桌面近景");
+  await page.getByLabel("标签（选填）").fill("办公, 场景");
+  await page.getByRole("button", { name: "上传并保存" }).click();
+
+  const materialButton = page.getByLabel("素材资产浮层").getByRole("button", { name: /办公桌面近景/ });
+  await expect(materialButton).toBeVisible();
+  await expect(page.getByText("图片 · PNG · 1 × 1 · 68 B")).toBeVisible();
+  await expect(page.getByLabel("素材 URL")).toHaveCount(0);
+  await expect(page.getByLabel("缩略图 URL")).toHaveCount(0);
+  await expect(page.getByLabel("来源备注")).toHaveCount(0);
+  await expect(page.getByLabel("授权备注")).toHaveCount(0);
+  await expect(page.getByLabel("格式")).toHaveCount(0);
+  await expect(page.getByLabel("宽度")).toHaveCount(0);
+  await expect(page.getByLabel("高度")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "查看办公桌面近景大图" }).click();
+  await expect(page.getByRole("dialog", { name: "图片大图预览" })).toBeVisible();
+  await expect(page.getByText("100%")).toBeVisible();
+  await page.getByRole("button", { name: "放大图片" }).click();
+  await expect(page.getByText("125%")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "图片大图预览" })).toHaveCount(0);
+
+  const detailContentFlow = await page.getByLabel("素材详情浮层").evaluate((panel) => {
+    const previewRect = panel.querySelector(".materialDetailPreview")?.getBoundingClientRect();
+    const formRect = panel.querySelector(".materialForm")?.getBoundingClientRect();
+    return previewRect && formRect
+      ? {
+          formTop: Math.round(formRect.top),
+          previewBottom: Math.round(previewRect.bottom),
+        }
+      : null;
+  });
+  expect(detailContentFlow).not.toBeNull();
+  expect(detailContentFlow!.formTop).toBeGreaterThanOrEqual(detailContentFlow!.previewBottom + 8);
   const canvasCoverage = await page.locator(".materialCanvasWorkspace").evaluate((workspace) => {
     const workspaceRect = workspace.getBoundingClientRect();
     const canvasRect = workspace.querySelector("canvas")?.getBoundingClientRect();
@@ -1801,10 +1878,9 @@ test("素材库画布展示第一版素材管理闭环", async ({ page }) => {
   expect(canvasCoverage!.canvasRightGap).toBeLessThanOrEqual(2);
   expect(canvasCoverage!.canvasBottomGap).toBeLessThanOrEqual(2);
   expect(canvasCoverage!.detailCoveredByCanvas).toBe(true);
-  await expect(page.getByRole("button", { name: /demo\.vtt/ })).toBeVisible();
-  await expect(page.getByText("字幕").first()).toBeVisible();
-  await expect(page.getByLabel("素材 URL")).toBeVisible();
   await expect(page.getByText("语义检索")).toHaveCount(0);
   await expect(page.getByText("分镜候选")).toHaveCount(0);
   await expect(page.getByText("素材清单确认")).toHaveCount(0);
+  await page.getByRole("button", { name: "关闭素材详情" }).click();
+  await expect(page.getByLabel("素材详情浮层")).toHaveCount(0);
 });

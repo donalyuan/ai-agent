@@ -41,7 +41,6 @@ import {
   createApiClient,
   createAssetGenerationTasks,
   createContentTopic,
-  createMaterial,
   createSceneAssetGenerationTask,
   createTopicGroupReview,
   deleteContentTopic,
@@ -74,6 +73,7 @@ import {
   updateMaterialStatus,
   updateProjectStrategyProfile,
   updateScriptStatus,
+  uploadMaterial,
 } from "./lib/api";
 import { AccountStrategyPage } from "./pages/content-strategy/AccountStrategyPage";
 import { ContentStrategyPage, ScriptPreparationDialog } from "./pages/content-strategy/ContentStrategyPage";
@@ -103,8 +103,9 @@ import { AssetGenerationPage } from "./pages/asset-generation/AssetGenerationPag
 import { MaterialLibraryPage } from "./pages/material-library/MaterialLibraryPage";
 import {
   defaultMaterialForm,
-  materialPayloadFromForm,
+  materialEditPayload,
   materialToForm,
+  parseMaterialTags,
   type MaterialFormState,
 } from "./pages/material-library/materialModel";
 
@@ -229,6 +230,7 @@ export default function Home() {
   const [materialActionError, setMaterialActionError] = useState("");
   const [savingMaterial, setSavingMaterial] = useState(false);
   const [creatingMaterial, setCreatingMaterial] = useState(false);
+  const [materialUploadFile, setMaterialUploadFile] = useState<File | null>(null);
   const [materialFilters, setMaterialFilters] = useState<{
     material_type: MaterialType | "all";
     status: MaterialStatusFilter;
@@ -846,21 +848,16 @@ export default function Home() {
           return;
         }
         setMaterials(response.materials);
-        let nextSelected =
-          response.materials.find((material) => material.material_id === selectedMaterialId) ||
-          response.materials[0] ||
-          null;
-        setSelectedMaterialId((currentMaterialId) => {
-          const currentMaterial = response.materials.find(
-            (material) => material.material_id === currentMaterialId,
-          );
-          if (currentMaterial) {
-            nextSelected = currentMaterial;
-            return currentMaterialId;
-          }
-          return response.materials[0]?.material_id || null;
-        });
-        setMaterialForm(nextSelected ? materialToForm(nextSelected) : defaultMaterialForm);
+        const currentMaterial = selectedMaterialId
+          ? response.materials.find((material) => material.material_id === selectedMaterialId) || null
+          : null;
+        if (currentMaterial) {
+          setMaterialForm(materialToForm(currentMaterial));
+        } else {
+          setSelectedMaterialId(null);
+          setCreatingMaterial(false);
+          setMaterialForm(defaultMaterialForm);
+        }
       } catch (error) {
         if (active) {
           setMaterialError(errorToMessage(error));
@@ -1094,6 +1091,7 @@ export default function Home() {
     setMaterialActionError("");
     setSavingMaterial(false);
     setCreatingMaterial(false);
+    setMaterialUploadFile(null);
     setMaterialFilters({ material_type: "all", status: "active", q: "", tag: "" });
     setMaterialForm(defaultMaterialForm);
   }, [selectedProjectId]);
@@ -1213,6 +1211,24 @@ export default function Home() {
     setCreatingMaterial(true);
     setMaterialActionError("");
     setMaterialForm(defaultMaterialForm);
+    setMaterialUploadFile(null);
+  }
+
+  function handleMaterialUploadFile(file: File | null) {
+    setMaterialUploadFile(file);
+    if (!file) {
+      return;
+    }
+    const inferredName = file.name.replace(/\.[^.]+$/, "");
+    setMaterialForm((current) => ({ ...current, file_name: inferredName || file.name }));
+  }
+
+  function handleCloseMaterialDetail() {
+    setSelectedMaterialId(null);
+    setCreatingMaterial(false);
+    setMaterialActionError("");
+    setMaterialForm(defaultMaterialForm);
+    setMaterialUploadFile(null);
   }
 
   async function handleSaveMaterial() {
@@ -1221,13 +1237,12 @@ export default function Home() {
       return;
     }
 
-    const payload = materialPayloadFromForm(materialForm);
-    if (!payload.file_name) {
+    if (!materialForm.file_name.trim()) {
       setMaterialActionError("素材名称不能为空");
       return;
     }
-    if (!payload.file_url) {
-      setMaterialActionError("素材 URL 不能为空");
+    if (creatingMaterial && !materialUploadFile) {
+      setMaterialActionError("请选择要上传的素材文件");
       return;
     }
 
@@ -1235,9 +1250,17 @@ export default function Home() {
     setMaterialActionError("");
 
     try {
-      const savedMaterial = selectedMaterialId
-        ? await updateMaterial(client, selectedMaterialId, payload)
-        : await createMaterial(client, selectedProjectId, payload);
+      const savedMaterial = selectedMaterial
+        ? await updateMaterial(
+            client,
+            selectedMaterial.material_id,
+            materialEditPayload(selectedMaterial, materialForm),
+          )
+        : await uploadMaterial(client, selectedProjectId, {
+            file: materialUploadFile as File,
+            file_name: materialForm.file_name,
+            tags: parseMaterialTags(materialForm.tags_text),
+          });
       setMaterials((currentMaterials) => {
         const withoutSaved = currentMaterials.filter(
           (material) => material.material_id !== savedMaterial.material_id,
@@ -1246,6 +1269,7 @@ export default function Home() {
       });
       setSelectedMaterialId(savedMaterial.material_id);
       setCreatingMaterial(false);
+      setMaterialUploadFile(null);
       setMaterialForm(materialToForm(savedMaterial));
     } catch (error) {
       setMaterialActionError(errorToMessage(error));
@@ -2325,13 +2349,16 @@ export default function Home() {
           error={materialError}
           filters={materialFilters}
           form={materialForm}
+          uploadFile={materialUploadFile}
           creatingMaterial={creatingMaterial}
           loading={loadingMaterials}
           materials={materials}
           saving={savingMaterial}
           selectedMaterial={selectedMaterial}
           onFilterChange={setMaterialFilters}
+          onCloseDetail={handleCloseMaterialDetail}
           onFormChange={setMaterialForm}
+          onUploadFileChange={handleMaterialUploadFile}
           onNewMaterial={handleNewMaterial}
           onSaveMaterial={handleSaveMaterial}
           onSelectMaterial={handleSelectMaterial}

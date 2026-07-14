@@ -74,6 +74,7 @@
 - Compose 服务名：`ai-agent-api`、`ai-agent-video-worker`、`ai-agent-admin`、`ai-agent-video-agent`
 - 本项目服务容器内工作目录统一为 `/app`
 - `apps/video-agent` 本地开发默认不再通过 Compose 注入 `NEXT_PUBLIC_API_BASE_URL=http://localhost:18180`；浏览器端未显式配置 `NEXT_PUBLIC_API_BASE_URL` 时，按当前页面 `hostname` 派生同机 API 地址 `<protocol>//<hostname>:18180`，以支持 `http://<本机内网IP>:18183` 访问工作台并请求同机 API。
+- 本项目禁止调用 GitNexus，包括其 skill、MCP 工具及 `gitnexus` CLI；代码探查、影响分析和调试统一以仓库文件、Git 记录和实际运行结果为依据。
 
 ### 六大Agent
 1. **选题Agent**: 热点分析 + 爆款选题生成

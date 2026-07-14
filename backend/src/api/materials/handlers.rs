@@ -1,12 +1,102 @@
 use super::dto::*;
 use crate::api::error::{ScriptApiError, ValidJson};
+use crate::application::materials::MaterialUploadCommand;
 use crate::bootstrap::AppState;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{multipart::MultipartRejection, Multipart, Path, Query, State},
     http::StatusCode,
     Json,
 };
 use uuid::Uuid;
+
+struct MultipartMaterialFile {
+    original_file_name: String,
+    content_type: Option<String>,
+    bytes: Vec<u8>,
+}
+
+pub(super) async fn upload_material(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> Result<(StatusCode, Json<MaterialResponse>), ScriptApiError> {
+    let mut multipart = multipart.map_err(|_| invalid_multipart_request())?;
+    let mut file = None;
+    let mut file_name = None;
+    let mut tags = Vec::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| invalid_multipart_request())?
+    {
+        match field.name() {
+            Some("file") => {
+                let original_file_name = field
+                    .file_name()
+                    .map(str::to_string)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        ScriptApiError::MaterialValidation("上传文件缺少文件名".to_string())
+                    })?;
+                let content_type = field.content_type().map(str::to_string);
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|_| invalid_multipart_request())?;
+                file = Some(MultipartMaterialFile {
+                    original_file_name,
+                    content_type,
+                    bytes: bytes.to_vec(),
+                });
+            }
+            Some("file_name") => {
+                file_name = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|_| invalid_multipart_request())?,
+                );
+            }
+            Some("tags") => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|_| invalid_multipart_request())?;
+                tags = serde_json::from_str::<Vec<String>>(&value).map_err(|_| {
+                    ScriptApiError::MaterialValidation("素材标签格式无效".to_string())
+                })?;
+            }
+            _ => {}
+        }
+    }
+
+    let file = file
+        .ok_or_else(|| ScriptApiError::MaterialValidation("请选择要上传的素材文件".to_string()))?;
+    let fallback_name = std::path::Path::new(&file.original_file_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(&file.original_file_name);
+    let file_name = normalize_material_name(file_name.as_deref().unwrap_or(fallback_name))
+        .map_err(ScriptApiError::MaterialValidation)?;
+    let tags = normalize_material_tags(&tags).map_err(ScriptApiError::MaterialValidation)?;
+    let material = state
+        .material_service()?
+        .upload(MaterialUploadCommand {
+            project_id,
+            original_file_name: file.original_file_name,
+            content_type: file.content_type,
+            bytes: file.bytes,
+            file_name,
+            tags,
+        })
+        .await?;
+    Ok((StatusCode::CREATED, Json(MaterialResponse::from(material))))
+}
+
+fn invalid_multipart_request() -> ScriptApiError {
+    ScriptApiError::MaterialValidation("上传请求格式无效".to_string())
+}
 
 pub(super) async fn create_material(
     State(state): State<AppState>,

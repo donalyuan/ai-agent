@@ -157,6 +157,12 @@ export type MaterialPayload = {
   metadata: Record<string, unknown>;
 };
 
+export type MaterialUploadPayload = {
+  file: File;
+  file_name: string;
+  tags: string[];
+};
+
 export type MaterialListResponse = {
   materials: Material[];
 };
@@ -737,6 +743,30 @@ export function createMaterial(
   }).then((material) => normalizeMaterialUrls(client, material));
 }
 
+export async function uploadMaterial(
+  client: ApiClient,
+  projectId: string,
+  payload: MaterialUploadPayload,
+) {
+  const body = new FormData();
+  body.append("file", payload.file);
+  body.append("file_name", payload.file_name.trim());
+  body.append("tags", JSON.stringify(payload.tags));
+  const response = await client.fetcher(
+    `${client.baseUrl}/api/projects/${projectId}/materials/upload`,
+    {
+      method: "POST",
+      headers: { accept: "application/json" },
+      body,
+    },
+  );
+  const responseBody = await parseJson(response);
+  if (!response.ok) {
+    throw new ApiError(response.status, errorMessage(responseBody), responseBody);
+  }
+  return normalizeMaterialUrls(client, responseBody as Material);
+}
+
 export function getMaterial(client: ApiClient, materialId: string) {
   return request<Material>(client, `/api/materials/${materialId}`).then((material) =>
     normalizeMaterialUrls(client, material),
@@ -750,7 +780,11 @@ export function updateMaterial(
 ) {
   return request<Material>(client, `/api/materials/${materialId}`, {
     method: "PUT",
-    body: payload,
+    body: {
+      ...payload,
+      file_url: stableApiAssetUrl(client, payload.file_url),
+      thumbnail_url: stableApiAssetUrl(client, payload.thumbnail_url || null),
+    },
   }).then((material) => normalizeMaterialUrls(client, material));
 }
 
@@ -1075,6 +1109,11 @@ function normalizeMaterialUrls(client: ApiClient, material: Material): Material 
     file_url: resolveApiAssetUrl(client, material.file_url) || material.file_url,
     thumbnail_url: resolveApiAssetUrl(client, material.thumbnail_url),
   };
+}
+
+function stableApiAssetUrl(client: ApiClient, value: string | null): string | null {
+  const assetPrefix = `${client.baseUrl}/assets/`;
+  return value?.startsWith(assetPrefix) ? value.slice(client.baseUrl.length) : value;
 }
 
 function normalizeCandidateUrls(

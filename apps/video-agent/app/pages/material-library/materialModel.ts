@@ -8,34 +8,12 @@ import type {
 
 export type MaterialFormState = {
   file_name: string;
-  material_type: MaterialType;
-  file_url: string;
-  thumbnail_url: string;
   tags_text: string;
-  source_note: string;
-  license_note: string;
-  duration_sec: string;
-  format: string;
-  width: string;
-  height: string;
-  language: string;
-  subtitle_format: string;
 };
 
 export const defaultMaterialForm: MaterialFormState = {
   file_name: "",
-  material_type: "video",
-  file_url: "",
-  thumbnail_url: "",
   tags_text: "",
-  source_note: "",
-  license_note: "",
-  duration_sec: "",
-  format: "",
-  width: "",
-  height: "",
-  language: "",
-  subtitle_format: "",
 };
 
 export const materialTypeLabels: Record<MaterialType, string> = {
@@ -65,43 +43,35 @@ export const materialStatusFilterOptions: Array<{ value: MaterialStatusFilter; l
 ];
 
 export function materialToForm(material: Material): MaterialFormState {
-  const metadata = material.metadata;
   return {
     file_name: material.file_name,
-    material_type: material.material_type,
-    file_url: material.file_url,
-    thumbnail_url: material.thumbnail_url || metadataString(metadata.thumbnail_url),
     tags_text: material.tags.join(", "),
-    source_note: metadataString(metadata.source_note),
-    license_note: metadataString(metadata.license_note),
-    duration_sec: metadataString(metadata.duration_sec),
-    format: metadataString(metadata.format),
-    width: metadataString(metadata.width),
-    height: metadataString(metadata.height),
-    language: metadataString(metadata.language),
-    subtitle_format: metadataString(metadata.subtitle_format),
   };
 }
 
-export function materialPayloadFromForm(form: MaterialFormState): MaterialPayload {
-  const metadata: Record<string, unknown> = {};
-  setMetadataValue(metadata, "source_note", form.source_note);
-  setMetadataValue(metadata, "license_note", form.license_note);
-  setMetadataNumber(metadata, "duration_sec", form.duration_sec);
-  setMetadataValue(metadata, "format", form.format);
-  setMetadataNumber(metadata, "width", form.width);
-  setMetadataNumber(metadata, "height", form.height);
-  setMetadataValue(metadata, "language", form.language);
-  setMetadataValue(metadata, "subtitle_format", form.subtitle_format);
-
+export function materialEditPayload(
+  material: Material,
+  form: MaterialFormState,
+): MaterialPayload {
   return {
-    material_type: form.material_type,
-    file_url: form.file_url.trim(),
-    thumbnail_url: form.thumbnail_url.trim() || null,
+    material_type: material.material_type,
+    file_url: material.file_url,
+    thumbnail_url: material.thumbnail_url,
     file_name: form.file_name.trim(),
-    tags: parseTags(form.tags_text),
-    metadata,
+    tags: parseMaterialTags(form.tags_text),
+    metadata: material.metadata,
   };
+}
+
+export function parseMaterialTags(value: string) {
+  const tags: string[] = [];
+  for (const tag of value.split(/[,，\n]/)) {
+    const normalized = tag.trim();
+    if (normalized && !tags.includes(normalized)) {
+      tags.push(normalized);
+    }
+  }
+  return tags;
 }
 
 export function getMaterialPreview(material: Material) {
@@ -112,6 +82,28 @@ export function getMaterialPreview(material: Material) {
     return { imageUrl: material.file_url, label: materialTypeLabels.image };
   }
   return { imageUrl: null, label: materialTypeLabels[material.material_type] };
+}
+
+export function formatMaterialFileSummary(material: Material) {
+  const parts = [materialTypeLabels[material.material_type]];
+  const format = metadataString(material.metadata.format) || extensionFromName(material.file_name);
+  if (format) {
+    parts.push(format.toUpperCase());
+  }
+  const width = metadataNumber(material.metadata.width);
+  const height = metadataNumber(material.metadata.height);
+  if (width !== null && height !== null) {
+    parts.push(`${width} × ${height}`);
+  }
+  const duration = metadataNumber(material.metadata.duration_sec);
+  if (duration !== null) {
+    parts.push(`${duration.toFixed(1)} 秒`);
+  }
+  const fileSize = metadataNumber(material.metadata.file_size_bytes);
+  if (fileSize !== null) {
+    parts.push(formatFileSize(fileSize));
+  }
+  return parts.join(" · ");
 }
 
 export function formatMaterialDate(value: string) {
@@ -134,29 +126,28 @@ function metadataString(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
-function setMetadataValue(metadata: Record<string, unknown>, key: string, value: string) {
-  const normalized = value.trim();
-  if (normalized) {
-    metadata[key] = normalized;
+function metadataNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
   }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
-function setMetadataNumber(metadata: Record<string, unknown>, key: string, value: string) {
-  const normalized = value.trim();
-  if (!normalized) {
-    return;
-  }
-  const numberValue = Number(normalized);
-  metadata[key] = Number.isFinite(numberValue) ? numberValue : normalized;
+function extensionFromName(value: string) {
+  const match = value.match(/\.([^.]+)$/);
+  return match?.[1] || "";
 }
 
-function parseTags(value: string) {
-  const tags: string[] = [];
-  for (const tag of value.split(/[,，\n]/)) {
-    const normalized = tag.trim();
-    if (normalized && !tags.includes(normalized)) {
-      tags.push(normalized);
-    }
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) {
+    return `${Math.round(bytes)} B`;
   }
-  return tags;
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

@@ -40,25 +40,14 @@ impl MaterialPayloadRequest {
     }
 
     pub fn into_update_command(self) -> Result<MaterialUpdateCommand, String> {
-        let parts = self.normalized_parts()?;
         Ok(MaterialUpdateCommand {
-            material_type: parts.material_type,
-            file_url: parts.file_url,
-            file_name: parts.file_name,
-            thumbnail_url: parts.thumbnail_url,
-            tags: parts.tags,
-            metadata: parts.metadata,
+            file_name: normalize_material_name(&self.file_name)?,
+            tags: normalize_material_tags(&self.tags)?,
         })
     }
 
     fn normalized_parts(&self) -> Result<NormalizedMaterialPayload, String> {
-        let file_name = self.file_name.trim().to_string();
-        if file_name.is_empty() {
-            return Err("素材名称不能为空".to_string());
-        }
-        if file_name.chars().count() > 255 {
-            return Err("素材名称不能超过 255 个字符".to_string());
-        }
+        let file_name = normalize_material_name(&self.file_name)?;
 
         let material_type = MaterialType::try_from(self.material_type.trim())
             .map_err(|_| "素材类型无效".to_string())?;
@@ -196,7 +185,18 @@ fn normalize_http_url(label: &str, value: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
-fn normalize_material_tags(values: &[String]) -> Result<Vec<String>, String> {
+pub(crate) fn normalize_material_name(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_string();
+    if normalized.is_empty() {
+        return Err("素材名称不能为空".to_string());
+    }
+    if normalized.chars().count() > 255 {
+        return Err("素材名称不能超过 255 个字符".to_string());
+    }
+    Ok(normalized)
+}
+
+pub(crate) fn normalize_material_tags(values: &[String]) -> Result<Vec<String>, String> {
     if values.len() > 30 {
         return Err("素材标签最多填写 30 个".to_string());
     }

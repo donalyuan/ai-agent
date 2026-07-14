@@ -111,6 +111,7 @@ impl AppState {
         Ok(MaterialService::new(
             PostgresProjectRepository::new(pool.clone()),
             PostgresMaterialRepository::new(pool),
+            self.config.asset_storage_root.clone(),
         ))
     }
 
