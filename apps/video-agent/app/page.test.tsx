@@ -1441,6 +1441,67 @@ describe("video-agent 视频工作台页面", () => {
     expect(api.listAssetGenerationTasks).not.toHaveBeenCalled();
   });
 
+  it("素材生成页仅允许 AI 图片候选打开、缩放并关闭大图预览", async () => {
+    mockProjects({ projects: [project] });
+    mockScripts({ scripts: [scriptSummary], total: 1, limit: 20, offset: 0 });
+    vi.mocked(api.listAssetCandidates).mockResolvedValue({
+      candidates: [
+        selectedExistingCandidate,
+        aiImageCandidate,
+        {
+          ...failedAiImageCandidate,
+          file_name: "failed-with-stale-url.png",
+          file_url: "http://api.test/assets/generated/images/task/failed-with-stale-url.png",
+        },
+        videoTaskCandidate,
+      ],
+    });
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "素材生成" }));
+
+    const panel = await screen.findByRole("region", { name: "脚本详情素材候选" });
+    const previewTriggers = within(panel).getAllByRole("button", { name: /^查看.*大图$/ });
+    expect(previewTriggers).toHaveLength(1);
+    expect(previewTriggers[0]).toHaveAccessibleName("查看scene-1.png大图");
+    expect(
+      within(panel).queryByRole("button", { name: `查看${selectedExistingCandidate.file_name}大图` }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(previewTriggers[0]);
+    const dialog = screen.getByRole("dialog", { name: "图片大图预览" });
+    expect(within(dialog).getByText("scene-1.png")).toBeInTheDocument();
+    expect(within(dialog).getByText("AI 生成图片候选")).toBeInTheDocument();
+    expect(within(dialog).getByRole("img", { name: "scene-1.png" })).toHaveAttribute(
+      "src",
+      aiImageCandidate.thumbnail_url,
+    );
+    expect(api.selectAssetCandidate).not.toHaveBeenCalled();
+    expect(api.rejectAssetCandidate).not.toHaveBeenCalled();
+
+    const zoomIn = within(dialog).getByRole("button", { name: "放大图片" });
+    for (let index = 0; index < 4; index += 1) {
+      fireEvent.click(zoomIn);
+    }
+    expect(within(dialog).getByText("200%")).toBeInTheDocument();
+    expect(zoomIn).toBeDisabled();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "图片大图预览" })).not.toBeInTheDocument();
+    await waitFor(() => expect(previewTriggers[0]).toHaveFocus());
+
+    fireEvent.click(previewTriggers[0]);
+    fireEvent.click(screen.getByRole("button", { name: "关闭大图预览" }));
+    expect(screen.queryByRole("dialog", { name: "图片大图预览" })).not.toBeInTheDocument();
+    await waitFor(() => expect(previewTriggers[0]).toHaveFocus());
+
+    fireEvent.click(previewTriggers[0]);
+    const reopenedDialog = screen.getByRole("dialog", { name: "图片大图预览" });
+    fireEvent.mouseDown(reopenedDialog.parentElement as HTMLElement);
+    expect(screen.queryByRole("dialog", { name: "图片大图预览" })).not.toBeInTheDocument();
+    await waitFor(() => expect(previewTriggers[0]).toHaveFocus());
+  });
+
   it("素材生成页展示素材候选三栏并触发生成、选择、排除、重生和视频确认", async () => {
     mockProjects({ projects: [project] });
     mockScripts({ scripts: [scriptSummary], total: 1, limit: 20, offset: 0 });

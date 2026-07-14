@@ -1463,6 +1463,20 @@ test("素材生成页支持生成选择主素材并确认生成视频", async ({
   await expect(panel.getByText("scene-1.png")).toBeVisible();
   await expect(panel.getByRole("button", { name: "选择为主素材" }).first()).toBeVisible();
 
+  const previewTrigger = panel.getByRole("button", { name: "查看scene-1.png大图" });
+  await expect(previewTrigger).toBeVisible();
+  await expect(panel.getByRole("button", { name: "查看current-primary.png大图" })).toHaveCount(0);
+  await previewTrigger.click();
+  const imageDialog = page.getByRole("dialog", { name: "图片大图预览" });
+  await expect(imageDialog).toBeVisible();
+  await expect(imageDialog.getByText("scene-1.png")).toBeVisible();
+  await expect(imageDialog.getByText("AI 生成图片候选")).toBeVisible();
+  await imageDialog.getByRole("button", { name: "放大图片" }).click();
+  await expect(imageDialog.getByText("125%")).toBeVisible();
+  await imageDialog.getByRole("button", { name: "关闭大图预览" }).click();
+  await expect(imageDialog).toHaveCount(0);
+  await expect(previewTrigger).toBeFocused();
+
   await panel.getByRole("button", { name: "选择为主素材" }).first().click();
   await expect.poll(() => assetWorkflow.selectAssetCandidateRequestCount()).toBe(1);
   await expect(panel.getByText("当前主素材")).toBeVisible();

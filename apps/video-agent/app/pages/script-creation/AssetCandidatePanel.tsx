@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { ImagePreviewDialog } from "../../components/ImagePreviewDialog";
 import type {
   AssetGenerationPlanResponse,
   AssetGenerationTask,
@@ -74,6 +75,11 @@ export function AssetCandidatePanel({
   onSelectScene,
   onUseReferenceMaterialsChange,
 }: AssetCandidatePanelProps) {
+  const previewTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [imagePreview, setImagePreview] = useState<{
+    imageUrl: string;
+    title: string;
+  } | null>(null);
   const scenes = sortScenesBySequence(script.scenes);
   const activeScene = scenes.find((scene) => scene.scene_id === selectedSceneId) || scenes[0] || null;
   const activeSceneCandidates = activeScene ? candidatesForScene(candidates, activeScene.scene_id) : [];
@@ -95,6 +101,28 @@ export function AssetCandidatePanel({
   const imageTaskEntries = imageTasksForScene(tasks, activeScene?.scene_id || null);
   const videoTaskEntries = videoTasksForScene(tasks, activeScene?.scene_id || null);
   const taskToDismiss = tasks.find((task) => task.task_id === taskToDismissId) || null;
+
+  const openImagePreview = (candidate: SceneAssetCandidate, trigger: HTMLButtonElement) => {
+    const imageUrl = candidatePreviewUrl(candidate);
+    if (!imageUrl) {
+      return;
+    }
+    previewTriggerRef.current = trigger;
+    setImagePreview({
+      imageUrl,
+      title: candidate.file_name || "AI 图片候选",
+    });
+  };
+
+  const closeImagePreview = () => {
+    const trigger = previewTriggerRef.current;
+    setImagePreview(null);
+    window.requestAnimationFrame(() => {
+      if (trigger?.isConnected) {
+        trigger.focus();
+      }
+    });
+  };
 
   return (
     <section aria-label="脚本详情素材候选" className="assetCandidatePanel">
@@ -192,7 +220,9 @@ export function AssetCandidatePanel({
                   actionInProgress={actionInProgress}
                   candidate={candidate}
                   key={candidate.candidate_id}
+                  previewEnabled
                   writesDisabled={writesDisabled}
+                  onOpenPreview={openImagePreview}
                   onRejectCandidate={onRejectCandidate}
                   onSelectCandidate={onSelectCandidate}
                 />
@@ -325,6 +355,16 @@ export function AssetCandidatePanel({
         </aside>
       </div>
 
+      {imagePreview ? (
+        <ImagePreviewDialog
+          alt={imagePreview.title}
+          imageUrl={imagePreview.imageUrl}
+          subtitle="AI 生成图片候选"
+          title={imagePreview.title}
+          onClose={closeImagePreview}
+        />
+      ) : null}
+
       {taskToDismiss?.status === "failed" ? (
         <div className="assetDismissDialogBackdrop">
           <section
@@ -386,14 +426,18 @@ function CandidateCard({
   actionInProgress,
   candidate,
   isSelected = false,
+  previewEnabled = false,
   writesDisabled,
+  onOpenPreview,
   onRejectCandidate,
   onSelectCandidate,
 }: {
   actionInProgress: boolean;
   candidate: SceneAssetCandidate;
   isSelected?: boolean;
+  previewEnabled?: boolean;
   writesDisabled: boolean;
+  onOpenPreview?: (candidate: SceneAssetCandidate, trigger: HTMLButtonElement) => void;
   onRejectCandidate: (sceneId: string, candidateId: string) => void;
   onSelectCandidate: (sceneId: string, candidateId: string) => void;
 }) {
@@ -405,17 +449,33 @@ function CandidateCard({
     candidate.status === "candidate" || (candidate.status === "selected" && candidate.source === "ai_generated");
   const selectLabel = candidate.source === "existing_material" ? "选择旧素材" : "选择为主素材";
   const rejectLabel = candidate.source === "existing_material" ? "排除旧素材" : "排除候选";
+  const previewAvailable =
+    previewEnabled && Boolean(previewUrl) && candidate.status !== "failed" && Boolean(onOpenPreview);
 
   return (
     <article className={isSelected ? "assetCandidateCard selected" : "assetCandidateCard"}>
-      <div className="assetPreviewFrame">
-        {previewUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
+      {previewAvailable && previewUrl && onOpenPreview ? (
+        <button
+          aria-label={`查看${candidate.file_name || "AI 图片候选"}大图`}
+          className="assetPreviewFrame assetPreviewButton"
+          title="查看大图"
+          type="button"
+          onClick={(event) => onOpenPreview(candidate, event.currentTarget)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img alt={candidate.file_name || "素材候选预览"} src={previewUrl} />
-        ) : (
-          <span>{candidate.status === "failed" ? "生成失败" : "等待生成"}</span>
-        )}
-      </div>
+          <span aria-hidden="true" className="assetPreviewExpandIcon">⛶</span>
+        </button>
+      ) : (
+        <div className="assetPreviewFrame">
+          {previewUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img alt={candidate.file_name || "素材候选预览"} src={previewUrl} />
+          ) : (
+            <span>{candidate.status === "failed" ? "生成失败" : "等待生成"}</span>
+          )}
+        </div>
+      )}
       <div className="assetCandidateInfo">
         <strong>{candidate.file_name || "未生成文件"}</strong>
         <span>{assetCandidateStatusLabels[candidate.status]}</span>

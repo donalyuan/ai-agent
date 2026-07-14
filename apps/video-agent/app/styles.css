@@ -2502,6 +2502,34 @@ button.topicReviewDuplicateTitle:hover {
   object-fit: cover;
 }
 
+.assetPreviewButton {
+  position: relative;
+  padding: 0;
+  border: 0;
+  cursor: zoom-in;
+}
+
+.assetPreviewButton:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.assetPreviewExpandIcon {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--color-primary);
+  font-size: 15px;
+  line-height: 1;
+}
+
 .assetCandidateInfo {
   min-width: 0;
   display: grid;

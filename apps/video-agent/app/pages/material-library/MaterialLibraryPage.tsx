@@ -1,5 +1,6 @@
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
+import { ImagePreviewDialog } from "../../components/ImagePreviewDialog";
 import type { Material, MaterialStatus, MaterialStatusFilter, MaterialType } from "../../lib/api";
 import {
   formatMaterialDate,
@@ -70,7 +71,6 @@ export function MaterialLibraryPage({
   const previewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 1, height: 1 });
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewZoom, setPreviewZoom] = useState(100);
   const selectedMaterialId = selectedMaterial?.material_id || null;
   const detailOpen = creatingMaterial || selectedMaterial !== null;
   const detailPreview = selectedMaterial ? getMaterialPreview(selectedMaterial) : null;
@@ -102,25 +102,10 @@ export function MaterialLibraryPage({
 
   useEffect(() => {
     setPreviewOpen(false);
-    setPreviewZoom(100);
   }, [selectedMaterialId]);
-
-  useEffect(() => {
-    if (!previewOpen) {
-      return;
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closePreview();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [previewOpen]);
 
   const closePreview = () => {
     setPreviewOpen(false);
-    setPreviewZoom(100);
     window.requestAnimationFrame(() => previewTriggerRef.current?.focus());
   };
 
@@ -368,51 +353,13 @@ export function MaterialLibraryPage({
       </div>
 
       {previewOpen && selectedMaterial && detailPreview?.imageUrl ? (
-        <div
-          className="materialImageLightbox"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              closePreview();
-            }
-          }}
-        >
-          <div aria-label="图片大图预览" aria-modal="true" className="materialImageDialog" role="dialog">
-            <header>
-              <div>
-                <strong>{selectedMaterial.file_name}</strong>
-                <span>{formatMaterialFileSummary(selectedMaterial)}</span>
-              </div>
-              <button aria-label="关闭大图预览" type="button" onClick={closePreview}>×</button>
-            </header>
-            <div className="materialImageViewport">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                alt={selectedMaterial.file_name}
-                src={detailPreview.imageUrl}
-                style={{ transform: `scale(${previewZoom / 100})` }}
-              />
-            </div>
-            <div aria-label="大图缩放" className="materialImageZoomControls">
-              <button
-                aria-label="缩小图片"
-                disabled={previewZoom <= 50}
-                type="button"
-                onClick={() => setPreviewZoom((current) => Math.max(50, current - 25))}
-              >
-                −
-              </button>
-              <strong>{previewZoom}%</strong>
-              <button
-                aria-label="放大图片"
-                disabled={previewZoom >= 200}
-                type="button"
-                onClick={() => setPreviewZoom((current) => Math.min(200, current + 25))}
-              >
-                +
-              </button>
-            </div>
-          </div>
-        </div>
+        <ImagePreviewDialog
+          alt={selectedMaterial.file_name}
+          imageUrl={detailPreview.imageUrl}
+          subtitle={formatMaterialFileSummary(selectedMaterial)}
+          title={selectedMaterial.file_name}
+          onClose={closePreview}
+        />
       ) : null}
     </section>
   );
