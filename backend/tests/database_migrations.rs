@@ -58,6 +58,28 @@ async fn index_exists(pool: &PgPool, index_name: &str) -> bool {
     .expect("index existence query should run")
 }
 
+async fn trigger_exists(pool: &PgPool, table_name: &str, trigger_name: &str) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_trigger trigger_info
+            JOIN pg_class table_info ON table_info.oid = trigger_info.tgrelid
+            JOIN pg_namespace namespace ON namespace.oid = table_info.relnamespace
+            WHERE namespace.nspname = 'public'
+              AND table_info.relname = $1
+              AND trigger_info.tgname = $2
+              AND NOT trigger_info.tgisinternal
+        )
+        "#,
+    )
+    .bind(table_name)
+    .bind(trigger_name)
+    .fetch_one(pool)
+    .await
+    .expect("trigger existence query should run")
+}
+
 async fn unique_partial_index_predicate(pool: &PgPool, index_name: &str) -> Option<String> {
     sqlx::query_as::<_, (bool, Option<String>)>(
         r#"
@@ -428,6 +450,10 @@ async fn migrations_create_video_agent_core_schema() {
         selected_candidate_index_predicate.contains("selected"),
         "selected candidate unique index should only cover selected status, got {selected_candidate_index_predicate}"
     );
+    assert!(
+        selected_candidate_index_predicate.contains("image"),
+        "selected candidate unique index should only cover image candidates, got {selected_candidate_index_predicate}"
+    );
     let in_flight_scene_task_predicate = unique_partial_index_predicate(
         &test_pool,
         "asset_generation_tasks_one_in_flight_image_per_scene",
@@ -743,7 +769,7 @@ async fn migrations_create_video_agent_core_schema() {
         FROM video_workspace_menus child
         JOIN video_workspace_menus parent ON parent.id = child.parent_id
         WHERE parent.menu_key = 'material-management'
-          AND child.menu_key IN ('material-library', 'asset-generation')
+          AND child.menu_key IN ('material-library', 'asset-generation', 'sound-subtitle-generation')
         ORDER BY child.sort_order ASC
         "#,
     )
@@ -762,12 +788,37 @@ async fn migrations_create_video_agent_core_schema() {
             ),
             (
                 "asset-generation".to_string(),
-                "素材生成".to_string(),
+                "画面生成".to_string(),
                 true,
                 "active".to_string(),
                 "materials.asset-generation".to_string(),
             ),
+            (
+                "sound-subtitle-generation".to_string(),
+                "声音与字幕生成".to_string(),
+                false,
+                "planned".to_string(),
+                "materials.sound-subtitle-generation".to_string(),
+            ),
         ]
+    );
+    assert!(
+        trigger_exists(
+            &test_pool,
+            "asset_generation_tasks",
+            "trigger_freeze_legacy_asset_video_tasks"
+        )
+        .await,
+        "legacy per-scene video tasks should be frozen at the database boundary"
+    );
+    assert!(
+        trigger_exists(
+            &test_pool,
+            "scene_asset_candidates",
+            "trigger_freeze_legacy_video_candidates"
+        )
+        .await,
+        "legacy video candidates should be frozen at the database boundary"
     );
 
     let content_strategy_children = sqlx::query_as::<_, (String, String, bool, String)>(

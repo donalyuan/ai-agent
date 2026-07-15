@@ -4,22 +4,28 @@ use crate::agents::ScriptAgentError;
 use crate::domain::script::{Scene, Script};
 use crate::model_routing::ModelResolveError;
 use crate::repositories::{
-    AiModelRepository, AssetCandidateSource, AssetCandidateType, AssetGenerationProvider,
-    AssetGenerationRepository, AssetGenerationRepositoryError, AssetGenerationTask,
-    AssetGenerationTaskStatus, AssetGenerationTaskType, CreateAssetCandidateInput,
-    CreateAssetGenerationTaskInput, Material, MaterialListFilter, MaterialRepository,
-    MaterialRepositoryError, MaterialStatusFilter, MaterialType, PostgresAiModelRepository,
-    PostgresAssetGenerationRepository, PostgresMaterialRepository, PostgresScriptRepository,
-    SceneAssetCandidate, ScriptRepository,
+    AiModelRepository, AssetCandidateSource, AssetCandidateStatus, AssetCandidateType,
+    AssetGenerationProvider, AssetGenerationRepository, AssetGenerationRepositoryError,
+    AssetGenerationTask, AssetGenerationTaskStatus, AssetGenerationTaskType,
+    CreateAssetCandidateInput, CreateAssetGenerationTaskInput, Material, MaterialListFilter,
+    MaterialRepository, MaterialRepositoryError, MaterialStatus, MaterialStatusFilter,
+    MaterialType, PostgresAiModelRepository, PostgresAssetGenerationRepository,
+    PostgresMaterialRepository, PostgresScriptRepository, SceneAssetCandidate, ScriptRepository,
 };
+use chrono::{DateTime, Utc};
 use novex_model::{ApiProtocol, ModelType};
-use serde_json::json;
+use serde::Serialize;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use std::fmt;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 use uuid::Uuid;
 
 #[derive(Clone)]
-/// 编排素材生成计划、幂等任务、候选选择和人工确认流程。
+/// 编排画面生成计划、图片任务、候选选择和作品输入清单。
 pub struct AssetGenerationService {
     pool: PgPool,
     ai_model_repository: PostgresAiModelRepository,
@@ -69,7 +75,7 @@ impl AssetGenerationService {
         ))
     }
 
-    /// 先创建可复用素材候选，再按脚本级图片任务和逐镜头视频草稿顺序建任务。
+    /// 先创建可复用图片候选，再创建唯一的脚本级图片任务。
     pub async fn create_tasks(
         &self,
         script_id: Uuid,
@@ -96,8 +102,6 @@ impl AssetGenerationService {
         self.create_existing_material_candidates(script.project_id, script.id, &script.scenes)
             .await?;
         let scene_ids: Vec<Uuid> = script.scenes.iter().map(|scene| scene.id).collect();
-        let mut tasks = Vec::new();
-
         let image_task_key = script_image_task_idempotency_key(
             script.id,
             options.model_id,
@@ -129,57 +133,10 @@ impl AssetGenerationService {
                 }),
             })
             .await?;
-        tasks.push(image_task);
-
-        let mut reused_video_task_count = 0;
-        for scene in &script.scenes {
-            let video_task_key = scene_video_task_idempotency_key(scene.id, provider);
-            if existing_tasks
-                .iter()
-                .any(|task| task.params.get("idempotency_key") == Some(&json!(video_task_key)))
-            {
-                reused_video_task_count += 1;
-            }
-            let video_task = self
-                .asset_repository
-                .create_task(CreateAssetGenerationTaskInput {
-                    project_id: script.project_id,
-                    script_id: Some(script.id),
-                    scene_id: Some(scene.id),
-                    model_id: None,
-                    provider,
-                    task_type: AssetGenerationTaskType::VideoDraft,
-                    status: AssetGenerationTaskStatus::Draft,
-                    candidate_count: 0,
-                    reference_material_ids: reference_material_ids.clone(),
-                    idempotency_key: Some(video_task_key.clone()),
-                    params: json!({
-                        "idempotency_key": video_task_key,
-                        "scene_id": scene.id,
-                        "requires_manual_confirmation": true
-                    }),
-                })
-                .await?;
-            self.asset_repository
-                .create_candidate(CreateAssetCandidateInput {
-                    project_id: script.project_id,
-                    script_id: script.id,
-                    scene_id: scene.id,
-                    material_id: None,
-                    candidate_type: AssetCandidateType::Video,
-                    source: AssetCandidateSource::VideoTask,
-                    rank: 10_000,
-                    generation_task_id: Some(video_task.id),
-                    metadata: json!({ "requires_manual_confirmation": true }),
-                })
-                .await?;
-            tasks.push(video_task);
-        }
-
         Ok(AssetTaskBatch {
             script_id: script.id,
-            reused_all: had_matching_image_task && reused_video_task_count == script.scenes.len(),
-            tasks,
+            reused_all: had_matching_image_task,
+            tasks: vec![image_task],
         })
     }
 
@@ -201,6 +158,131 @@ impl AssetGenerationService {
         self.get_script(script_id).await?;
         let candidates = self.asset_repository.list_candidates(script_id).await?;
         self.candidate_views(candidates).await
+    }
+
+    /// 输出作品生成唯一可消费的有序主画面输入；不完整时返回逐分镜阻断原因。
+    pub async fn scene_visual_manifest(
+        &self,
+        script_id: Uuid,
+    ) -> Result<SceneVisualManifest, AssetGenerationApplicationError> {
+        let script = self.get_script(script_id).await?;
+        let candidates = self.asset_repository.list_candidates(script_id).await?;
+        let failed_scene_ids: HashSet<Uuid> = candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.candidate_type == AssetCandidateType::Image
+                    && candidate.status == AssetCandidateStatus::Failed
+            })
+            .map(|candidate| candidate.scene_id)
+            .collect();
+        let mut selected_by_scene = HashMap::new();
+        for candidate in candidates.into_iter().filter(|candidate| {
+            candidate.candidate_type == AssetCandidateType::Image
+                && candidate.status == AssetCandidateStatus::Selected
+        }) {
+            selected_by_scene.insert(candidate.scene_id, self.candidate_view(candidate).await?);
+        }
+
+        let mut blockers = Vec::new();
+        let mut scenes = Vec::with_capacity(script.scenes.len());
+        for scene in &script.scenes {
+            let Some(view) = selected_by_scene.remove(&scene.id) else {
+                blockers.push(SceneVisualManifestBlocker {
+                    scene_id: scene.id,
+                    sequence: scene.sequence,
+                    reason: if failed_scene_ids.contains(&scene.id) {
+                        "image_generation_failed"
+                    } else {
+                        "selected_image_missing"
+                    }
+                    .to_string(),
+                });
+                continue;
+            };
+            let Some(material) = view.material else {
+                blockers.push(SceneVisualManifestBlocker {
+                    scene_id: scene.id,
+                    sequence: scene.sequence,
+                    reason: "selected_material_missing".to_string(),
+                });
+                continue;
+            };
+            if material.material_type != MaterialType::Image {
+                blockers.push(SceneVisualManifestBlocker {
+                    scene_id: scene.id,
+                    sequence: scene.sequence,
+                    reason: "selected_material_not_image".to_string(),
+                });
+                continue;
+            }
+            if material.status != MaterialStatus::Active {
+                blockers.push(SceneVisualManifestBlocker {
+                    scene_id: scene.id,
+                    sequence: scene.sequence,
+                    reason: "material_archived".to_string(),
+                });
+                continue;
+            }
+            if material.file_url.trim().is_empty() {
+                blockers.push(SceneVisualManifestBlocker {
+                    scene_id: scene.id,
+                    sequence: scene.sequence,
+                    reason: "material_url_missing".to_string(),
+                });
+                continue;
+            }
+
+            scenes.push(SceneVisualManifestItem {
+                scene_id: scene.id,
+                sequence: scene.sequence,
+                narration: scene.narration.clone(),
+                visual_description: scene.visual_description.clone(),
+                emotion: scene.emotion.clone(),
+                duration_sec: scene.duration_sec,
+                candidate_id: view.candidate.id,
+                material_id: material.id,
+                file_url: material.file_url.clone(),
+                thumbnail_url: material.thumbnail_url.clone(),
+                source_snapshot: json!({
+                    "candidate_source": view.candidate.source.as_str(),
+                    "candidate_metadata": view.candidate.metadata,
+                    "candidate_updated_at": view.candidate.updated_at,
+                    "material_metadata": material.metadata,
+                    "material_updated_at": material.updated_at
+                }),
+            });
+        }
+
+        if !blockers.is_empty() {
+            return Err(AssetGenerationApplicationError::ManifestIncomplete {
+                script_id,
+                blockers,
+            });
+        }
+
+        let input_version = manifest_input_version(&script, &scenes)?;
+        Ok(SceneVisualManifest {
+            script_id,
+            script_title: script.title,
+            script_updated_at: script.updated_at,
+            input_version,
+            scenes,
+        })
+    }
+
+    pub async fn validate_scene_visual_manifest(
+        &self,
+        script_id: Uuid,
+        expected_input_version: &str,
+    ) -> Result<SceneVisualManifest, AssetGenerationApplicationError> {
+        let manifest = self.scene_visual_manifest(script_id).await?;
+        if manifest.input_version != expected_input_version {
+            return Err(AssetGenerationApplicationError::ManifestStale {
+                expected_input_version: expected_input_version.to_string(),
+                actual_input_version: manifest.input_version,
+            });
+        }
+        Ok(manifest)
     }
 
     pub async fn select_candidate(
@@ -267,16 +349,6 @@ impl AssetGenerationService {
             created: result.created,
             task: result.task,
         })
-    }
-
-    pub async fn confirm_task(
-        &self,
-        task_id: Uuid,
-    ) -> Result<AssetGenerationTask, AssetGenerationApplicationError> {
-        self.asset_repository
-            .confirm_video_task(task_id)
-            .await
-            .map_err(Into::into)
     }
 
     pub async fn dismiss_task(
@@ -426,7 +498,6 @@ pub struct AssetGenerationPlan {
     pub model_id: Uuid,
     pub provider: AssetGenerationProvider,
     pub reference_material_count: i32,
-    pub video_task_count: i32,
     pub can_create: bool,
     pub warnings: Vec<String>,
 }
@@ -445,6 +516,37 @@ pub struct SceneTaskCreation {
 pub struct AssetCandidateView {
     pub candidate: SceneAssetCandidate,
     pub material: Option<Material>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SceneVisualManifestBlocker {
+    pub scene_id: Uuid,
+    pub sequence: i32,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SceneVisualManifestItem {
+    pub scene_id: Uuid,
+    pub sequence: i32,
+    pub narration: String,
+    pub visual_description: String,
+    pub emotion: String,
+    pub duration_sec: i32,
+    pub candidate_id: Uuid,
+    pub material_id: Uuid,
+    pub file_url: String,
+    pub thumbnail_url: Option<String>,
+    pub source_snapshot: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SceneVisualManifest {
+    pub script_id: Uuid,
+    pub script_title: String,
+    pub script_updated_at: DateTime<Utc>,
+    pub input_version: String,
+    pub scenes: Vec<SceneVisualManifestItem>,
 }
 
 fn build_plan(
@@ -470,7 +572,6 @@ fn build_plan(
         model_id,
         provider,
         reference_material_count,
-        video_task_count: scene_count as i32,
         can_create,
         warnings,
     }
@@ -501,10 +602,6 @@ fn script_image_task_idempotency_key(
     )
 }
 
-fn scene_video_task_idempotency_key(scene_id: Uuid, provider: AssetGenerationProvider) -> String {
-    format!("scene:{scene_id}:video-draft:{}", provider.as_str())
-}
-
 fn ensure_plan_can_create(
     plan: &AssetGenerationPlan,
 ) -> Result<(), AssetGenerationApplicationError> {
@@ -517,12 +614,35 @@ fn ensure_plan_can_create(
     }
 }
 
+fn manifest_input_version(
+    script: &Script,
+    scenes: &[SceneVisualManifestItem],
+) -> Result<String, AssetGenerationApplicationError> {
+    let canonical = json!({
+        "script_id": script.id,
+        "script_title": script.title,
+        "script_updated_at": script.updated_at,
+        "scenes": scenes
+    });
+    let bytes = serde_json::to_vec(&canonical)
+        .map_err(|error| AssetGenerationApplicationError::Validation(error.to_string()))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
 #[derive(Debug)]
 pub enum AssetGenerationApplicationError {
     Agent(ScriptAgentError),
     AssetRepository(AssetGenerationRepositoryError),
     MaterialRepository(MaterialRepositoryError),
     ModelResolve(ModelResolveError),
+    ManifestIncomplete {
+        script_id: Uuid,
+        blockers: Vec<SceneVisualManifestBlocker>,
+    },
+    ManifestStale {
+        expected_input_version: String,
+        actual_input_version: String,
+    },
     Validation(String),
 }
 
@@ -557,6 +677,15 @@ impl fmt::Display for AssetGenerationApplicationError {
             Self::AssetRepository(error) => write!(formatter, "{error}"),
             Self::MaterialRepository(error) => write!(formatter, "{error}"),
             Self::ModelResolve(error) => write!(formatter, "{error}"),
+            Self::ManifestIncomplete { script_id, .. } => {
+                write!(
+                    formatter,
+                    "scene visual manifest is incomplete: {script_id}"
+                )
+            }
+            Self::ManifestStale { .. } => {
+                formatter.write_str("scene visual manifest input version is stale")
+            }
             Self::Validation(message) => formatter.write_str(message),
         }
     }

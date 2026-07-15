@@ -348,11 +348,12 @@ const workspaceMenus = [
         module_key: "materials.library",
       },
       {
-        ...menuNode("asset-generation", "素材生成", true, "active", 20),
+        ...menuNode("asset-generation", "画面生成", true, "active", 20),
         agent_key: "material-generation-agent",
         menu_type: "page",
         module_key: "materials.asset-generation",
       },
+      soundSubtitleMenuNode(),
     ],
   },
   menuNode("production", "作品生产", false, "planned", 40),
@@ -405,11 +406,12 @@ const contentStrategyWorkspaceMenus = [
         module_key: "materials.library",
       },
       {
-        ...menuNode("asset-generation", "素材生成", true, "active", 20),
+        ...menuNode("asset-generation", "画面生成", true, "active", 20),
         agent_key: "material-generation-agent",
         menu_type: "page",
         module_key: "materials.asset-generation",
       },
+      soundSubtitleMenuNode(),
     ],
   },
   menuNode("production", "作品生产", false, "planned", 40),
@@ -429,11 +431,12 @@ const materialWorkspaceMenus = [
         module_key: "materials.library",
       },
       {
-        ...menuNode("asset-generation", "素材生成", true, "active", 20),
+        ...menuNode("asset-generation", "画面生成", true, "active", 20),
         agent_key: "material-generation-agent",
         menu_type: "page",
         module_key: "materials.asset-generation",
       },
+      soundSubtitleMenuNode(),
     ],
   },
   menuNode("production", "作品生产", false, "planned", 40),
@@ -441,6 +444,15 @@ const materialWorkspaceMenus = [
   menuNode("analytics", "数据分析", false, "planned", 60),
   menuNode("workflow-tasks", "工作流任务", false, "planned", 70),
 ];
+
+function soundSubtitleMenuNode() {
+  return {
+    ...menuNode("sound-subtitle-generation", "声音与字幕生成", false, "planned", 30),
+    agent_key: "sound-generation-agent",
+    menu_type: "page",
+    module_key: "materials.sound-subtitle-generation",
+  };
+}
 
 const ideaTopic = {
   topic_id: "44444444-4444-4444-8444-444444444444",
@@ -726,7 +738,6 @@ const assetGenerationPlan = {
   model_id: imageModelId,
   provider: "gpt-image-2",
   reference_material_count: 1,
-  video_task_count: scriptDetail.scenes.length,
   can_create: true,
   warnings: [],
 };
@@ -748,6 +759,7 @@ const imageAssetGenerationTask = {
   error_message: null,
   retry_count: 0,
   dismissed_at: null,
+  read_only: false,
   created_at: "2026-07-09T00:30:00Z",
   updated_at: "2026-07-09T00:30:00Z",
 };
@@ -771,6 +783,7 @@ const videoDraftAssetGenerationTask = {
   status: "draft",
   candidate_count: 0,
   params: { requires_manual_confirmation: true },
+  read_only: true,
 };
 
 const selectedPrimaryAssetCandidate = {
@@ -985,16 +998,37 @@ async function mockScriptAssetWorkflow(page: Page) {
   let assetGenerationTasksRequestCount = 0;
   let assetCandidatesRequestCount = 0;
   let selectAssetCandidateRequestCount = 0;
-  let confirmAssetGenerationTaskRequestCount = 0;
   let dismissAssetGenerationTaskRequestCount = 0;
   let selectedCandidateId = selectedPrimaryAssetCandidate.candidate_id;
   let failedTaskDismissed = false;
+
+  await page.route(/https:\/\/cdn\.example\.com\/.*\.png$/, async (route) => {
+    await route.fulfill({ status: 200, contentType: "image/png", body: png1x1 });
+  });
 
   await page.route(new RegExp(`/api/scripts/${scriptId}/asset-generation-plan(?:\\?.*)?$`), async (route) => {
     assetGenerationPlanRequestCount += 1;
     expect(route.request().method()).toBe("POST");
     expect(route.request().postDataJSON()).toEqual(assetGenerationPayload);
     await route.fulfill({ contentType: "application/json", json: assetGenerationPlan });
+  });
+  await page.route(new RegExp(`/api/scripts/${scriptId}/scene-visual-manifest$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      status: 409,
+      json: {
+        error: "主画面清单不完整",
+        code: "scene_visual_manifest_incomplete",
+        script_id: scriptId,
+        blockers: [
+          {
+            scene_id: scriptDetail.scenes[1].scene_id,
+            sequence: scriptDetail.scenes[1].sequence,
+            reason: "selected_image_missing",
+          },
+        ],
+      },
+    });
   });
   await page.route(
     new RegExp(`/api/scripts/${scriptId}/asset-generation-tasks(?:\\?.*)?$`),
@@ -1024,7 +1058,6 @@ async function mockScriptAssetWorkflow(page: Page) {
           script_id: scriptId,
           tasks: [
             imageAssetGenerationTask,
-            videoDraftAssetGenerationTask,
             ...(failedTaskDismissed ? [] : [failedAssetGenerationTask]),
           ],
         },
@@ -1064,28 +1097,11 @@ async function mockScriptAssetWorkflow(page: Page) {
       });
     },
   );
-  await page.route(
-    new RegExp(`/api/asset-generation-tasks/${videoDraftAssetGenerationTask.task_id}/confirm$`),
-    async (route) => {
-      confirmAssetGenerationTaskRequestCount += 1;
-      expect(route.request().method()).toBe("POST");
-      await route.fulfill({
-        contentType: "application/json",
-        json: {
-          ...videoDraftAssetGenerationTask,
-          task_type: "video_generation",
-          status: "pending",
-        },
-      });
-    },
-  );
-
   return {
     assetGenerationPlanRequestCount: () => assetGenerationPlanRequestCount,
     assetGenerationTasksRequestCount: () => assetGenerationTasksRequestCount,
     assetCandidatesRequestCount: () => assetCandidatesRequestCount,
     selectAssetCandidateRequestCount: () => selectAssetCandidateRequestCount,
-    confirmAssetGenerationTaskRequestCount: () => confirmAssetGenerationTaskRequestCount,
     dismissAssetGenerationTaskRequestCount: () => dismissAssetGenerationTaskRequestCount,
   };
 }
@@ -1439,7 +1455,7 @@ test("video-agent 桌面工作台使用业务菜单并保留脚本创作闭环",
   await expect(page.getByRole("heading", { name: "画面指令" }).first()).toBeVisible();
   await expect(page.getByText("传统程序员每天要写大量重复代码。")).toBeVisible();
   await expect(page.getByText("程序员盯着屏幕，快速切换多个代码文件。"));
-  await expect(page.getByRole("region", { name: "脚本详情素材候选" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "画面生成图片候选" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "新建脚本" }).click();
   await expect(page.getByRole("heading", { name: "选择脚本后查看分镜" })).toBeVisible();
@@ -1486,16 +1502,18 @@ test("空脚本列表时通过脚本 Agent 对话生成脚本并打开时间轴�
   await expect(page.getByText("屏幕展示用户输入脚本需求。")).toBeVisible();
 });
 
-test("素材生成页支持生成选择主素材并确认生成视频", async ({ page }) => {
+test("画面生成页支持生成、预览和选择主画面且不提供旧视频操作", async ({ page }) => {
   await mockExistingScriptWorkflow(page);
   const assetWorkflow = await mockScriptAssetWorkflow(page);
   await page.goto("/");
   const workspaceMenu = page.getByRole("navigation", { name: "视频工作台菜单" });
   await workspaceMenu.getByRole("button", { name: /素材管理/ }).click();
-  await workspaceMenu.getByRole("button", { name: "素材生成" }).click();
+  await expect(workspaceMenu.getByLabel("素材管理二级菜单").getByRole("button"))
+    .toHaveText(["素材库", "画面生成", "声音与字幕生成"]);
+  await workspaceMenu.getByRole("button", { name: "画面生成" }).click();
 
-  await expect(page.getByRole("heading", { name: "脚本详情素材候选" })).toBeVisible();
-  const panel = await page.getByRole("region", { name: "脚本详情素材候选" });
+  await expect(page.getByRole("heading", { name: "画面生成" })).toBeVisible();
+  const panel = await page.getByRole("region", { name: "画面生成图片候选" });
   await expect(panel).toBeVisible();
   await expect(panel.getByText("分镜列表")).toBeVisible();
   await expect(panel.getByText("候选素材")).toBeVisible();
@@ -1504,15 +1522,38 @@ test("素材生成页支持生成选择主素材并确认生成视频", async ({
   await expect(panel.getByText("2 分镜 × 3 = 6 张图片候选")).toBeVisible();
   await expect(panel.getByText("单次最多 48 张")).toBeVisible();
   await expect(panel.getByText("当前主素材")).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "当前主素材" })).toHaveCount(0);
+  const existingCandidateSection = panel.getByRole("region", { name: "旧素材候选" });
+  await expect(existingCandidateSection.locator("article.selected"))
+    .toContainText("current-primary.png");
   await expect(panel.getByText("AI 图片候选")).toBeVisible();
-  await expect(panel.getByText("AI 视频二次确认")).toBeVisible();
+  await expect(panel.getByText("历史逐分镜视频任务")).toBeVisible();
+  await expect(panel.getByText("只读审计")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "确认生成视频" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "进入作品生成" })).toBeDisabled();
+  await expect(panel.getByText("还缺 1 个主画面")).toBeVisible();
   await expect(panel.getByText(scriptDetail.scenes[0].narration)).toBeVisible();
   await expect(panel.getByText(scriptDetail.scenes[0].visual_description)).toBeVisible();
-  await expect(panel.getByRole("button", { name: "生成素材候选" })).toHaveCount(0);
+  const visualColumns = await panel.locator(".assetCandidateGrid").evaluate((grid) => {
+    const gridRect = grid.getBoundingClientRect();
+    return {
+      grid: { left: gridRect.left, right: gridRect.right },
+      columns: Array.from(grid.children).map((column) => {
+        const rect = column.getBoundingClientRect();
+        return { left: rect.left, right: rect.right };
+      }),
+    };
+  });
+  expect(visualColumns.columns).toHaveLength(3);
+  expect(visualColumns.columns[0].left).toBeGreaterThanOrEqual(visualColumns.grid.left);
+  expect(visualColumns.columns[1].left).toBeGreaterThanOrEqual(visualColumns.columns[0].right);
+  expect(visualColumns.columns[2].left).toBeGreaterThanOrEqual(visualColumns.columns[1].right);
+  expect(visualColumns.columns[2].right).toBeLessThanOrEqual(visualColumns.grid.right);
+  await expect(panel.getByRole("button", { name: "生成图片候选" })).toHaveCount(0);
   await expect.poll(() => assetWorkflow.assetGenerationPlanRequestCount()).toBeGreaterThan(0);
   await expect.poll(() => assetWorkflow.assetCandidatesRequestCount()).toBeGreaterThan(0);
 
-  await page.getByRole("button", { name: "生成素材候选" }).click();
+  await page.getByRole("button", { name: "生成图片候选" }).click();
   await expect.poll(() => assetWorkflow.assetGenerationTasksRequestCount()).toBe(1);
   await expect(panel.getByText("scene-1.png")).toBeVisible();
   await expect(panel.getByRole("button", { name: "选择为主素材" }).first()).toBeVisible();
@@ -1534,10 +1575,14 @@ test("素材生成页支持生成选择主素材并确认生成视频", async ({
   await panel.getByRole("button", { name: "选择为主素材" }).first().click();
   await expect.poll(() => assetWorkflow.selectAssetCandidateRequestCount()).toBe(1);
   await expect(panel.getByText("当前主素材")).toBeVisible();
-  await expect(panel.getByText("scene-1.png")).toBeVisible();
-
-  await panel.getByRole("button", { name: "确认生成视频" }).first().click();
-  await expect.poll(() => assetWorkflow.confirmAssetGenerationTaskRequestCount()).toBe(1);
+  await expect(panel.locator(".assetCurrentCandidateSummary")).toContainText("scene-1.png");
+  const aiCandidateSection = panel.getByRole("region", { name: "AI 图片候选" });
+  await expect(aiCandidateSection.locator("article.selected")).toContainText("scene-1.png");
+  await expect(previewTrigger).toBeVisible();
+  await previewTrigger.click();
+  await expect(imageDialog).toBeVisible();
+  await expect(imageDialog.getByText("scene-1.png")).toBeVisible();
+  await imageDialog.getByRole("button", { name: "关闭大图预览" }).click();
 
   await panel.getByRole("button", { name: "清理失败任务" }).click();
   const dismissDialog = page.getByRole("dialog", { name: "清理失败任务？" });

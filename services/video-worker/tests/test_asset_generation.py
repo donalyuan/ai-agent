@@ -363,6 +363,9 @@ def test_postgres_store_claims_script_title_in_same_transaction(monkeypatch):
     assert task is not None
     assert task.script_title_snapshot == "领取时脚本标题"
     assert "JOIN scripts" in connection.queries[0]
+    assert "task.task_type = 'image_candidates'" in connection.queries[0]
+    assert "video_draft" not in connection.queries[0]
+    assert "video_generation" not in connection.queries[0]
 
 
 def test_postgres_store_records_failed_candidate_naming_metadata(monkeypatch):

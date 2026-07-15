@@ -46,9 +46,9 @@ export function AssetGenerationPage({
     <div className="assetGenerationPage">
       <section className="assetGenerationHeader">
         <div>
-          <p className="sectionKicker">素材管理 / 素材生成</p>
+          <p className="sectionKicker">素材管理 / 画面生成</p>
           <div className="assetGenerationTitleRow">
-            <h2>脚本详情素材候选</h2>
+            <h2>画面生成</h2>
             {selectedScript ? (
               <>
                 <StatusBadge status={selectedScript.status} />
@@ -82,7 +82,7 @@ export function AssetGenerationPage({
               onClick={assetCandidatePanel.onGenerateCandidates}
               type="button"
             >
-              {assetCandidatePanel.actionInProgress ? "处理中" : "生成素材候选"}
+              {assetCandidatePanel.actionInProgress ? "处理中" : "生成图片候选"}
             </button>
           ) : null}
         </div>
@@ -90,30 +90,30 @@ export function AssetGenerationPage({
 
       {scriptError ? <p className="errorText assetGenerationPageError">{scriptError}</p> : null}
 
-      <section className="assetGenerationWorkArea" aria-label="素材生成工作区">
+      <section className="assetGenerationWorkArea" aria-label="画面生成工作区">
         {loadingProjects || loadingScripts || loadingScriptDetail ? (
-          <p className="stateText">正在读取素材生成工作区</p>
+          <p className="stateText">正在读取画面生成工作区</p>
         ) : null}
         {!loadingProjects && !selectedProjectId ? (
           <div className="detailEmpty">
-            <p className="sectionKicker">分镜素材候选</p>
+            <p className="sectionKicker">分镜主画面</p>
             <h2>等待账号</h2>
             <span>选择账号后会在这里显示可生成素材的脚本。</span>
           </div>
         ) : null}
         {!loadingProjects && selectedProjectId && !loadingScripts && !scripts.length ? (
           <div className="detailEmpty">
-            <p className="sectionKicker">分镜素材候选</p>
+            <p className="sectionKicker">分镜主画面</p>
             <h2>还没有脚本</h2>
             <span>先在脚本生成中产出脚本，再进入这里生成分镜素材。</span>
           </div>
         ) : null}
         {!loadingScriptDetail && scripts.length > 0 && !selectedScript ? (
           <div className="detailEmpty">
-            <p className="sectionKicker">分镜素材候选</p>
-            <h2>选择脚本后生成素材候选</h2>
+            <p className="sectionKicker">分镜主画面</p>
+            <h2>选择脚本后生成图片候选</h2>
             <span>
-              当前账号：{project?.name || "未选择"}。素材生成会按分镜拆分候选，AI 视频生成必须人工二次确认。
+              当前账号：{project?.name || "未选择"}。画面生成会按分镜准备图片候选并确认唯一主画面。
             </span>
           </div>
         ) : null}

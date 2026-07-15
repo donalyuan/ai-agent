@@ -23,6 +23,8 @@ import {
   PrepareScriptFromTopicResponse,
   Project,
   SceneAssetCandidate,
+  SceneVisualManifest,
+  SceneVisualManifestBlocker,
   ScriptDetail,
   ScriptStatus,
   ScriptSummary,
@@ -34,7 +36,6 @@ import {
   TopicReviewSnapshot,
   WorkspaceMenuNode,
   checkHealth,
-  confirmAssetGenerationTask,
   createAgentConversation,
   createApiClient,
   createAssetGenerationTasks,
@@ -46,6 +47,7 @@ import {
   generateStrategyProfileDraft,
   generateScript,
   getAssetGenerationPlan,
+  getSceneVisualManifest,
   getLatestTopicQualityEvaluation,
   getLatestTopicGroupReview,
   getMaterial,
@@ -72,6 +74,7 @@ import {
   updateProjectStrategyProfile,
   updateScriptStatus,
   uploadMaterial,
+  validateSceneVisualManifest,
 } from "./lib/api";
 import { AccountStrategyPage } from "./pages/content-strategy/AccountStrategyPage";
 import { ContentStrategyPage, ScriptPreparationDialog } from "./pages/content-strategy/ContentStrategyPage";
@@ -117,6 +120,8 @@ const topicGeneratorMenuKey = "topic-generator";
 const materialManagementMenuKey = "material-management";
 const materialLibraryMenuKey = "material-library";
 const assetGenerationMenuKey = "asset-generation";
+const productionMenuKey = "production";
+const workGenerationMenuKey = "work-generation";
 const scriptCreationMenuKey = "script-creation";
 const scriptGeneratorMenuKey = "script-generator";
 const defaultMenuKey = contentStrategyMenuKey;
@@ -214,11 +219,15 @@ export default function Home() {
   const [assetCandidates, setAssetCandidates] = useState<SceneAssetCandidate[]>([]);
   const [assetTasks, setAssetTasks] = useState<AssetGenerationTask[]>([]);
   const [assetPlan, setAssetPlan] = useState<AssetGenerationPlanResponse | null>(null);
+  const [assetManifest, setAssetManifest] = useState<SceneVisualManifest | null>(null);
+  const [assetManifestBlockers, setAssetManifestBlockers] =
+    useState<SceneVisualManifestBlocker[]>([]);
   const [assetCandidateCount, setAssetCandidateCount] = useState(3);
   const [useReferenceMaterials, setUseReferenceMaterials] = useState(true);
   const [selectedAssetSceneId, setSelectedAssetSceneId] = useState<string | null>(null);
   const [loadingAssetPlan, setLoadingAssetPlan] = useState(false);
   const [loadingAssetCandidates, setLoadingAssetCandidates] = useState(false);
+  const [loadingAssetManifest, setLoadingAssetManifest] = useState(false);
   const [assetActionInProgress, setAssetActionInProgress] = useState(false);
   const [assetError, setAssetError] = useState("");
   const [assetTaskToDismissId, setAssetTaskToDismissId] = useState<string | null>(null);
@@ -259,6 +268,8 @@ export default function Home() {
   const [selectedMenuKey, setSelectedMenuKey] = useState(defaultMenuKey);
   const [selectedMaterialSubMenuKey, setSelectedMaterialSubMenuKey] = useState(materialLibraryMenuKey);
   const [selectedScriptSubMenuKey, setSelectedScriptSubMenuKey] = useState(scriptGeneratorMenuKey);
+  const [selectedProductionSubMenuKey, setSelectedProductionSubMenuKey] =
+    useState(workGenerationMenuKey);
   const [statusFilter, setStatusFilter] = useState<"all" | ScriptStatus>("all");
   const [loadingMenus, setLoadingMenus] = useState(true);
   const [loadingProjects, setLoadingProjects] = useState(true);
@@ -371,6 +382,13 @@ export default function Home() {
   const scriptAgentModelUnavailable = modelSelectionUnavailable(scriptAgentModelId, textModelOptions);
   const imageModelUnavailable = modelSelectionUnavailable(imageModelId, imageModelOptions);
   const writesDisabled = apiAvailable === false;
+  const productionMenu = workspaceMenus.find((menu) => menu.menu_key === productionMenuKey);
+  const workGenerationMenu = productionMenu?.children.find(
+    (menu) => menu.menu_key === workGenerationMenuKey,
+  );
+  const workGenerationAvailable = Boolean(
+    productionMenu?.is_enabled && workGenerationMenu?.is_enabled,
+  );
   const selectedSubMenuKey =
     selectedMenuKey === contentStrategyMenuKey
       ? contentStrategyView === "account"
@@ -382,6 +400,8 @@ export default function Home() {
         ? selectedScriptSubMenuKey
         : selectedMenuKey === materialManagementMenuKey
           ? selectedMaterialSubMenuKey
+          : selectedMenuKey === productionMenuKey
+            ? selectedProductionSubMenuKey
         : null;
 
   const refreshModelOptions = useCallback(async () => {
@@ -877,8 +897,11 @@ export default function Home() {
       setAssetCandidates([]);
       setAssetTasks([]);
       setAssetPlan(null);
+      setAssetManifest(null);
+      setAssetManifestBlockers([]);
       setSelectedAssetSceneId(null);
       setLoadingAssetCandidates(false);
+      setLoadingAssetManifest(false);
       setLoadingAssetPlan(false);
       setAssetError("");
       setAssetTaskToDismissId(null);
@@ -900,6 +923,7 @@ export default function Home() {
     setAssetTasks([]);
     setAssetTaskToDismissId(null);
     setDismissingAssetTaskId(null);
+    setLoadingAssetManifest(true);
     assetTaskDismissalInFlightRef.current = false;
 
     async function loadAssetState() {
@@ -907,23 +931,29 @@ export default function Home() {
       setAssetError("");
 
       try {
-        const [candidateResponse, taskResponse] = await Promise.all([
+        const [candidateResponse, taskResponse, manifestState] = await Promise.all([
           listAssetCandidates(client, script.script_id),
           listAssetGenerationTasks(client, script.script_id),
+          loadSceneVisualManifest(client, script.script_id),
         ]);
         if (active) {
           setAssetCandidates(candidateResponse.candidates);
           setAssetTasks(taskResponse.tasks);
+          setAssetManifest(manifestState.manifest);
+          setAssetManifestBlockers(manifestState.blockers);
         }
       } catch (error) {
         if (active) {
           setAssetCandidates([]);
           setAssetTasks([]);
+          setAssetManifest(null);
+          setAssetManifestBlockers([]);
           setAssetError(errorToMessage(error));
         }
       } finally {
         if (active) {
           setLoadingAssetCandidates(false);
+          setLoadingAssetManifest(false);
         }
       }
     }
@@ -960,13 +990,16 @@ export default function Home() {
       }
       polling = true;
       try {
-        const [candidateResponse, taskResponse] = await Promise.all([
+        const [candidateResponse, taskResponse, manifestState] = await Promise.all([
           listAssetCandidates(client, activeScriptId),
           listAssetGenerationTasks(client, activeScriptId),
+          loadSceneVisualManifest(client, activeScriptId),
         ]);
         if (active && selectedScriptIdRef.current === activeScriptId) {
           setAssetCandidates(candidateResponse.candidates);
           setAssetTasks(taskResponse.tasks);
+          setAssetManifest(manifestState.manifest);
+          setAssetManifestBlockers(manifestState.blockers);
         }
       } catch (error) {
         if (active && selectedScriptIdRef.current === activeScriptId) {
@@ -1134,6 +1167,9 @@ export default function Home() {
     if (menuKey === scriptCreationMenuKey) {
       setSelectedScriptSubMenuKey(scriptGeneratorMenuKey);
     }
+    if (menuKey === productionMenuKey) {
+      setSelectedProductionSubMenuKey(workGenerationMenuKey);
+    }
   }
 
   function handleSelectWorkspaceSubMenu(menuKey: string) {
@@ -1165,6 +1201,11 @@ export default function Home() {
     if (menuKey === assetGenerationMenuKey) {
       setSelectedMenuKey(materialManagementMenuKey);
       setSelectedMaterialSubMenuKey(assetGenerationMenuKey);
+      return;
+    }
+    if (menuKey === workGenerationMenuKey) {
+      setSelectedMenuKey(productionMenuKey);
+      setSelectedProductionSubMenuKey(workGenerationMenuKey);
     }
   }
 
@@ -1374,6 +1415,28 @@ export default function Home() {
     }
   }
 
+  async function refreshAssetManifest(scriptId: string) {
+    setLoadingAssetManifest(true);
+
+    try {
+      const manifestState = await loadSceneVisualManifest(client, scriptId);
+      if (selectedScriptIdRef.current === scriptId) {
+        setAssetManifest(manifestState.manifest);
+        setAssetManifestBlockers(manifestState.blockers);
+      }
+    } catch (error) {
+      if (selectedScriptIdRef.current === scriptId) {
+        setAssetManifest(null);
+        setAssetManifestBlockers([]);
+        setAssetError(errorToMessage(error));
+      }
+    } finally {
+      if (selectedScriptIdRef.current === scriptId) {
+        setLoadingAssetManifest(false);
+      }
+    }
+  }
+
   async function handleCreateAssetGenerationTasks() {
     if (!selectedScript || imageModelUnavailable) {
       setAssetError("请选择可用的图片模型");
@@ -1387,9 +1450,14 @@ export default function Home() {
     try {
       const response = await createAssetGenerationTasks(client, scriptId, currentAssetPayload);
       if (selectedScriptIdRef.current === scriptId) {
-        setAssetTasks(response.tasks);
+        setAssetTasks((currentTasks) => [
+          ...response.tasks,
+          ...currentTasks.filter(
+            (task) => task.task_type === "video_draft" || task.task_type === "video_generation",
+          ),
+        ]);
       }
-      await refreshAssetCandidates(scriptId);
+      await Promise.all([refreshAssetCandidates(scriptId), refreshAssetManifest(scriptId)]);
     } catch (error) {
       if (isModelDisabledError(error)) {
         await refreshModelOptions();
@@ -1405,6 +1473,7 @@ export default function Home() {
   }
 
   async function handleSelectAssetCandidate(sceneId: string, candidateId: string) {
+    const scriptId = selectedScript?.script_id;
     setAssetActionInProgress(true);
     setAssetError("");
 
@@ -1413,6 +1482,9 @@ export default function Home() {
       setAssetCandidates((currentCandidates) =>
         mergeUpdatedCandidate(currentCandidates, updatedCandidate),
       );
+      if (scriptId) {
+        await refreshAssetManifest(scriptId);
+      }
     } catch (error) {
       setAssetError(errorToMessage(error));
     } finally {
@@ -1421,6 +1493,7 @@ export default function Home() {
   }
 
   async function handleRejectAssetCandidate(sceneId: string, candidateId: string) {
+    const scriptId = selectedScript?.script_id;
     setAssetActionInProgress(true);
     setAssetError("");
 
@@ -1429,6 +1502,9 @@ export default function Home() {
       setAssetCandidates((currentCandidates) =>
         mergeUpdatedCandidate(currentCandidates, updatedCandidate),
       );
+      if (scriptId) {
+        await refreshAssetManifest(scriptId);
+      }
     } catch (error) {
       setAssetError(errorToMessage(error));
     } finally {
@@ -1468,20 +1544,6 @@ export default function Home() {
     }
   }
 
-  async function handleConfirmAssetGenerationTask(taskId: string) {
-    setAssetActionInProgress(true);
-    setAssetError("");
-
-    try {
-      const task = await confirmAssetGenerationTask(client, taskId);
-      setAssetTasks((currentTasks) => upsertAssetTask(currentTasks, task));
-    } catch (error) {
-      setAssetError(errorToMessage(error));
-    } finally {
-      setAssetActionInProgress(false);
-    }
-  }
-
   async function handleDismissAssetGenerationTask() {
     if (!selectedScript || !assetTaskToDismissId || assetTaskDismissalInFlightRef.current) {
       return;
@@ -1504,6 +1566,7 @@ export default function Home() {
         setAssetTasks(taskResponse.tasks);
         setAssetTaskToDismissId(null);
       }
+      await refreshAssetManifest(scriptId);
     } catch (error) {
       if (selectedScriptIdRef.current === scriptId) {
         setAssetError(errorToMessage(error));
@@ -1513,6 +1576,38 @@ export default function Home() {
       if (selectedScriptIdRef.current === scriptId) {
         setDismissingAssetTaskId(null);
       }
+    }
+  }
+
+  async function handleEnterWorkGeneration() {
+    if (!selectedScript || !assetManifest || !workGenerationAvailable) {
+      return;
+    }
+
+    const scriptId = selectedScript.script_id;
+    setAssetActionInProgress(true);
+    setAssetError("");
+
+    try {
+      const validatedManifest = await validateSceneVisualManifest(
+        client,
+        scriptId,
+        assetManifest.input_version,
+      );
+      window.sessionStorage.setItem(
+        "scene-visual-manifest-handoff",
+        JSON.stringify({
+          script_id: validatedManifest.script_id,
+          input_version: validatedManifest.input_version,
+        }),
+      );
+      setSelectedMenuKey(productionMenuKey);
+      setSelectedProductionSubMenuKey(workGenerationMenuKey);
+    } catch (error) {
+      await refreshAssetManifest(scriptId);
+      setAssetError(errorToMessage(error));
+    } finally {
+      setAssetActionInProgress(false);
     }
   }
 
@@ -2297,7 +2392,10 @@ export default function Home() {
                   candidateCount: assetCandidateCount,
                   error: assetError,
                   loadingCandidates: loadingAssetCandidates,
+                  loadingManifest: loadingAssetManifest,
                   loadingPlan: loadingAssetPlan,
+                  manifest: assetManifest,
+                  manifestBlockers: assetManifestBlockers,
                   plan: assetPlan,
                   modelUnavailable: imageModelUnavailable,
                   modelSelect: (
@@ -2315,10 +2413,11 @@ export default function Home() {
                   tasks: assetTasks,
                   taskToDismissId: assetTaskToDismissId,
                   useReferenceMaterials,
+                  workGenerationAvailable,
                   onCandidateCountChange: setAssetCandidateCount,
-                  onConfirmVideoTask: handleConfirmAssetGenerationTask,
                   onCancelDismissTask: () => setAssetTaskToDismissId(null),
                   onConfirmDismissTask: handleDismissAssetGenerationTask,
+                  onEnterWorkGeneration: handleEnterWorkGeneration,
                   onGenerateCandidates: handleCreateAssetGenerationTasks,
                   onRegenerateScene: handleRegenerateSceneAsset,
                   onRequestDismissTask: setAssetTaskToDismissId,
@@ -2431,6 +2530,52 @@ async function openScript(
       setLoading(false);
     }
   }
+}
+
+async function loadSceneVisualManifest(client: ApiClient, scriptId: string) {
+  try {
+    return {
+      manifest: await getSceneVisualManifest(client, scriptId),
+      blockers: [] as SceneVisualManifestBlocker[],
+    };
+  } catch (error) {
+    const blockers = sceneVisualManifestBlockers(error);
+    if (blockers) {
+      return { manifest: null, blockers };
+    }
+    throw error;
+  }
+}
+
+function sceneVisualManifestBlockers(error: unknown): SceneVisualManifestBlocker[] | null {
+  if (!(error instanceof ApiError) || !error.details || typeof error.details !== "object") {
+    return null;
+  }
+  const details = error.details as { code?: unknown; blockers?: unknown };
+  if (details.code !== "scene_visual_manifest_incomplete" || !Array.isArray(details.blockers)) {
+    return null;
+  }
+
+  const reasons = new Set<SceneVisualManifestBlocker["reason"]>([
+    "image_generation_failed",
+    "selected_image_missing",
+    "selected_material_missing",
+    "selected_material_not_image",
+    "material_archived",
+    "material_url_missing",
+  ]);
+  return details.blockers.filter((blocker): blocker is SceneVisualManifestBlocker => {
+    if (!blocker || typeof blocker !== "object") {
+      return false;
+    }
+    const value = blocker as Record<string, unknown>;
+    return (
+      typeof value.scene_id === "string" &&
+      typeof value.sequence === "number" &&
+      typeof value.reason === "string" &&
+      reasons.has(value.reason as SceneVisualManifestBlocker["reason"])
+    );
+  });
 }
 
 function errorToMessage(error: unknown) {

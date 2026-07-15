@@ -47,6 +47,10 @@ impl AssetGenerationTaskType {
             Self::VideoGeneration => "video_generation",
         }
     }
+
+    pub fn is_legacy_read_only(self) -> bool {
+        matches!(self, Self::VideoDraft | Self::VideoGeneration)
+    }
 }
 
 impl TryFrom<&str> for AssetGenerationTaskType {
@@ -111,6 +115,10 @@ impl AssetCandidateType {
             Self::Video => "video",
         }
     }
+
+    pub fn is_legacy_read_only(self) -> bool {
+        matches!(self, Self::Video)
+    }
 }
 
 impl TryFrom<&str> for AssetCandidateType {
@@ -139,6 +147,10 @@ impl AssetCandidateSource {
             Self::AiGenerated => "ai_generated",
             Self::VideoTask => "video_task",
         }
+    }
+
+    pub fn is_legacy_read_only(self) -> bool {
+        matches!(self, Self::VideoTask)
     }
 }
 
@@ -426,11 +438,6 @@ pub trait AssetGenerationRepository: Send + Sync {
         error_message: Option<String>,
     ) -> Result<AssetGenerationTask, AssetGenerationRepositoryError>;
 
-    async fn confirm_video_task(
-        &self,
-        task_id: Uuid,
-    ) -> Result<AssetGenerationTask, AssetGenerationRepositoryError>;
-
     async fn dismiss_task(
         &self,
         task_id: Uuid,
@@ -443,6 +450,9 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
         &self,
         input: CreateAssetGenerationTaskInput,
     ) -> Result<AssetGenerationTask, AssetGenerationRepositoryError> {
+        if input.task_type.is_legacy_read_only() {
+            return Err(AssetGenerationRepositoryError::LegacyVideoReadOnly);
+        }
         let row = sqlx::query(
             r#"
             INSERT INTO asset_generation_tasks (
@@ -480,6 +490,9 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
         &self,
         input: CreateAssetGenerationTaskInput,
     ) -> Result<CreateOrReuseAssetGenerationTaskResult, AssetGenerationRepositoryError> {
+        if input.task_type != AssetGenerationTaskType::ImageCandidates {
+            return Err(AssetGenerationRepositoryError::LegacyVideoReadOnly);
+        }
         let scene_id = input.scene_id.ok_or_else(|| {
             AssetGenerationRepositoryError::Storage("单镜头图片生成任务必须绑定分镜".to_string())
         })?;
@@ -628,6 +641,9 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
         &self,
         input: CreateAssetCandidateInput,
     ) -> Result<SceneAssetCandidate, AssetGenerationRepositoryError> {
+        if input.candidate_type.is_legacy_read_only() || input.source.is_legacy_read_only() {
+            return Err(AssetGenerationRepositoryError::LegacyVideoReadOnly);
+        }
         self.validate_candidate_relations(&input).await?;
         let row = sqlx::query(
             r#"
@@ -698,7 +714,10 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
                    retry_count, dismissed_at, created_at, updated_at
             FROM asset_generation_tasks
             WHERE script_id = $1
-              AND dismissed_at IS NULL
+              AND (
+                  dismissed_at IS NULL
+                  OR task_type IN ('video_draft', 'video_generation')
+              )
             ORDER BY created_at ASC, id ASC
             "#,
         )
@@ -758,6 +777,10 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
         ))?;
 
         let candidate = candidate_from_row(candidate_row)?;
+        if candidate.candidate_type.is_legacy_read_only() || candidate.source.is_legacy_read_only()
+        {
+            return Err(AssetGenerationRepositoryError::LegacyVideoReadOnly);
+        }
         if candidate.status == AssetCandidateStatus::Failed {
             return Err(AssetGenerationRepositoryError::FailedCandidateNotSelectable(candidate.id));
         }
@@ -821,6 +844,7 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
                 updated_at = NOW()
             WHERE scene_id = $1
               AND status = 'selected'
+              AND candidate_type = 'image'
               AND id <> $2
             "#,
         )
@@ -837,15 +861,20 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
                 updated_at = NOW()
             WHERE id = $1
               AND scene_id = $2
+              AND candidate_type = 'image'
+              AND source <> 'video_task'
             RETURNING id, project_id, script_id, scene_id, material_id, candidate_type,
                       source, status, rank, generation_task_id, metadata, created_at, updated_at
             "#,
         )
         .bind(candidate_id)
         .bind(scene_id)
-        .fetch_one(&mut *transaction)
+        .fetch_optional(&mut *transaction)
         .await
-        .map_err(AssetGenerationRepositoryError::from)?;
+        .map_err(AssetGenerationRepositoryError::from)?
+        .ok_or(AssetGenerationRepositoryError::CandidateNotSelectable(
+            candidate_id,
+        ))?;
 
         transaction
             .commit()
@@ -860,6 +889,21 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
         scene_id: Uuid,
         candidate_id: Uuid,
     ) -> Result<SceneAssetCandidate, AssetGenerationRepositoryError> {
+        let legacy_candidate = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT candidate_type = 'video' OR source = 'video_task'
+            FROM scene_asset_candidates
+            WHERE id = $1 AND scene_id = $2
+            "#,
+        )
+        .bind(candidate_id)
+        .bind(scene_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AssetGenerationRepositoryError::from)?;
+        if legacy_candidate == Some(true) {
+            return Err(AssetGenerationRepositoryError::LegacyVideoReadOnly);
+        }
         let row = sqlx::query(
             r#"
             UPDATE scene_asset_candidates
@@ -898,6 +942,7 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
                 error_message = $4,
                 updated_at = NOW()
             WHERE id = $1
+              AND task_type = 'image_candidates'
             RETURNING id, project_id, script_id, scene_id, model_id, model_snapshot,
                       provider, task_type, status,
                       candidate_count, reference_material_ids, params, result, error_message,
@@ -911,60 +956,29 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
         .fetch_optional(&self.pool)
         .await
         .map_err(AssetGenerationRepositoryError::from)?
-        .ok_or(AssetGenerationRepositoryError::TaskNotFound(task_id))?;
+        .ok_or_else(|| AssetGenerationRepositoryError::TaskNotFound(task_id))?;
 
         task_from_row(row)
-    }
-
-    async fn confirm_video_task(
-        &self,
-        task_id: Uuid,
-    ) -> Result<AssetGenerationTask, AssetGenerationRepositoryError> {
-        let row = sqlx::query(
-            r#"
-            UPDATE asset_generation_tasks
-            SET task_type = 'video_generation',
-                status = 'pending',
-                result = jsonb_set(COALESCE(result, '{}'::jsonb), '{confirmed}', 'true'::jsonb, true),
-                error_message = NULL,
-                updated_at = NOW()
-            WHERE id = $1
-              AND task_type = 'video_draft'
-              AND status = 'draft'
-            RETURNING id, project_id, script_id, scene_id, model_id, model_snapshot,
-                      provider, task_type, status,
-                      candidate_count, reference_material_ids, params, result, error_message,
-                      retry_count, dismissed_at, created_at, updated_at
-            "#,
-        )
-        .bind(task_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(AssetGenerationRepositoryError::from)?;
-
-        match row {
-            Some(row) => task_from_row(row),
-            None => {
-                let exists = sqlx::query_scalar::<_, bool>(
-                    "SELECT EXISTS(SELECT 1 FROM asset_generation_tasks WHERE id = $1)",
-                )
-                .bind(task_id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(AssetGenerationRepositoryError::from)?;
-                if exists {
-                    Err(AssetGenerationRepositoryError::TaskNotConfirmable(task_id))
-                } else {
-                    Err(AssetGenerationRepositoryError::TaskNotFound(task_id))
-                }
-            }
-        }
     }
 
     async fn dismiss_task(
         &self,
         task_id: Uuid,
     ) -> Result<AssetGenerationTask, AssetGenerationRepositoryError> {
+        let task_type = sqlx::query_scalar::<_, String>(
+            "SELECT task_type FROM asset_generation_tasks WHERE id = $1",
+        )
+        .bind(task_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AssetGenerationRepositoryError::from)?;
+        match task_type.as_deref() {
+            Some("video_draft" | "video_generation") => {
+                return Err(AssetGenerationRepositoryError::LegacyVideoReadOnly);
+            }
+            None => return Err(AssetGenerationRepositoryError::TaskNotFound(task_id)),
+            Some(_) => {}
+        }
         let row = sqlx::query(
             r#"
             UPDATE asset_generation_tasks
@@ -1098,8 +1112,8 @@ impl std::error::Error for AssetGenerationParseError {}
 #[derive(Debug)]
 pub enum AssetGenerationRepositoryError {
     TaskNotFound(Uuid),
-    TaskNotConfirmable(Uuid),
     TaskNotDismissible(Uuid),
+    LegacyVideoReadOnly,
     CandidateNotFound(Uuid),
     CandidateNotSelectable(Uuid),
     FailedCandidateNotSelectable(Uuid),
@@ -1119,17 +1133,14 @@ impl fmt::Display for AssetGenerationRepositoryError {
             Self::TaskNotFound(task_id) => {
                 write!(formatter, "asset generation task not found: {task_id}")
             }
-            Self::TaskNotConfirmable(task_id) => {
-                write!(
-                    formatter,
-                    "asset generation task is not confirmable: {task_id}"
-                )
-            }
             Self::TaskNotDismissible(task_id) => {
                 write!(
                     formatter,
                     "asset generation task is not dismissible: {task_id}"
                 )
+            }
+            Self::LegacyVideoReadOnly => {
+                formatter.write_str("legacy per-scene video records are read-only")
             }
             Self::CandidateNotFound(candidate_id) => {
                 write!(formatter, "asset candidate not found: {candidate_id}")

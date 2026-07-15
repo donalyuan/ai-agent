@@ -23,6 +23,14 @@ pub(crate) fn router() -> Router<AppState> {
             get(handlers::list_asset_candidates),
         )
         .route(
+            "/api/scripts/:script_id/scene-visual-manifest",
+            get(handlers::get_scene_visual_manifest),
+        )
+        .route(
+            "/api/scripts/:script_id/scene-visual-manifest/validate",
+            post(handlers::validate_scene_visual_manifest),
+        )
+        .route(
             "/api/scenes/:scene_id/asset-candidates/:candidate_id/select",
             put(handlers::select_asset_candidate),
         )
@@ -33,10 +41,6 @@ pub(crate) fn router() -> Router<AppState> {
         .route(
             "/api/scenes/:scene_id/asset-generation-tasks",
             post(handlers::create_scene_asset_generation_task),
-        )
-        .route(
-            "/api/asset-generation-tasks/:task_id/confirm",
-            post(handlers::confirm_asset_generation_task),
         )
         .route(
             "/api/asset-generation-tasks/:task_id/dismiss",

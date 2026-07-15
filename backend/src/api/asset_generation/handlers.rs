@@ -81,6 +81,32 @@ pub(super) async fn list_asset_candidates(
     Ok(Json(SceneAssetCandidateListResponse { candidates }))
 }
 
+pub(super) async fn get_scene_visual_manifest(
+    State(state): State<AppState>,
+    Path(script_id): Path<Uuid>,
+) -> Result<Json<SceneVisualManifestResponse>, ScriptApiError> {
+    let manifest = state
+        .asset_generation_service()?
+        .scene_visual_manifest(script_id)
+        .await?;
+    Ok(Json(manifest.into()))
+}
+
+pub(super) async fn validate_scene_visual_manifest(
+    State(state): State<AppState>,
+    Path(script_id): Path<Uuid>,
+    ValidJson(request): ValidJson<SceneVisualManifestValidationRequest>,
+) -> Result<Json<SceneVisualManifestResponse>, ScriptApiError> {
+    request
+        .validate_for_api()
+        .map_err(ScriptApiError::AssetValidation)?;
+    let manifest = state
+        .asset_generation_service()?
+        .validate_scene_visual_manifest(script_id, request.expected_input_version.trim())
+        .await?;
+    Ok(Json(manifest.into()))
+}
+
 pub(super) async fn select_asset_candidate(
     State(state): State<AppState>,
     Path((scene_id, candidate_id)): Path<(Uuid, Uuid)>,
@@ -138,17 +164,6 @@ pub(super) async fn create_scene_asset_generation_task(
         },
         Json(AssetGenerationTaskResponse::from(result.task)),
     ))
-}
-
-pub(super) async fn confirm_asset_generation_task(
-    State(state): State<AppState>,
-    Path(task_id): Path<Uuid>,
-) -> Result<Json<AssetGenerationTaskResponse>, ScriptApiError> {
-    let task = state
-        .asset_generation_service()?
-        .confirm_task(task_id)
-        .await?;
-    Ok(Json(AssetGenerationTaskResponse::from(task)))
 }
 
 pub(super) async fn dismiss_asset_generation_task(

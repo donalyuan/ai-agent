@@ -4,6 +4,8 @@ import type {
   AssetGenerationPlanResponse,
   AssetGenerationTask,
   SceneAssetCandidate,
+  SceneVisualManifest,
+  SceneVisualManifestBlocker,
   ScriptDetail,
 } from "../../lib/api";
 import {
@@ -22,7 +24,10 @@ export type AssetCandidatePanelProps = {
   candidateCount: number;
   error: string;
   loadingCandidates: boolean;
+  loadingManifest: boolean;
   loadingPlan: boolean;
+  manifest: SceneVisualManifest | null;
+  manifestBlockers: SceneVisualManifestBlocker[];
   plan: AssetGenerationPlanResponse | null;
   modelSelect: ReactNode;
   modelUnavailable: boolean;
@@ -31,11 +36,12 @@ export type AssetCandidatePanelProps = {
   tasks: AssetGenerationTask[];
   taskToDismissId: string | null;
   useReferenceMaterials: boolean;
+  workGenerationAvailable: boolean;
   writesDisabled: boolean;
   onCandidateCountChange: (count: number) => void;
   onCancelDismissTask: () => void;
   onConfirmDismissTask: () => void;
-  onConfirmVideoTask: (taskId: string) => void;
+  onEnterWorkGeneration: () => void;
   onGenerateCandidates: () => void;
   onRegenerateScene: (sceneId: string) => void;
   onRequestDismissTask: (taskId: string) => void;
@@ -54,7 +60,10 @@ export function AssetCandidatePanel({
   candidateCount,
   error,
   loadingCandidates,
+  loadingManifest,
   loadingPlan,
+  manifest,
+  manifestBlockers,
   plan,
   modelSelect,
   modelUnavailable,
@@ -63,11 +72,12 @@ export function AssetCandidatePanel({
   tasks,
   taskToDismissId,
   useReferenceMaterials,
+  workGenerationAvailable,
   writesDisabled,
   onCandidateCountChange,
   onCancelDismissTask,
   onConfirmDismissTask,
-  onConfirmVideoTask,
+  onEnterWorkGeneration,
   onRegenerateScene,
   onRequestDismissTask,
   onRejectCandidate,
@@ -87,23 +97,27 @@ export function AssetCandidatePanel({
     ? selectedCandidateForScene(activeSceneCandidates, activeScene.scene_id)
     : null;
   const existingCandidates = activeSceneCandidates.filter(
-    (candidate) => candidate.source === "existing_material" && candidate.status !== "selected",
+    (candidate) => candidate.source === "existing_material" && candidate.candidate_type === "image",
   );
   const aiImageCandidates = activeSceneCandidates.filter(
-    (candidate) =>
-      candidate.source === "ai_generated" &&
-      candidate.candidate_type === "image" &&
-      candidate.status !== "selected",
+    (candidate) => candidate.source === "ai_generated" && candidate.candidate_type === "image",
   );
   const planSceneCount = plan?.scene_count || scenes.length;
   const planImageCount = plan?.image_candidate_count || planSceneCount * candidateCount;
   const maxImageCount = plan?.max_image_candidate_count || 48;
   const imageTaskEntries = imageTasksForScene(tasks, activeScene?.scene_id || null);
-  const videoTaskEntries = videoTasksForScene(tasks, activeScene?.scene_id || null);
+  const historicalVideoTaskEntries = historicalVideoTasksForScene(
+    tasks,
+    activeScene?.scene_id || null,
+  );
   const taskToDismiss = tasks.find((task) => task.task_id === taskToDismissId) || null;
+  const manifestBlockersByScene = new Map(
+    manifestBlockers.map((blocker) => [blocker.scene_id, blocker]),
+  );
+  const manifestReady = Boolean(manifest && manifest.scenes.length === scenes.length);
 
   const openImagePreview = (candidate: SceneAssetCandidate, trigger: HTMLButtonElement) => {
-    const imageUrl = candidatePreviewUrl(candidate);
+    const imageUrl = candidate.file_url || candidatePreviewUrl(candidate);
     if (!imageUrl) {
       return;
     }
@@ -125,7 +139,7 @@ export function AssetCandidatePanel({
   };
 
   return (
-    <section aria-label="脚本详情素材候选" className="assetCandidatePanel">
+    <section aria-label="画面生成图片候选" className="assetCandidatePanel">
       {error ? (
         <p className="errorText" role="alert">
           {error}
@@ -141,6 +155,7 @@ export function AssetCandidatePanel({
           <div className="assetSceneList">
             {scenes.map((scene) => {
               const sceneSelectedCandidate = selectedCandidateForScene(candidates, scene.scene_id);
+              const manifestBlocker = manifestBlockersByScene.get(scene.scene_id);
               return (
                 <button
                   className={activeScene?.scene_id === scene.scene_id ? "assetSceneItem selected" : "assetSceneItem"}
@@ -150,7 +165,13 @@ export function AssetCandidatePanel({
             >
                   <span>镜头 {scene.sequence}</span>
                   <strong>{scene.duration_sec} 秒</strong>
-                  <em>{sceneSelectedCandidate ? "已选主素材" : "待选择"}</em>
+                  <em className={manifestBlocker ? "blocked" : ""}>
+                    {manifestBlocker
+                      ? manifestBlockerLabel(manifestBlocker.reason)
+                      : sceneSelectedCandidate
+                        ? "主画面已就绪"
+                        : "待选择主画面"}
+                  </em>
                 </button>
               );
             })}
@@ -158,9 +179,27 @@ export function AssetCandidatePanel({
         </section>
 
         <section className="assetCandidateBrowser" aria-label="候选素材">
-          <div className="assetColumnHeader">
-            <h4>候选素材</h4>
-            <span>{loadingCandidates ? "读取中" : `${activeSceneCandidates.length} 个候选`}</span>
+          <div className="assetCandidateBrowserHeader">
+            <div>
+              <h4>候选素材</h4>
+              <p>
+                {loadingCandidates
+                  ? "正在读取图片候选"
+                  : "旧素材优先复用，AI 图片生成多张候选后人工选择"}
+              </p>
+            </div>
+            <div
+              className={
+                selectedCandidate
+                  ? "assetCurrentCandidateSummary"
+                  : "assetCurrentCandidateSummary empty"
+              }
+            >
+              <strong>当前主素材</strong>
+              <span title={selectedCandidate?.file_name || undefined}>
+                {selectedCandidate?.file_name || "尚未选择"}
+              </span>
+            </div>
           </div>
 
           {activeScene ? (
@@ -181,22 +220,12 @@ export function AssetCandidatePanel({
             </section>
           ) : null}
 
-          <CandidateSection layout="single" title="当前主素材">
-            {selectedCandidate ? (
-              <CandidateCard
-                actionInProgress={actionInProgress}
-                candidate={selectedCandidate}
-                isSelected
-                writesDisabled={writesDisabled}
-                onRejectCandidate={onRejectCandidate}
-                onSelectCandidate={onSelectCandidate}
-              />
-            ) : (
-              <p className="assetEmptyText">当前分镜还没有主素材。</p>
-            )}
-          </CandidateSection>
-
-          <CandidateSection layout="pair" title="旧素材候选">
+          <CandidateSection
+            description="优先匹配人物/IP/常用场景素材，可作为参考图"
+            layout="pair"
+            title="旧素材候选"
+            tone="existing"
+          >
             {existingCandidates.length ? (
               existingCandidates.map((candidate) => (
                 <CandidateCard
@@ -213,14 +242,18 @@ export function AssetCandidatePanel({
             )}
           </CandidateSection>
 
-          <CandidateSection layout="triple" title="AI 图片候选">
+          <CandidateSection
+            description={`每分镜 ${candidateCount} 张 · 生成结果自动入库`}
+            layout="triple"
+            title="AI 图片候选"
+            tone="ai"
+          >
             {aiImageCandidates.length ? (
               aiImageCandidates.map((candidate) => (
                 <CandidateCard
                   actionInProgress={actionInProgress}
                   candidate={candidate}
                   key={candidate.candidate_id}
-                  previewEnabled
                   writesDisabled={writesDisabled}
                   onOpenPreview={openImagePreview}
                   onRejectCandidate={onRejectCandidate}
@@ -326,31 +359,54 @@ export function AssetCandidatePanel({
             )}
           </section>
 
-          <section className="assetVideoTasks" aria-label="AI 视频二次确认">
-            <div>
-              <h5>AI 视频二次确认</h5>
-              <p>视频生成会产生外部费用，必须人工确认后才启动。</p>
-            </div>
-            {videoTaskEntries.length ? (
-              videoTaskEntries.map((task) => (
-                <div className="assetTaskRow" key={task.task_id}>
+          {historicalVideoTaskEntries.length ? (
+            <section className="assetLegacyVideoTasks" aria-label="历史逐分镜视频任务">
+              <div className="assetLegacyVideoHeader">
+                <h5>历史逐分镜视频任务</h5>
+                <span>只读审计</span>
+              </div>
+              {historicalVideoTaskEntries.map((task) => (
+                <div className="assetTaskRow legacy" key={task.task_id}>
                   <span>{task.label}</span>
                   <strong>{task.statusLabel}</strong>
-                  {task.canConfirm ? (
-                    <button
-                      className="secondaryButton"
-                      disabled={writesDisabled || actionInProgress}
-                      onClick={() => onConfirmVideoTask(task.task_id)}
-                      type="button"
-                    >
-                      确认生成视频
-                    </button>
+                  {task.errorMessage ? <p className="errorText">{task.errorMessage}</p> : null}
+                  {task.paramsSnapshot || task.resultSnapshot ? (
+                    <details className="assetLegacyTaskSnapshot">
+                      <summary>查看参数与结果快照</summary>
+                      {task.paramsSnapshot ? <code>参数：{task.paramsSnapshot}</code> : null}
+                      {task.resultSnapshot ? <code>结果：{task.resultSnapshot}</code> : null}
+                    </details>
                   ) : null}
                 </div>
-              ))
-            ) : (
-              <p className="assetEmptyText">生成素材候选后会创建待确认视频任务。</p>
-            )}
+              ))}
+            </section>
+          ) : null}
+
+          <section className={manifestReady ? "assetWorkEntry ready" : "assetWorkEntry"}>
+            <button
+              className="primaryButton"
+              disabled={
+                writesDisabled ||
+                loadingManifest ||
+                !manifestReady ||
+                !workGenerationAvailable
+              }
+              onClick={onEnterWorkGeneration}
+              type="button"
+            >
+              进入作品生成
+            </button>
+            <span>
+              {loadingManifest
+                ? "正在检查主画面"
+                : manifestBlockers.length
+                  ? `还缺 ${manifestBlockers.length} 个主画面`
+                  : manifestReady && !workGenerationAvailable
+                    ? "主画面齐备 · 作品生成待开放"
+                    : manifestReady
+                      ? "全部主画面已就绪"
+                      : "请先为每个分镜选择主画面"}
+            </span>
           </section>
         </aside>
       </div>
@@ -375,7 +431,7 @@ export function AssetCandidatePanel({
           >
             <h4 id="asset-dismiss-dialog-title">清理失败任务？</h4>
             <p>
-              该任务及其失败候选将从素材生成页面隐藏。此操作不会重新调用供应商，也不会产生额外费用。
+              该任务及其失败候选将从画面生成页面隐藏。此操作不会重新调用供应商，也不会产生额外费用。
             </p>
             <p className="assetDismissAuditNote">
               数据库继续保留任务状态、错误、候选数量和费用审计；已生成素材不受影响。
@@ -407,16 +463,23 @@ export function AssetCandidatePanel({
 
 function CandidateSection({
   children,
+  description,
   layout,
   title,
+  tone,
 }: {
   children: ReactNode;
-  layout: "single" | "pair" | "triple";
+  description: string;
+  layout: "pair" | "triple";
   title: string;
+  tone: "existing" | "ai";
 }) {
   return (
-    <section className="assetCandidateSection">
-      <h5>{title}</h5>
+    <section aria-label={title} className={`assetCandidateSection ${tone}`}>
+      <div className="assetCandidateSectionHeader">
+        <h5>{title}</h5>
+        <p>{description}</p>
+      </div>
       <div className={`assetCandidateCards ${layout}`}>{children}</div>
     </section>
   );
@@ -425,8 +488,6 @@ function CandidateSection({
 function CandidateCard({
   actionInProgress,
   candidate,
-  isSelected = false,
-  previewEnabled = false,
   writesDisabled,
   onOpenPreview,
   onRejectCandidate,
@@ -434,8 +495,6 @@ function CandidateCard({
 }: {
   actionInProgress: boolean;
   candidate: SceneAssetCandidate;
-  isSelected?: boolean;
-  previewEnabled?: boolean;
   writesDisabled: boolean;
   onOpenPreview?: (candidate: SceneAssetCandidate, trigger: HTMLButtonElement) => void;
   onRejectCandidate: (sceneId: string, candidateId: string) => void;
@@ -450,10 +509,18 @@ function CandidateCard({
   const selectLabel = candidate.source === "existing_material" ? "选择旧素材" : "选择为主素材";
   const rejectLabel = candidate.source === "existing_material" ? "排除旧素材" : "排除候选";
   const previewAvailable =
-    previewEnabled && Boolean(previewUrl) && candidate.status !== "failed" && Boolean(onOpenPreview);
+    candidate.source === "ai_generated" &&
+    candidate.candidate_type === "image" &&
+    Boolean(previewUrl) &&
+    candidate.status !== "failed" &&
+    Boolean(onOpenPreview);
 
   return (
-    <article className={isSelected ? "assetCandidateCard selected" : "assetCandidateCard"}>
+    <article
+      className={
+        candidate.status === "selected" ? "assetCandidateCard selected" : "assetCandidateCard"
+      }
+    >
       {previewAvailable && previewUrl && onOpenPreview ? (
         <button
           aria-label={`查看${candidate.file_name || "AI 图片候选"}大图`}
@@ -464,7 +531,7 @@ function CandidateCard({
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img alt={candidate.file_name || "素材候选预览"} src={previewUrl} />
-          <span aria-hidden="true" className="assetPreviewExpandIcon">⛶</span>
+          <span aria-hidden="true" className="assetPreviewExpandIcon" />
         </button>
       ) : (
         <div className="assetPreviewFrame">
@@ -477,7 +544,9 @@ function CandidateCard({
         </div>
       )}
       <div className="assetCandidateInfo">
-        <strong>{candidate.file_name || "未生成文件"}</strong>
+        <strong title={candidate.file_name || undefined}>
+          {candidate.file_name || "未生成文件"}
+        </strong>
         <span>{assetCandidateStatusLabels[candidate.status]}</span>
         {typeof candidate.metadata.error_message === "string" ? (
           <em>{candidate.metadata.error_message}</em>
@@ -538,14 +607,18 @@ function imageTasksForScene(tasks: AssetGenerationTask[], sceneId: string | null
     });
 }
 
-function videoTasksForScene(
+function historicalVideoTasksForScene(
   tasks: AssetGenerationTask[],
   sceneId: string | null,
 ) {
-  const taskEntries = new Map<
-    string,
-    { canConfirm: boolean; label: string; statusLabel: string; task_id: string }
-  >();
+  const taskEntries = new Map<string, {
+    errorMessage: string | null;
+    label: string;
+    paramsSnapshot: string | null;
+    resultSnapshot: string | null;
+    statusLabel: string;
+    task_id: string;
+  }>();
 
   for (const task of tasks) {
     if (task.task_type !== "video_draft" && task.task_type !== "video_generation") {
@@ -555,12 +628,30 @@ function videoTasksForScene(
       continue;
     }
     taskEntries.set(task.task_id, {
-      canConfirm: task.task_type === "video_draft" && task.status === "draft",
-      label: task.scene_id ? "当前分镜视频任务" : "脚本视频任务",
-      statusLabel: assetTaskStatusLabels[task.status],
+      errorMessage: task.error_message,
+      label: task.task_type === "video_draft" ? "历史视频草稿" : "历史视频生成任务",
+      paramsSnapshot: auditSnapshot(task.params),
+      resultSnapshot: auditSnapshot(task.result),
+      statusLabel: task.status === "draft" ? "历史草稿" : assetTaskStatusLabels[task.status],
       task_id: task.task_id,
     });
   }
 
   return Array.from(taskEntries.values());
+}
+
+function auditSnapshot(value: Record<string, unknown>) {
+  return Object.keys(value).length ? JSON.stringify(value) : null;
+}
+
+function manifestBlockerLabel(reason: SceneVisualManifestBlocker["reason"]) {
+  const labels: Record<SceneVisualManifestBlocker["reason"], string> = {
+    image_generation_failed: "图片生成失败",
+    selected_image_missing: "缺少主画面",
+    selected_material_missing: "主画面素材缺失",
+    selected_material_not_image: "主素材不是图片",
+    material_archived: "主画面已归档",
+    material_url_missing: "主画面文件缺失",
+  };
+  return labels[reason];
 }

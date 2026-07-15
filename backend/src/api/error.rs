@@ -3,7 +3,9 @@
 use crate::agents::ScriptAgentError;
 use crate::application;
 use crate::application::agents::runtime::AgentRuntimeError;
-use crate::application::asset_generation::AssetGenerationApplicationError;
+use crate::application::asset_generation::{
+    AssetGenerationApplicationError, SceneVisualManifestBlocker,
+};
 use crate::application::conversations::ConversationApplicationError;
 use crate::application::materials::MaterialApplicationError;
 use crate::application::projects::ProjectApplicationError;
@@ -62,6 +64,14 @@ pub(crate) enum ScriptApiError {
     ProjectValidation(String),
     MaterialValidation(String),
     AssetValidation(String),
+    SceneVisualManifestIncomplete {
+        script_id: uuid::Uuid,
+        blockers: Vec<SceneVisualManifestBlocker>,
+    },
+    SceneVisualManifestStale {
+        expected_input_version: String,
+        actual_input_version: String,
+    },
     ConversationValidation(String),
     TopicValidation(String),
     StrategyDraftLlm(LLMError),
@@ -227,6 +237,20 @@ impl From<AssetGenerationApplicationError> for ScriptApiError {
                 Self::MaterialRepository(error)
             }
             AssetGenerationApplicationError::ModelResolve(error) => Self::ModelResolve(error),
+            AssetGenerationApplicationError::ManifestIncomplete {
+                script_id,
+                blockers,
+            } => Self::SceneVisualManifestIncomplete {
+                script_id,
+                blockers,
+            },
+            AssetGenerationApplicationError::ManifestStale {
+                expected_input_version,
+                actual_input_version,
+            } => Self::SceneVisualManifestStale {
+                expected_input_version,
+                actual_input_version,
+            },
             AssetGenerationApplicationError::Validation(message) => Self::AssetValidation(message),
         }
     }
@@ -267,6 +291,32 @@ impl IntoResponse for ScriptApiError {
             Self::AssetValidation(message) => {
                 (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
             }
+            Self::SceneVisualManifestIncomplete {
+                script_id,
+                blockers,
+            } => (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "主画面清单不完整",
+                    "code": "scene_visual_manifest_incomplete",
+                    "script_id": script_id,
+                    "blockers": blockers
+                })),
+            )
+                .into_response(),
+            Self::SceneVisualManifestStale {
+                expected_input_version,
+                actual_input_version,
+            } => (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "主画面或分镜内容已变化，请重新生成作品计划",
+                    "code": "scene_visual_manifest_stale",
+                    "expected_input_version": expected_input_version,
+                    "actual_input_version": actual_input_version
+                })),
+            )
+                .into_response(),
             Self::ConversationValidation(message) => {
                 (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
             }
@@ -406,13 +456,16 @@ fn asset_generation_repository_error_response(
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "素材生成任务不存在", "task_id": task_id })),
         ),
-        AssetGenerationRepositoryError::TaskNotConfirmable(task_id) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "只有待确认的 AI 视频任务可以确认", "task_id": task_id })),
-        ),
         AssetGenerationRepositoryError::TaskNotDismissible(task_id) => (
             StatusCode::CONFLICT,
             Json(json!({ "error": "只有失败的素材生成任务可以清理", "task_id": task_id })),
+        ),
+        AssetGenerationRepositoryError::LegacyVideoReadOnly => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "历史逐分镜视频任务只读保留",
+                "code": "legacy_asset_video_task_read_only"
+            })),
         ),
         AssetGenerationRepositoryError::CandidateNotFound(candidate_id) => (
             StatusCode::NOT_FOUND,

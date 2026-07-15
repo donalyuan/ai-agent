@@ -258,6 +258,81 @@ async fn insert_candidate(
     .expect("candidate fixture should be inserted")
 }
 
+async fn select_candidate(pool: &PgPool, candidate_id: Uuid) {
+    sqlx::query("UPDATE scene_asset_candidates SET status = 'selected' WHERE id = $1")
+        .bind(candidate_id)
+        .execute(pool)
+        .await
+        .expect("candidate fixture should be selected");
+}
+
+async fn insert_failed_candidate(
+    pool: &PgPool,
+    project_id: Uuid,
+    script_id: Uuid,
+    scene_id: Uuid,
+) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO scene_asset_candidates (
+            project_id, script_id, scene_id, material_id, candidate_type,
+            source, status, rank, metadata
+        )
+        VALUES ($1, $2, $3, NULL, 'image', 'ai_generated', 'failed', 9001, $4)
+        RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .bind(script_id)
+    .bind(scene_id)
+    .bind(json!({ "error_message": "provider failed" }))
+    .fetch_one(pool)
+    .await
+    .expect("failed candidate fixture should be inserted")
+}
+
+async fn insert_legacy_video_task(
+    pool: &PgPool,
+    project_id: Uuid,
+    script_id: Uuid,
+    scene_id: Uuid,
+) -> Uuid {
+    sqlx::query(
+        "ALTER TABLE asset_generation_tasks DISABLE TRIGGER trigger_freeze_legacy_asset_video_tasks",
+    )
+    .execute(pool)
+    .await
+    .expect("legacy fixture trigger should be disabled");
+    let task_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO asset_generation_tasks (
+            project_id, script_id, scene_id, provider, task_type, status,
+            candidate_count, params, result, error_message
+        )
+        VALUES (
+            $1, $2, $3, 'gpt-image-2', 'video_generation', 'failed',
+            0, '{"prompt":"legacy"}'::jsonb,
+            '{"file_url":"/assets/legacy.mp4"}'::jsonb,
+            'legacy provider failed'
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .bind(script_id)
+    .bind(scene_id)
+    .fetch_one(pool)
+    .await
+    .expect("legacy video task fixture should be inserted");
+    sqlx::query(
+        "ALTER TABLE asset_generation_tasks ENABLE TRIGGER trigger_freeze_legacy_asset_video_tasks",
+    )
+    .execute(pool)
+    .await
+    .expect("legacy fixture trigger should be re-enabled");
+    task_id
+}
+
 async fn response_json(response: axum::response::Response) -> Value {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -426,23 +501,11 @@ async fn create_asset_generation_tasks_does_not_wait_for_worker() {
     assert_eq!(response.status(), StatusCode::CREATED);
     let body = response_json(response).await;
     let tasks = body["tasks"].as_array().expect("tasks should be returned");
-    assert!(tasks.iter().any(|task| {
-        task["task_type"] == "image_candidates"
-            && task["status"] == "pending"
-            && task["candidate_count"] == 6
-            && task["model_id"] == openai_image_model_id().to_string()
-    }));
-    assert_eq!(
-        tasks
-            .iter()
-            .filter(|task| task["task_type"] == "video_draft" && task["status"] == "draft")
-            .count(),
-        2
-    );
-    assert!(tasks
-        .iter()
-        .filter(|task| task["task_type"] == "video_draft")
-        .all(|task| task["model_id"].is_null()));
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0]["task_type"], "image_candidates");
+    assert_eq!(tasks[0]["status"], "pending");
+    assert_eq!(tasks[0]["candidate_count"], 6);
+    assert_eq!(tasks[0]["model_id"], openai_image_model_id().to_string());
 
     let persisted = sqlx::query_as::<_, (String, String, i32)>(
         r#"
@@ -456,18 +519,23 @@ async fn create_asset_generation_tasks_does_not_wait_for_worker() {
     .fetch_all(&test_pool)
     .await
     .expect("asset generation tasks should persist without waiting for worker");
-    assert!(persisted
-        .iter()
-        .any(|(task_type, status, candidate_count)| {
-            task_type == "image_candidates" && status == "pending" && *candidate_count == 6
-        }));
     assert_eq!(
-        persisted
-            .iter()
-            .filter(|(task_type, status, _)| task_type == "video_draft" && status == "draft")
-            .count(),
-        2
+        persisted,
+        vec![("image_candidates".to_string(), "pending".to_string(), 6)]
     );
+    let legacy_candidate_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM scene_asset_candidates
+        WHERE script_id = $1
+          AND (candidate_type = 'video' OR source = 'video_task')
+        "#,
+    )
+    .bind(script_id)
+    .fetch_one(&test_pool)
+    .await
+    .expect("legacy candidate count should be queryable");
+    assert_eq!(legacy_candidate_count, 0);
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
@@ -528,7 +596,7 @@ async fn create_asset_generation_tasks_is_idempotent_and_tasks_are_listable() {
         .unwrap();
     assert_eq!(list_response.status(), StatusCode::OK);
     let listed = response_json(list_response).await;
-    assert_eq!(listed["tasks"].as_array().unwrap().len(), 3);
+    assert_eq!(listed["tasks"].as_array().unwrap().len(), 1);
 
     let task_counts = sqlx::query_as::<_, (String, i64)>(
         r#"
@@ -544,7 +612,7 @@ async fn create_asset_generation_tasks_is_idempotent_and_tasks_are_listable() {
     .await
     .expect("task counts should be queryable");
     assert!(task_counts.contains(&("image_candidates".to_string(), 1)));
-    assert!(task_counts.contains(&("video_draft".to_string(), 2)));
+    assert_eq!(task_counts.len(), 1);
 
     let existing_candidate_count = sqlx::query_scalar::<_, i64>(
         r#"
@@ -972,7 +1040,7 @@ async fn cors_allows_scene_generation_idempotency_header() {
 }
 
 #[tokio::test]
-async fn confirm_asset_generation_task_only_allows_draft_video_tasks() {
+async fn legacy_video_confirmation_route_is_removed() {
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
     let project_id = insert_project(&test_pool).await;
     let (script_id, _) = insert_script_with_scenes(&test_pool, project_id, 1).await;
@@ -998,28 +1066,12 @@ async fn confirm_asset_generation_task_only_allows_draft_video_tasks() {
         .await
         .unwrap();
     assert_eq!(create_response.status(), StatusCode::CREATED);
-    let created = response_json(create_response).await;
-    let image_task_id = created["tasks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|task| task["task_type"] == "image_candidates")
-        .unwrap()["task_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let video_task_id = created["tasks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|task| task["task_type"] == "video_draft")
-        .unwrap()["task_id"]
+    let image_task_id = response_json(create_response).await["tasks"][0]["task_id"]
         .as_str()
         .unwrap()
         .to_string();
 
-    let image_confirm = app
-        .clone()
+    let confirm_response = app
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -1031,25 +1083,254 @@ async fn confirm_asset_generation_task_only_allows_draft_video_tasks() {
         )
         .await
         .unwrap();
-    assert_eq!(image_confirm.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(confirm_response.status(), StatusCode::NOT_FOUND);
 
-    let video_confirm = app
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn historical_video_tasks_are_queryable_but_cannot_be_mutated() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let (script_id, scene_ids) = insert_script_with_scenes(&test_pool, project_id, 1).await;
+    let legacy_task_id =
+        insert_legacy_video_task(&test_pool, project_id, script_id, scene_ids[0]).await;
+    let app = build_app_with_state(app_state(test_url, test_pool.clone()));
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/scripts/{script_id}/asset-generation-tasks"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let body = response_json(list_response).await;
+    let legacy_task = &body["tasks"][0];
+    assert_eq!(legacy_task["task_id"], legacy_task_id.to_string());
+    assert_eq!(legacy_task["task_type"], "video_generation");
+    assert_eq!(legacy_task["read_only"], true);
+    assert_eq!(legacy_task["params"]["prompt"], "legacy");
+    assert_eq!(legacy_task["result"]["file_url"], "/assets/legacy.mp4");
+    assert_eq!(legacy_task["error_message"], "legacy provider failed");
+
+    let dismiss_response = app
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri(format!(
-                    "/api/asset-generation-tasks/{video_task_id}/confirm"
+                    "/api/asset-generation-tasks/{legacy_task_id}/dismiss"
                 ))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(video_confirm.status(), StatusCode::OK);
-    let confirmed = response_json(video_confirm).await;
-    assert_eq!(confirmed["task_id"], video_task_id);
-    assert_eq!(confirmed["task_type"], "video_generation");
-    assert_eq!(confirmed["status"], "pending");
+    assert_eq!(dismiss_response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(dismiss_response).await["code"],
+        "legacy_asset_video_task_read_only"
+    );
+
+    let direct_update =
+        sqlx::query("UPDATE asset_generation_tasks SET status = 'pending' WHERE id = $1")
+            .bind(legacy_task_id)
+            .execute(&test_pool)
+            .await;
+    assert!(
+        direct_update.is_err(),
+        "legacy task status must be immutable"
+    );
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn scene_visual_manifest_is_ordered_and_rejects_stale_input_version() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let (script_id, scene_ids) = insert_script_with_scenes(&test_pool, project_id, 2).await;
+    for (index, scene_id) in scene_ids.iter().enumerate() {
+        let material_id =
+            insert_material(&test_pool, project_id, &format!("scene-{}.png", index + 1)).await;
+        let candidate_id = insert_candidate(
+            &test_pool,
+            project_id,
+            script_id,
+            *scene_id,
+            material_id,
+            index as i32 + 1,
+        )
+        .await;
+        select_candidate(&test_pool, candidate_id).await;
+    }
+    let app = build_app_with_state(app_state(test_url, test_pool.clone()));
+
+    let manifest_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/scripts/{script_id}/scene-visual-manifest"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manifest_response.status(), StatusCode::OK);
+    let manifest = response_json(manifest_response).await;
+    assert_eq!(manifest["script_id"], script_id.to_string());
+    assert_eq!(manifest["input_version"].as_str().unwrap().len(), 64);
+    assert_eq!(manifest["scenes"][0]["sequence"], 1);
+    assert_eq!(manifest["scenes"][1]["sequence"], 2);
+    assert_eq!(manifest["scenes"][0]["scene_id"], scene_ids[0].to_string());
+    assert_eq!(
+        manifest["scenes"][0]["source_snapshot"]["candidate_source"],
+        "existing_material"
+    );
+    let input_version = manifest["input_version"].as_str().unwrap().to_string();
+
+    let valid_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/scripts/{script_id}/scene-visual-manifest/validate"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "expected_input_version": input_version }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(valid_response.status(), StatusCode::OK);
+
+    sqlx::query("UPDATE scenes SET narration = '修改后的旁白' WHERE id = $1")
+        .bind(scene_ids[0])
+        .execute(&test_pool)
+        .await
+        .expect("scene fixture should update");
+    sqlx::query("UPDATE scripts SET updated_at = NOW() + INTERVAL '1 second' WHERE id = $1")
+        .bind(script_id)
+        .execute(&test_pool)
+        .await
+        .expect("script input version should update");
+
+    let stale_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/scripts/{script_id}/scene-visual-manifest/validate"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "expected_input_version": input_version }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_response.status(), StatusCode::CONFLICT);
+    let stale = response_json(stale_response).await;
+    assert_eq!(stale["code"], "scene_visual_manifest_stale");
+    assert_ne!(stale["actual_input_version"], input_version);
+
+    let legacy_task_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM asset_generation_tasks
+        WHERE task_type IN ('video_draft', 'video_generation')
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .expect("legacy task count should be queryable");
+    assert_eq!(legacy_task_count, 0);
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn scene_visual_manifest_reports_missing_archived_and_failed_scene_images() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let (script_id, scene_ids) = insert_script_with_scenes(&test_pool, project_id, 4).await;
+
+    let active_material_id = insert_material(&test_pool, project_id, "active.png").await;
+    let active_candidate_id = insert_candidate(
+        &test_pool,
+        project_id,
+        script_id,
+        scene_ids[0],
+        active_material_id,
+        1,
+    )
+    .await;
+    select_candidate(&test_pool, active_candidate_id).await;
+
+    let archived_material_id = insert_material(&test_pool, project_id, "archived.png").await;
+    let archived_candidate_id = insert_candidate(
+        &test_pool,
+        project_id,
+        script_id,
+        scene_ids[1],
+        archived_material_id,
+        1,
+    )
+    .await;
+    select_candidate(&test_pool, archived_candidate_id).await;
+    sqlx::query("UPDATE materials SET status = 'archived' WHERE id = $1")
+        .bind(archived_material_id)
+        .execute(&test_pool)
+        .await
+        .expect("archived material fixture should update");
+
+    insert_failed_candidate(&test_pool, project_id, script_id, scene_ids[2]).await;
+    let app = build_app_with_state(app_state(test_url, test_pool.clone()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/scripts/{script_id}/scene-visual-manifest"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], "scene_visual_manifest_incomplete");
+    assert_eq!(body["blockers"].as_array().unwrap().len(), 3);
+    assert!(body["blockers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|blocker| blocker["sequence"] == 2 && blocker["reason"] == "material_archived"));
+    assert!(body["blockers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|blocker| blocker["sequence"] == 3 && blocker["reason"] == "image_generation_failed"));
+    assert!(body["blockers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|blocker| blocker["sequence"] == 4 && blocker["reason"] == "selected_image_missing"));
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

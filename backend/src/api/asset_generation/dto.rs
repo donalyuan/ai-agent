@@ -1,5 +1,6 @@
 use crate::application::asset_generation::{
-    AssetCandidateView, AssetGenerationOptions, AssetGenerationPlan,
+    AssetCandidateView, AssetGenerationOptions, AssetGenerationPlan, SceneVisualManifest,
+    SceneVisualManifestItem,
 };
 use crate::repositories::{
     AssetCandidateSource, AssetCandidateStatus, AssetCandidateType, AssetGenerationProvider,
@@ -75,7 +76,6 @@ pub struct AssetGenerationPlanResponse {
     pub model_id: Uuid,
     pub provider: String,
     pub reference_material_count: i32,
-    pub video_task_count: i32,
     pub can_create: bool,
     pub warnings: Vec<String>,
 }
@@ -90,7 +90,6 @@ impl From<AssetGenerationPlan> for AssetGenerationPlanResponse {
             model_id: plan.model_id,
             provider: plan.provider.as_str().to_string(),
             reference_material_count: plan.reference_material_count,
-            video_task_count: plan.video_task_count,
             can_create: plan.can_create,
             warnings: plan.warnings,
         }
@@ -117,6 +116,7 @@ pub struct AssetGenerationTaskResponse {
     pub dismissed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub read_only: bool,
 }
 
 impl From<AssetGenerationTask> for AssetGenerationTaskResponse {
@@ -140,6 +140,7 @@ impl From<AssetGenerationTask> for AssetGenerationTaskResponse {
             dismissed_at: task.dismissed_at,
             created_at: task.created_at,
             updated_at: task.updated_at,
+            read_only: task.task_type.is_legacy_read_only(),
         }
     }
 }
@@ -204,6 +205,79 @@ impl From<AssetCandidateView> for SceneAssetCandidateResponse {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct SceneAssetCandidateListResponse {
     pub candidates: Vec<SceneAssetCandidateResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct SceneVisualManifestValidationRequest {
+    pub expected_input_version: String,
+}
+
+impl SceneVisualManifestValidationRequest {
+    pub fn validate_for_api(&self) -> Result<(), String> {
+        let value = self.expected_input_version.trim();
+        if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("主画面输入版本摘要必须是 64 位十六进制字符串".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct SceneVisualManifestItemResponse {
+    pub scene_id: Uuid,
+    pub sequence: i32,
+    pub narration: String,
+    pub visual_description: String,
+    pub emotion: String,
+    pub duration_sec: i32,
+    pub candidate_id: Uuid,
+    pub material_id: Uuid,
+    pub file_url: String,
+    pub thumbnail_url: Option<String>,
+    pub source_snapshot: Value,
+}
+
+impl From<SceneVisualManifestItem> for SceneVisualManifestItemResponse {
+    fn from(item: SceneVisualManifestItem) -> Self {
+        Self {
+            scene_id: item.scene_id,
+            sequence: item.sequence,
+            narration: item.narration,
+            visual_description: item.visual_description,
+            emotion: item.emotion,
+            duration_sec: item.duration_sec,
+            candidate_id: item.candidate_id,
+            material_id: item.material_id,
+            file_url: item.file_url,
+            thumbnail_url: item.thumbnail_url,
+            source_snapshot: item.source_snapshot,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct SceneVisualManifestResponse {
+    pub script_id: Uuid,
+    pub script_title: String,
+    pub script_updated_at: DateTime<Utc>,
+    pub input_version: String,
+    pub scenes: Vec<SceneVisualManifestItemResponse>,
+}
+
+impl From<SceneVisualManifest> for SceneVisualManifestResponse {
+    fn from(manifest: SceneVisualManifest) -> Self {
+        Self {
+            script_id: manifest.script_id,
+            script_title: manifest.script_title,
+            script_updated_at: manifest.script_updated_at,
+            input_version: manifest.input_version,
+            scenes: manifest
+                .scenes
+                .into_iter()
+                .map(SceneVisualManifestItemResponse::from)
+                .collect(),
+        }
+    }
 }
 
 #[allow(dead_code)]

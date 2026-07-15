@@ -117,13 +117,6 @@ async fn response_json(response: axum::response::Response) -> Value {
 async fn workspace_menu_route_returns_visible_sorted_tree() {
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
 
-    sqlx::query(
-        "UPDATE video_workspace_menus SET is_visible = false WHERE menu_key = 'material-search'",
-    )
-    .execute(&test_pool)
-    .await
-    .expect("hidden menu fixture should update");
-
     let app = build_app_with_state(app_state(test_url, test_pool.clone()));
     let response = app
         .oneshot(
@@ -228,7 +221,7 @@ async fn workspace_menu_route_returns_visible_sorted_tree() {
     assert_eq!(material_menu["children"][0]["is_enabled"], true);
     assert_eq!(material_menu["children"][0]["status"], "active");
     assert_eq!(material_menu["children"][1]["menu_key"], "asset-generation");
-    assert_eq!(material_menu["children"][1]["label"], "素材生成");
+    assert_eq!(material_menu["children"][1]["label"], "画面生成");
     assert_eq!(
         material_menu["children"][1]["route_path"],
         "/materials/generation"
@@ -244,6 +237,14 @@ async fn workspace_menu_route_returns_visible_sorted_tree() {
     );
     assert_eq!(material_menu["children"][1]["is_enabled"], true);
     assert_eq!(material_menu["children"][1]["status"], "active");
+    assert_eq!(material_menu["children"][2]["menu_key"], "sound-subtitle-generation");
+    assert_eq!(material_menu["children"][2]["label"], "声音与字幕生成");
+    assert_eq!(material_menu["children"][2]["is_enabled"], false);
+    assert_eq!(material_menu["children"][2]["status"], "planned");
+    assert_eq!(
+        material_menu["children"][2]["module_key"],
+        "materials.sound-subtitle-generation"
+    );
 
     let body_text = body.to_string();
     assert!(!body_text.contains("material-search"));

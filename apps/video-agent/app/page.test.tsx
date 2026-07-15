@@ -17,6 +17,7 @@ import type {
   ModelOption,
   ProjectListResponse,
   SceneAssetCandidate,
+  SceneVisualManifest,
   ScriptDetail,
   ScriptListResponse,
   TopicQualityEvaluation,
@@ -89,7 +90,8 @@ vi.mock("./lib/api", async (importOriginal) => {
     selectAssetCandidate: vi.fn(),
     rejectAssetCandidate: vi.fn(),
     createSceneAssetGenerationTask: vi.fn(),
-    confirmAssetGenerationTask: vi.fn(),
+    getSceneVisualManifest: vi.fn(),
+    validateSceneVisualManifest: vi.fn(),
     dismissAssetGenerationTask: vi.fn(),
     listContentTopics: vi.fn(),
     listMaterials: vi.fn(),
@@ -284,11 +286,12 @@ const workspaceMenus: WorkspaceMenuListResponse = {
           module_key: "materials.library",
         },
         {
-          ...menuNode("asset-generation", "素材生成", true, "active", 20),
+          ...menuNode("asset-generation", "画面生成", true, "active", 20),
           agent_key: "material-generation-agent",
           menu_type: "page",
           module_key: "materials.asset-generation",
         },
+        soundSubtitleMenuNode(),
       ],
     },
     menuNode("production", "作品生产", false, "planned", 40),
@@ -343,11 +346,12 @@ const contentStrategyWorkspaceMenus: WorkspaceMenuListResponse = {
           module_key: "materials.library",
         },
         {
-          ...menuNode("asset-generation", "素材生成", true, "active", 20),
+          ...menuNode("asset-generation", "画面生成", true, "active", 20),
           agent_key: "material-generation-agent",
           menu_type: "page",
           module_key: "materials.asset-generation",
         },
+        soundSubtitleMenuNode(),
       ],
     },
     menuNode("production", "作品生产", false, "planned", 40),
@@ -369,11 +373,12 @@ const materialWorkspaceMenus: WorkspaceMenuListResponse = {
           module_key: "materials.library",
         },
         {
-          ...menuNode("asset-generation", "素材生成", true, "active", 20),
+          ...menuNode("asset-generation", "画面生成", true, "active", 20),
           agent_key: "material-generation-agent",
           menu_type: "page",
           module_key: "materials.asset-generation",
         },
+        soundSubtitleMenuNode(),
       ],
     },
     menuNode("production", "作品生产", false, "planned", 40),
@@ -382,6 +387,15 @@ const materialWorkspaceMenus: WorkspaceMenuListResponse = {
     menuNode("workflow-tasks", "工作流任务", false, "planned", 70),
   ],
 };
+
+function soundSubtitleMenuNode() {
+  return {
+    ...menuNode("sound-subtitle-generation", "声音与字幕生成", false, "planned", 30),
+    agent_key: "sound-generation-agent",
+    menu_type: "page" as const,
+    module_key: "materials.sound-subtitle-generation",
+  };
+}
 
 const ideaTopic: ContentTopic = {
   topic_id: "44444444-4444-4444-8444-444444444444",
@@ -787,7 +801,6 @@ const assetGenerationPlan: AssetGenerationPlanResponse = {
   model_id: imageModel.model_id,
   provider: "gpt-image-2",
   reference_material_count: 1,
-  video_task_count: scriptDetail.scenes.length,
   can_create: true,
   warnings: [],
 };
@@ -809,6 +822,7 @@ const imageGenerationTask: AssetGenerationTask = {
   error_message: null,
   retry_count: 0,
   dismissed_at: null,
+  read_only: false,
   created_at: "2026-07-09T00:30:00Z",
   updated_at: "2026-07-09T00:30:00Z",
 };
@@ -828,6 +842,7 @@ const videoDraftTask: AssetGenerationTask = {
   status: "draft",
   candidate_count: 0,
   params: { requires_manual_confirmation: true },
+  read_only: true,
 };
 
 const confirmedVideoTask: AssetGenerationTask = {
@@ -894,6 +909,26 @@ const videoTaskCandidate: SceneAssetCandidate = {
   thumbnail_url: null,
   file_name: null,
   metadata: { requires_manual_confirmation: true },
+};
+
+const completeSceneVisualManifest: SceneVisualManifest = {
+  script_id: scriptDetail.script_id,
+  script_title: scriptDetail.title,
+  script_updated_at: scriptDetail.updated_at,
+  input_version: "a".repeat(64),
+  scenes: scriptDetail.scenes.map((scene, index) => ({
+    scene_id: scene.scene_id,
+    sequence: scene.sequence,
+    narration: scene.narration,
+    visual_description: scene.visual_description,
+    emotion: scene.emotion,
+    duration_sec: scene.duration_sec,
+    candidate_id: index === 0 ? selectedExistingCandidate.candidate_id : `candidate-${index + 1}`,
+    material_id: index === 0 ? selectedExistingCandidate.material_id as string : `material-${index + 1}`,
+    file_url: `http://api.test/assets/generated/images/scene-${index + 1}.png`,
+    thumbnail_url: null,
+    source_snapshot: { candidate_source: "ai_generated" },
+  })),
 };
 
 const conversation: AgentConversation = {
@@ -1124,6 +1159,7 @@ async function flushAsyncWork() {
 describe("video-agent 视频工作台页面", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.sessionStorage.clear();
     vi.mocked(api.listWorkspaceMenus).mockResolvedValue(workspaceMenus);
     vi.mocked(api.listModelOptions).mockImplementation(async (_client, modelType) => ({
       models: modelType === "text" ? [textModel] : modelType === "image" ? [imageModel] : [],
@@ -1138,7 +1174,7 @@ describe("video-agent 视频工作台页面", () => {
     vi.mocked(api.getAssetGenerationPlan).mockResolvedValue(assetGenerationPlan);
     vi.mocked(api.createAssetGenerationTasks).mockResolvedValue({
       script_id: scriptDetail.script_id,
-      tasks: [imageGenerationTask, videoDraftTask],
+      tasks: [imageGenerationTask],
     });
     vi.mocked(api.listAssetGenerationTasks).mockResolvedValue({
       script_id: scriptDetail.script_id,
@@ -1160,11 +1196,19 @@ describe("video-agent 视频工作台页面", () => {
       scene_id: scriptDetail.scenes[0].scene_id,
       candidate_count: 3,
     });
-    vi.mocked(api.confirmAssetGenerationTask).mockResolvedValue({
-      ...videoDraftTask,
-      task_type: "video_generation",
-      status: "pending",
-    });
+    vi.mocked(api.getSceneVisualManifest).mockRejectedValue(
+      new api.ApiError(409, "主画面清单不完整", {
+        code: "scene_visual_manifest_incomplete",
+        blockers: [
+          {
+            scene_id: scriptDetail.scenes[1].scene_id,
+            sequence: scriptDetail.scenes[1].sequence,
+            reason: "selected_image_missing",
+          },
+        ],
+      }),
+    );
+    vi.mocked(api.validateSceneVisualManifest).mockResolvedValue(completeSceneVisualManifest);
     vi.mocked(api.dismissAssetGenerationTask).mockResolvedValue({
       ...failedImageGenerationTask,
       dismissed_at: "2026-07-10T08:30:00Z",
@@ -1563,18 +1607,27 @@ describe("video-agent 视频工作台页面", () => {
     await openScriptCreationWorkspace();
 
     expect(await screen.findByRole("heading", { name: scriptSummary.title })).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "脚本详情素材候选" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "画面生成图片候选" })).not.toBeInTheDocument();
     expect(api.getAssetGenerationPlan).not.toHaveBeenCalled();
     expect(api.listAssetCandidates).not.toHaveBeenCalled();
     expect(api.listAssetGenerationTasks).not.toHaveBeenCalled();
   });
 
-  it("素材生成页仅允许 AI 图片候选打开、缩放并关闭大图预览", async () => {
+  it("画面生成页的已选 AI 主画面保留在候选区并可打开大图", async () => {
     mockProjects({ projects: [project] });
     mockScripts({ scripts: [scriptSummary], total: 1, limit: 20, offset: 0 });
+    const selectedAiImageCandidate: SceneAssetCandidate = {
+      ...aiImageCandidate,
+      candidate_id: "21212121-2121-4121-8121-212121212122",
+      status: "selected",
+      rank: 0,
+      file_name: "selected-scene-1.png",
+      file_url: "http://api.test/assets/generated/images/task/selected-scene-1.png",
+      thumbnail_url: "http://api.test/assets/generated/images/task/selected-scene-1-thumb.png",
+    };
     vi.mocked(api.listAssetCandidates).mockResolvedValue({
       candidates: [
-        selectedExistingCandidate,
+        selectedAiImageCandidate,
         aiImageCandidate,
         {
           ...failedAiImageCandidate,
@@ -1586,23 +1639,35 @@ describe("video-agent 视频工作台页面", () => {
     });
     render(createElement(Home));
     fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "素材生成" }));
+    const materialSubMenu = screen.getByLabelText("素材管理二级菜单");
+    expect(within(materialSubMenu).getAllByRole("button").map((button) => button.textContent))
+      .toEqual(["素材库", "画面生成", "声音与字幕生成"]);
+    fireEvent.click(await screen.findByRole("button", { name: "画面生成" }));
 
-    const panel = await screen.findByRole("region", { name: "脚本详情素材候选" });
+    const panel = await screen.findByRole("region", { name: "画面生成图片候选" });
     const previewTriggers = within(panel).getAllByRole("button", { name: /^查看.*大图$/ });
-    expect(previewTriggers).toHaveLength(1);
-    expect(previewTriggers[0]).toHaveAccessibleName("查看scene-1.png大图");
+    expect(previewTriggers).toHaveLength(2);
+    expect(previewTriggers[0]).toHaveAccessibleName("查看selected-scene-1.png大图");
+    expect(previewTriggers[1]).toHaveAccessibleName("查看scene-1.png大图");
+    expect(within(panel).queryByRole("heading", { name: "当前主素材" })).not.toBeInTheDocument();
+    const currentCandidateSummary = panel.querySelector(".assetCurrentCandidateSummary");
+    expect(currentCandidateSummary).toHaveTextContent("当前主素材");
+    expect(currentCandidateSummary).toHaveTextContent("selected-scene-1.png");
+    const aiCandidateSection = within(panel).getByRole("region", { name: "AI 图片候选" });
+    const selectedCandidateNames = within(aiCandidateSection).getAllByText("selected-scene-1.png");
+    expect(selectedCandidateNames).toHaveLength(1);
+    expect(selectedCandidateNames[0].closest("article")).toHaveClass("selected");
     expect(
-      within(panel).queryByRole("button", { name: `查看${selectedExistingCandidate.file_name}大图` }),
+      within(panel).queryByRole("button", { name: "查看failed-with-stale-url.png大图" }),
     ).not.toBeInTheDocument();
 
     fireEvent.click(previewTriggers[0]);
     const dialog = screen.getByRole("dialog", { name: "图片大图预览" });
-    expect(within(dialog).getByText("scene-1.png")).toBeInTheDocument();
+    expect(within(dialog).getByText("selected-scene-1.png")).toBeInTheDocument();
     expect(within(dialog).getByText("AI 生成图片候选")).toBeInTheDocument();
-    expect(within(dialog).getByRole("img", { name: "scene-1.png" })).toHaveAttribute(
+    expect(within(dialog).getByRole("img", { name: "selected-scene-1.png" })).toHaveAttribute(
       "src",
-      aiImageCandidate.thumbnail_url,
+      selectedAiImageCandidate.file_url,
     );
     expect(api.selectAssetCandidate).not.toHaveBeenCalled();
     expect(api.rejectAssetCandidate).not.toHaveBeenCalled();
@@ -1630,22 +1695,23 @@ describe("video-agent 视频工作台页面", () => {
     await waitFor(() => expect(previewTriggers[0]).toHaveFocus());
   });
 
-  it("素材生成页展示素材候选三栏并触发生成、选择、排除、重生和视频确认", async () => {
+  it("画面生成页展示图片候选三栏并触发生成、选择、排除和重生", async () => {
     mockProjects({ projects: [project] });
     mockScripts({ scripts: [scriptSummary], total: 1, limit: 20, offset: 0 });
     render(createElement(Home));
     fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "素材生成" }));
+    fireEvent.click(await screen.findByRole("button", { name: "画面生成" }));
 
-    expect(await screen.findByRole("heading", { name: "脚本详情素材候选" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "画面生成" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "脚本列表" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("当前脚本")).toHaveValue(scriptSummary.script_id);
-    const panel = await screen.findByRole("region", { name: "脚本详情素材候选" });
+    const panel = await screen.findByRole("region", { name: "画面生成图片候选" });
     expect(
-      within(panel).getByRole("heading", { name: "AI 图片候选" }).nextElementSibling,
-    ).toHaveClass("assetCandidateCards", "triple");
-    expect(within(panel).queryByRole("button", { name: "生成素材候选" })).not.toBeInTheDocument();
-    const generateCandidatesButton = screen.getByRole("button", { name: "生成素材候选" });
+      within(panel).getByRole("region", { name: "AI 图片候选" })
+        .querySelector(".assetCandidateCards"),
+    ).toHaveClass("triple");
+    expect(within(panel).queryByRole("button", { name: "生成图片候选" })).not.toBeInTheDocument();
+    const generateCandidatesButton = screen.getByRole("button", { name: "生成图片候选" });
 
     expect(within(panel).getByText("分镜列表")).toBeInTheDocument();
     expect(within(panel).getByText("候选素材")).toBeInTheDocument();
@@ -1654,8 +1720,14 @@ describe("video-agent 视频工作台页面", () => {
     expect(within(panel).getByText("2 分镜 × 3 = 6 张图片候选")).toBeInTheDocument();
     expect(within(panel).getByText("单次最多 48 张")).toBeInTheDocument();
     expect(within(panel).getByText("当前主素材")).toBeInTheDocument();
+    expect(within(panel).queryByRole("heading", { name: "当前主素材" })).not.toBeInTheDocument();
     expect(within(panel).getByText("AI 图片候选")).toBeInTheDocument();
-    expect(within(panel).getByText("AI 视频二次确认")).toBeInTheDocument();
+    expect(within(panel).getByText("历史逐分镜视频任务")).toBeInTheDocument();
+    expect(within(panel).getByText("只读审计")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "确认生成视频" })).not.toBeInTheDocument();
+    const workEntry = within(panel).getByRole("button", { name: "进入作品生成" });
+    expect(workEntry).toBeDisabled();
+    expect(within(panel).getByText("还缺 1 个主画面")).toBeInTheDocument();
     const sceneRail = within(panel).getByRole("region", { name: "分镜列表" });
     const candidateBrowser = within(panel).getByRole("region", { name: "候选素材" });
     expect(within(candidateBrowser).getByText("旁白")).toBeInTheDocument();
@@ -1712,13 +1784,58 @@ describe("video-agent 视频工作台页面", () => {
       );
     });
 
-    fireEvent.click(within(panel).getByRole("button", { name: "确认生成视频" }));
+    expect(api.getSceneVisualManifest).toHaveBeenCalledWith(
+      expect.anything(),
+      scriptSummary.script_id,
+    );
+  });
+
+  it("主画面齐备且作品生成菜单启用时校验版本并传递 Manifest", async () => {
+    const workGenerationMenus: WorkspaceMenuListResponse = {
+      menus: workspaceMenus.menus.map((menu) =>
+        menu.menu_key === "production"
+          ? {
+              ...menu,
+              is_enabled: true,
+              status: "active",
+              children: [
+                {
+                  ...menuNode("work-generation", "作品生成", true, "active", 10),
+                  menu_type: "page",
+                  module_key: "production.work-generation",
+                },
+              ],
+            }
+          : menu,
+      ),
+    };
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(workGenerationMenus);
+    vi.mocked(api.getSceneVisualManifest).mockResolvedValue(completeSceneVisualManifest);
+    mockProjects({ projects: [project] });
+    mockScripts({ scripts: [scriptSummary], total: 1, limit: 20, offset: 0 });
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "画面生成" }));
+    const panel = await screen.findByRole("region", { name: "画面生成图片候选" });
+    const entry = within(panel).getByRole("button", { name: "进入作品生成" });
+
+    await waitFor(() => expect(entry).toBeEnabled());
+    fireEvent.click(entry);
+
     await waitFor(() => {
-      expect(api.confirmAssetGenerationTask).toHaveBeenCalledWith(
+      expect(api.validateSceneVisualManifest).toHaveBeenCalledWith(
         expect.anything(),
-        videoDraftTask.task_id,
+        scriptSummary.script_id,
+        completeSceneVisualManifest.input_version,
       );
     });
+    expect(JSON.parse(window.sessionStorage.getItem("scene-visual-manifest-handoff") || "{}"))
+      .toEqual({
+        script_id: scriptSummary.script_id,
+        input_version: completeSceneVisualManifest.input_version,
+      });
+    expect(api.createAssetGenerationTasks).not.toHaveBeenCalled();
   });
 
   it("镜头内容为空时在候选区保留旁白和画面双栏", async () => {
@@ -1737,8 +1854,8 @@ describe("video-agent 视频工作台页面", () => {
 
     render(createElement(Home));
     fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "素材生成" }));
-    const panel = await screen.findByRole("region", { name: "脚本详情素材候选" });
+    fireEvent.click(await screen.findByRole("button", { name: "画面生成" }));
+    const panel = await screen.findByRole("region", { name: "画面生成图片候选" });
     const candidateBrowser = within(panel).getByRole("region", { name: "候选素材" });
 
     expect(within(candidateBrowser).getByText("未填写旁白")).toBeInTheDocument();
@@ -1767,12 +1884,12 @@ describe("video-agent 视频工作台页面", () => {
 
     render(createElement(Home));
     fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "素材生成" }));
-    const panel = await screen.findByRole("region", { name: "脚本详情素材候选" });
+    fireEvent.click(await screen.findByRole("button", { name: "画面生成" }));
+    const panel = await screen.findByRole("region", { name: "画面生成图片候选" });
 
     fireEvent.click(await within(panel).findByRole("button", { name: "清理失败任务" }));
     const dialog = screen.getByRole("dialog", { name: "清理失败任务？" });
-    expect(within(dialog).getByText(/任务及其失败候选将从素材生成页面隐藏/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/任务及其失败候选将从画面生成页面隐藏/)).toBeInTheDocument();
     expect(within(dialog).getByText(/不会重新调用供应商，也不会产生额外费用/)).toBeInTheDocument();
     expect(within(dialog).getByText(/数据库继续保留任务状态、错误、候选数量和费用审计/)).toBeInTheDocument();
     const confirmButton = within(dialog).getByRole("button", { name: "确认清理" });
@@ -1814,8 +1931,8 @@ describe("video-agent 视频工作台页面", () => {
 
     render(createElement(Home));
     fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "素材生成" }));
-    const panel = await screen.findByRole("region", { name: "脚本详情素材候选" });
+    fireEvent.click(await screen.findByRole("button", { name: "画面生成" }));
+    const panel = await screen.findByRole("region", { name: "画面生成图片候选" });
     const regenerateButton = within(panel).getByRole("button", { name: "单镜头重生" });
 
     act(() => {
@@ -1859,8 +1976,8 @@ describe("video-agent 视频工作台页面", () => {
 
     render(createElement(Home));
     fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "素材生成" }));
-    const panel = await screen.findByRole("region", { name: "脚本详情素材候选" });
+    fireEvent.click(await screen.findByRole("button", { name: "画面生成" }));
+    const panel = await screen.findByRole("region", { name: "画面生成图片候选" });
     const regenerateButton = within(panel).getByRole("button", { name: "单镜头重生" });
 
     fireEvent.click(regenerateButton);
@@ -1875,7 +1992,7 @@ describe("video-agent 视频工作台页面", () => {
     expect(retryKey).toBe(firstKey);
   });
 
-  it("重新打开脚本详情时恢复真实素材生成任务状态", async () => {
+  it("重新打开脚本详情时恢复真实画面生成任务状态", async () => {
     mockProjects({ projects: [project] });
     mockScripts({ scripts: [scriptSummary], total: 1, limit: 20, offset: 0 });
     vi.mocked(api.listAssetGenerationTasks).mockResolvedValue({
@@ -1885,9 +2002,9 @@ describe("video-agent 视频工作台页面", () => {
 
     render(createElement(Home));
     fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "素材生成" }));
+    fireEvent.click(await screen.findByRole("button", { name: "画面生成" }));
 
-    const panel = await screen.findByRole("region", { name: "脚本详情素材候选" });
+    const panel = await screen.findByRole("region", { name: "画面生成图片候选" });
 
     await waitFor(() => {
       expect(api.listAssetGenerationTasks).toHaveBeenCalledWith(expect.anything(), scriptSummary.script_id);
@@ -1933,8 +2050,8 @@ describe("video-agent 视频工作台页面", () => {
     try {
       render(createElement(Home));
       fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
-      fireEvent.click(await screen.findByRole("button", { name: "素材生成" }));
-      const panel = await screen.findByRole("region", { name: "脚本详情素材候选" });
+      fireEvent.click(await screen.findByRole("button", { name: "画面生成" }));
+      const panel = await screen.findByRole("region", { name: "画面生成图片候选" });
 
       await waitFor(() => {
         expect(setIntervalSpy).toHaveBeenCalled();

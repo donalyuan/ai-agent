@@ -34,6 +34,7 @@
 - `apps/video-agent/` 前端工作台的对外可见产品品牌名为 `VEDIO-AGENT`，展示名为“视频工作台”；原型、UI 和当前工作台设计文档不得使用 `Novex Admin` 作为展示品牌
 - 视频工作台 Pencil 原型源文件统一保存在 `docs/prototypes/video-agent/video-agent.pen`；后续有关视频工作台的原型修改都以该文件为准，不再使用 `docs/prototypes/script-agent-workspace/` 截图目录
 - 视频工作台 `.pen` 原型修改必须通过 Pencil MCP 写入并用 `batch_get` 或编辑器顶层状态验证；不得直接手改 JSON 后视为原型已更新
+- OpenSpec change 达到 `all_done` 后只报告可归档；未经用户明确命令，不得执行 `openspec archive` 或以其他方式自动归档。
 - 用户已确认视频工作台业务流程走向：内容策略 -> 脚本创作 -> 素材管理 -> 作品生产 -> 发布运营 -> 数据分析 -> 工作流任务；前端一级菜单和开发阶段规划详见 `docs/memory/video-agent-workspace-flow.md`
 - 视频工作台导航应以数据库持久化菜单配置作为单一来源，一级菜单固定围绕业务流程组织；`apps/video-agent` 不得继续用 6 个 Agent 硬编码数组作为一级导航，Agent 状态只能作为二级菜单、模块状态或执行状态展示
 - 视频工作台不是单一脚本 Agent 页面；选题、脚本、素材、视频、发布、优化六类 Agent 能力应映射到业务菜单下的二级入口、模块状态或执行状态，不再作为前端一级导航；当前 `script-agent-workspace` 只实现脚本创作下的脚本生成模块闭环
@@ -77,6 +78,7 @@
 - 2026-07-14 用户确认作品生成必须允许选择是否使用 Seedance 原声，不固定 `generate_audio`；仅支持原声的视频模型展示该选项，页面说明原声可能同时包含不可分离的人声、BGM 和音效。选择进入作品版本快照，切换后重算提示词、字幕来源、任务计划和资源用量；原声与独立 TTS 的具体组合方式仍待继续确认。
 - 2026-07-14 用户确认声音来源最终为三种模式：默认 `独立 TTS`（Seedance 无声，使用豆包 TTS/字幕时间戳）、`Seedance 原声`（不生成 TTS，字幕使用 `doubao-seed-asr-2.0` 对原声生成时间轴）、`Seedance 原声 + TTS`（原声作为不可分轨单声道背景，TTS 区间由 FFmpeg 自动压低原声）。混合模式提示双重人声风险，Agent 的“无对白/旁白”提示不保证完全生效；不支持原声的视频模型隐藏后两种模式。ASR 使用 `volc.seedasr.sauc.duration`，只处理已有或 Seedance 原声音频字幕。
 - 2026-07-15 用户确认上述 6 个二级模块不得合并为一个聚合 OpenSpec change，必须分别维护为 6 个可独立评审和实施的 change：`extend-material-library-for-work-production`（素材库）、`redefine-scene-visual-generation`（画面生成）、`add-sound-subtitle-generation`（声音与字幕生成）、`add-work-generation`（作品生成）、`add-work-generation-task-management`（生成任务）、`add-work-library-management`（作品库）。每个 change 都必须独立包含 proposal、DDD/BDD/SDD/TDD design、详细规格和未执行 tasks。
+- 2026-07-15 `redefine-scene-visual-generation` 已完成实施并达到 `14/14 all_done`，保持 active 等待用户明确命令后再归档：`素材管理` 数据库菜单按 `素材库 / 画面生成 / 声音与字幕生成` 排序，其中声音与字幕入口保持 planned/disabled 等待独立 change；画面生成新写路径只允许图片候选，历史 `video_draft/video_generation` 与 `video/video_task` 只读保留；作品生成只能消费按分镜排序、带 SHA-256 `input_version` 的 `SceneVisualManifest`，缺图、失败、归档、文件缺失或输入过期必须阻断，不得双写旧视频任务。
 - Video Agent 前端工作台当前仅覆盖桌面端运营后台，不涉及移动端原型、移动端适配或移动端验收；后续如需要移动端，应单独提出 OpenSpec change
 
 ### 架构原则

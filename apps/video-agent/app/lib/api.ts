@@ -231,7 +231,6 @@ export type AssetGenerationPlanResponse = {
   model_id: string;
   provider: AssetGenerationProvider;
   reference_material_count: number;
-  video_task_count: number;
   can_create: boolean;
   warnings: string[];
 };
@@ -253,6 +252,7 @@ export type AssetGenerationTask = {
   error_message: string | null;
   retry_count: number;
   dismissed_at: string | null;
+  read_only: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -283,6 +283,42 @@ export type SceneAssetCandidate = {
 
 export type SceneAssetCandidateListResponse = {
   candidates: SceneAssetCandidate[];
+};
+
+export type SceneVisualManifestBlockerReason =
+  | "image_generation_failed"
+  | "selected_image_missing"
+  | "selected_material_missing"
+  | "selected_material_not_image"
+  | "material_archived"
+  | "material_url_missing";
+
+export type SceneVisualManifestBlocker = {
+  scene_id: string;
+  sequence: number;
+  reason: SceneVisualManifestBlockerReason;
+};
+
+export type SceneVisualManifestItem = {
+  scene_id: string;
+  sequence: number;
+  narration: string;
+  visual_description: string;
+  emotion: string;
+  duration_sec: number;
+  candidate_id: string;
+  material_id: string;
+  file_url: string;
+  thumbnail_url: string | null;
+  source_snapshot: Record<string, unknown>;
+};
+
+export type SceneVisualManifest = {
+  script_id: string;
+  script_title: string;
+  script_updated_at: string;
+  input_version: string;
+  scenes: SceneVisualManifestItem[];
 };
 
 export type ContentTopicSnapshot = {
@@ -892,6 +928,28 @@ export function listAssetCandidates(client: ApiClient, scriptId: string) {
   }));
 }
 
+export function getSceneVisualManifest(client: ApiClient, scriptId: string) {
+  return request<SceneVisualManifest>(
+    client,
+    `/api/scripts/${scriptId}/scene-visual-manifest`,
+  ).then((manifest) => normalizeSceneVisualManifestUrls(client, manifest));
+}
+
+export function validateSceneVisualManifest(
+  client: ApiClient,
+  scriptId: string,
+  expectedInputVersion: string,
+) {
+  return request<SceneVisualManifest>(
+    client,
+    `/api/scripts/${scriptId}/scene-visual-manifest/validate`,
+    {
+      method: "POST",
+      body: { expected_input_version: expectedInputVersion },
+    },
+  ).then((manifest) => normalizeSceneVisualManifestUrls(client, manifest));
+}
+
 export function selectAssetCandidate(client: ApiClient, sceneId: string, candidateId: string) {
   return request<SceneAssetCandidate>(
     client,
@@ -922,12 +980,6 @@ export function createSceneAssetGenerationTask(
     method: "POST",
     body: payload,
     headers: { "idempotency-key": idempotencyKey },
-  });
-}
-
-export function confirmAssetGenerationTask(client: ApiClient, taskId: string) {
-  return request<AssetGenerationTask>(client, `/api/asset-generation-tasks/${taskId}/confirm`, {
-    method: "POST",
   });
 }
 
@@ -1170,6 +1222,20 @@ function normalizeCandidateUrls(
     ...candidate,
     file_url: resolveApiAssetUrl(client, candidate.file_url),
     thumbnail_url: resolveApiAssetUrl(client, candidate.thumbnail_url),
+  };
+}
+
+function normalizeSceneVisualManifestUrls(
+  client: ApiClient,
+  manifest: SceneVisualManifest,
+): SceneVisualManifest {
+  return {
+    ...manifest,
+    scenes: manifest.scenes.map((scene) => ({
+      ...scene,
+      file_url: resolveApiAssetUrl(client, scene.file_url) || scene.file_url,
+      thumbnail_url: resolveApiAssetUrl(client, scene.thumbnail_url),
+    })),
   };
 }
 

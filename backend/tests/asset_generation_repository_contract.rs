@@ -577,3 +577,146 @@ async fn material_repository_rejects_archiving_selected_asset_candidate_material
     drop_database(&admin_pool, &database_name).await;
     admin_pool.close().await;
 }
+
+#[tokio::test]
+async fn asset_repository_rejects_new_legacy_video_tasks_and_candidates() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let repository = PostgresAssetGenerationRepository::new(test_pool.clone());
+    let project_id = Uuid::new_v4();
+    let script_id = Uuid::new_v4();
+    let scene_id = Uuid::new_v4();
+    insert_project(&test_pool, project_id).await;
+    insert_script(&test_pool, script_id, project_id).await;
+    insert_scene(&test_pool, scene_id, script_id, 1).await;
+
+    let mut video_task = asset_task_input(
+        project_id,
+        script_id,
+        scene_id,
+        AssetGenerationTaskStatus::Draft,
+    );
+    video_task.task_type = AssetGenerationTaskType::VideoDraft;
+    video_task.candidate_count = 0;
+    let task_error = repository
+        .create_task(video_task)
+        .await
+        .expect_err("new legacy video task should be rejected");
+    assert!(matches!(
+        task_error,
+        AssetGenerationRepositoryError::LegacyVideoReadOnly
+    ));
+
+    let candidate_error = repository
+        .create_candidate(CreateAssetCandidateInput {
+            project_id,
+            script_id,
+            scene_id,
+            material_id: None,
+            candidate_type: AssetCandidateType::Video,
+            source: AssetCandidateSource::VideoTask,
+            rank: 1,
+            generation_task_id: None,
+            metadata: json!({}),
+        })
+        .await
+        .expect_err("new legacy video candidate should be rejected");
+    assert!(matches!(
+        candidate_error,
+        AssetGenerationRepositoryError::LegacyVideoReadOnly
+    ));
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn historical_selected_video_candidate_does_not_block_main_image_selection() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let repository = PostgresAssetGenerationRepository::new(test_pool.clone());
+    let material_repository = PostgresMaterialRepository::new(test_pool.clone());
+    let project_id = Uuid::new_v4();
+    let script_id = Uuid::new_v4();
+    let scene_id = Uuid::new_v4();
+    insert_project(&test_pool, project_id).await;
+    insert_script(&test_pool, script_id, project_id).await;
+    insert_scene(&test_pool, scene_id, script_id, 1).await;
+
+    sqlx::query(
+        "ALTER TABLE scene_asset_candidates DISABLE TRIGGER trigger_freeze_legacy_video_candidates",
+    )
+    .execute(&test_pool)
+    .await
+    .expect("legacy candidate fixture trigger should be disabled");
+    let legacy_candidate_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO scene_asset_candidates (
+            project_id, script_id, scene_id, candidate_type, source, status, rank
+        )
+        VALUES ($1, $2, $3, 'video', 'video_task', 'selected', 10000)
+        RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .bind(script_id)
+    .bind(scene_id)
+    .fetch_one(&test_pool)
+    .await
+    .expect("historical selected video candidate should be inserted");
+    sqlx::query(
+        "ALTER TABLE scene_asset_candidates ENABLE TRIGGER trigger_freeze_legacy_video_candidates",
+    )
+    .execute(&test_pool)
+    .await
+    .expect("legacy candidate fixture trigger should be re-enabled");
+
+    let material = material_repository
+        .create_material(CreateMaterialInput {
+            project_id,
+            material_type: MaterialType::Image,
+            file_url: "/assets/existing/main.png".to_string(),
+            file_name: "main.png".to_string(),
+            thumbnail_url: None,
+            tags: Vec::new(),
+            metadata: json!({ "source": "existing" }),
+        })
+        .await
+        .expect("main image material should be created");
+    let image_candidate = repository
+        .create_candidate(CreateAssetCandidateInput {
+            project_id,
+            script_id,
+            scene_id,
+            material_id: Some(material.id),
+            candidate_type: AssetCandidateType::Image,
+            source: AssetCandidateSource::ExistingMaterial,
+            rank: 1,
+            generation_task_id: None,
+            metadata: json!({}),
+        })
+        .await
+        .expect("main image candidate should be created");
+    repository
+        .select_candidate(scene_id, image_candidate.id)
+        .await
+        .expect("historical selected video should not block selecting a main image");
+
+    let selected = sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT id, candidate_type
+        FROM scene_asset_candidates
+        WHERE scene_id = $1 AND status = 'selected'
+        ORDER BY candidate_type
+        "#,
+    )
+    .bind(scene_id)
+    .fetch_all(&test_pool)
+    .await
+    .expect("selected candidates should be queryable");
+    assert!(selected.contains(&(legacy_candidate_id, "video".to_string())));
+    assert!(selected.contains(&(image_candidate.id, "image".to_string())));
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
