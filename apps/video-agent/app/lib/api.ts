@@ -132,6 +132,27 @@ export type ContentTopic = {
 export type MaterialType = "video" | "image" | "audio" | "subtitle";
 export type MaterialStatus = "active" | "archived";
 export type MaterialStatusFilter = MaterialStatus | "all";
+export type AudioUsage = "tts" | "bgm" | "ambient" | "action_sfx" | "mixed" | "other";
+export type MaterialSource = "user_upload" | "ai_generated" | "work_generation";
+
+export type MaterialGenerationSnapshot = {
+  work_id?: string;
+  work_version_id?: string;
+  generation_run_id?: string;
+  generation_step_id?: string;
+  artifact_role?: string;
+  audio_usage?: AudioUsage;
+  model_snapshot?: Record<string, unknown>;
+  voice_snapshot?: Record<string, unknown>;
+  prompt_snapshot?: Record<string, unknown>;
+  timeline_snapshot?: Record<string, unknown>;
+  resource_usage?: Record<string, unknown>;
+  request_trace_id?: string;
+  alignment_source?: string;
+  source_audio_material_id?: string;
+  duration_sec?: number;
+  subtitle_format?: string;
+};
 
 export type Material = {
   material_id: string;
@@ -142,6 +163,11 @@ export type Material = {
   file_name: string;
   tags: string[];
   metadata: Record<string, unknown>;
+  source: MaterialSource | null;
+  audio_usage: AudioUsage | null;
+  work_id: string | null;
+  work_version_id: string | null;
+  generation: MaterialGenerationSnapshot | null;
   usage_count: number;
   status: MaterialStatus;
   created_at: string;
@@ -161,6 +187,7 @@ export type MaterialUploadPayload = {
   file: File;
   file_name: string;
   tags: string[];
+  audio_usage?: AudioUsage;
 };
 
 export type MaterialListResponse = {
@@ -172,6 +199,10 @@ export type MaterialFilters = {
   status?: MaterialStatusFilter;
   q?: string;
   tag?: string;
+  audio_usage?: AudioUsage | "all";
+  source?: MaterialSource | "all";
+  work_id?: string;
+  work_version_id?: string;
 };
 
 export type AssetGenerationProvider = "gpt-image-2" | "jimeng";
@@ -722,6 +753,18 @@ export function listMaterials(
   if (filters.tag?.trim()) {
     searchParams.set("tag", filters.tag.trim());
   }
+  if (filters.audio_usage && filters.audio_usage !== "all") {
+    searchParams.set("audio_usage", filters.audio_usage);
+  }
+  if (filters.source && filters.source !== "all") {
+    searchParams.set("source", filters.source);
+  }
+  if (filters.work_id?.trim()) {
+    searchParams.set("work_id", filters.work_id.trim());
+  }
+  if (filters.work_version_id?.trim()) {
+    searchParams.set("work_version_id", filters.work_version_id.trim());
+  }
   const query = searchParams.toString();
   return request<MaterialListResponse>(
     client,
@@ -752,6 +795,9 @@ export async function uploadMaterial(
   body.append("file", payload.file);
   body.append("file_name", payload.file_name.trim());
   body.append("tags", JSON.stringify(payload.tags));
+  if (payload.audio_usage) {
+    body.append("audio_usage", payload.audio_usage);
+  }
   const response = await client.fetcher(
     `${client.baseUrl}/api/projects/${projectId}/materials/upload`,
     {

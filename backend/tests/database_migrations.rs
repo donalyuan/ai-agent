@@ -227,6 +227,9 @@ async fn migrations_create_video_agent_core_schema() {
     for index in [
         "idx_materials_project",
         "idx_materials_project_status_updated",
+        "idx_materials_project_source_updated",
+        "idx_materials_project_audio_usage_updated",
+        "idx_materials_project_work_version_updated",
         "idx_scripts_project",
         "idx_scenes_script",
         "idx_generation_tasks_status",
@@ -395,6 +398,16 @@ async fn migrations_create_video_agent_core_schema() {
         constraint_exists(&test_pool, "materials", "materials_status_check").await,
         "materials.status should be constrained"
     );
+    for constraint in [
+        "materials_metadata_no_credentials_check",
+        "materials_audio_usage_check",
+        "materials_work_generation_snapshot_check",
+    ] {
+        assert!(
+            constraint_exists(&test_pool, "materials", constraint).await,
+            "{constraint} should constrain work-production material metadata"
+        );
+    }
     assert!(
         constraint_exists(&test_pool, "materials", "materials_id_project_unique").await,
         "materials should expose id/project composite key for asset candidate integrity"

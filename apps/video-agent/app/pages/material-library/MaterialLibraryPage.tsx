@@ -1,15 +1,22 @@
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ImagePreviewDialog } from "../../components/ImagePreviewDialog";
-import type { Material, MaterialStatus, MaterialStatusFilter, MaterialType } from "../../lib/api";
+import type { Material, MaterialStatus } from "../../lib/api";
 import {
+  audioUsageLabels,
+  audioUsageOptions,
   formatMaterialDate,
   formatMaterialFileSummary,
   getMaterialPreview,
+  isAudioUploadFile,
+  materialGenerationRows,
+  materialSourceLabels,
+  materialSourceOptions,
   materialStatusFilterOptions,
   materialStatusLabels,
   materialTypeLabels,
   materialTypeOptions,
+  type MaterialFiltersState,
   type MaterialFormState,
 } from "./materialModel";
 import type { MaterialCanvasStageProps } from "./MaterialCanvasStage";
@@ -18,13 +25,6 @@ const MaterialCanvasStage = dynamic<MaterialCanvasStageProps>(
   () => import("./MaterialCanvasStage").then((module) => module.MaterialCanvasStage),
   { ssr: false },
 );
-
-type MaterialFiltersState = {
-  material_type: MaterialType | "all";
-  status: MaterialStatusFilter;
-  q: string;
-  tag: string;
-};
 
 type MaterialLibraryPageProps = {
   materials: Material[];
@@ -76,6 +76,23 @@ export function MaterialLibraryPage({
   const detailPreview = selectedMaterial ? getMaterialPreview(selectedMaterial) : null;
   const imagePreviewAvailable =
     selectedMaterial?.material_type === "image" && Boolean(detailPreview?.imageUrl);
+  const generationRows = selectedMaterial ? materialGenerationRows(selectedMaterial) : [];
+  const workIds = useMemo(
+    () => uniqueReferences([
+      ...materials.map((material) => material.work_id),
+      filters.work_id,
+    ]),
+    [filters.work_id, materials],
+  );
+  const workVersionIds = useMemo(
+    () => uniqueReferences([
+      ...materials
+        .filter((material) => !filters.work_id || material.work_id === filters.work_id)
+        .map((material) => material.work_version_id),
+      filters.work_version_id,
+    ]),
+    [filters.work_id, filters.work_version_id, materials],
+  );
 
   useEffect(() => {
     const workspaceElement = workspaceRef.current;
@@ -146,7 +163,7 @@ export function MaterialLibraryPage({
               placeholder="输入单个标签"
             />
           </label>
-          <div aria-label="素材类型筛选" className="materialSegmented">
+          <div aria-label="素材类型筛选" className="materialSegmented materialTypeSegmented">
             {materialTypeOptions.map((option) => (
               <button
                 key={option.value}
@@ -158,7 +175,83 @@ export function MaterialLibraryPage({
               </button>
             ))}
           </div>
-          <div aria-label="素材状态筛选" className="materialSegmented">
+          <div className="materialFilterGrid">
+            <label className="compactField">
+              声音用途
+              <select
+                aria-label="声音用途筛选"
+                value={filters.audio_usage}
+                onChange={(event) => onFilterChange({
+                  ...filters,
+                  audio_usage: event.target.value as MaterialFiltersState["audio_usage"],
+                })}
+              >
+                {audioUsageOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="compactField">
+              生成来源
+              <select
+                aria-label="生成来源筛选"
+                value={filters.source}
+                onChange={(event) => {
+                  const source = event.target.value as MaterialFiltersState["source"];
+                  onFilterChange({
+                    ...filters,
+                    source,
+                    work_id: source === "work_generation" ? filters.work_id : "",
+                    work_version_id: source === "work_generation" ? filters.work_version_id : "",
+                  });
+                }}
+              >
+                {materialSourceOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {filters.source === "work_generation" || filters.work_id || filters.work_version_id ? (
+            <div className="materialFilterGrid materialWorkFilters">
+              <label className="compactField">
+                来源作品
+                <select
+                  aria-label="来源作品筛选"
+                  title={filters.work_id || undefined}
+                  value={filters.work_id}
+                  onChange={(event) => onFilterChange({
+                    ...filters,
+                    work_id: event.target.value,
+                    work_version_id: "",
+                  })}
+                >
+                  <option value="">全部作品</option>
+                  {workIds.map((workId) => (
+                    <option key={workId} value={workId}>作品 {shortReference(workId)}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="compactField">
+                来源版本
+                <select
+                  aria-label="来源版本筛选"
+                  title={filters.work_version_id || undefined}
+                  value={filters.work_version_id}
+                  onChange={(event) => onFilterChange({
+                    ...filters,
+                    work_version_id: event.target.value,
+                  })}
+                >
+                  <option value="">全部版本</option>
+                  {workVersionIds.map((versionId) => (
+                    <option key={versionId} value={versionId}>版本 {shortReference(versionId)}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
+          <div aria-label="素材状态筛选" className="materialSegmented materialStatusSegmented">
             {materialStatusFilterOptions.map((option) => (
               <button
                 key={option.value}
@@ -200,10 +293,7 @@ export function MaterialLibraryPage({
                   </span>
                   <span>
                     <strong>{material.file_name}</strong>
-                    <small>
-                      {materialTypeLabels[material.material_type]} · {materialStatusLabels[material.status]} ·{" "}
-                      {formatMaterialDate(material.updated_at)}
-                    </small>
+                    <small>{materialListSummary(material)}</small>
                   </span>
                 </button>
               );
@@ -252,7 +342,7 @@ export function MaterialLibraryPage({
                 <h2>{creatingMaterial ? "上传素材" : "素材详情"}</h2>
                 {selectedMaterial ? (
                   <span className="materialDetailStatus">
-                    {materialTypeLabels[selectedMaterial.material_type]} · {materialStatusLabels[selectedMaterial.status]}
+                    {materialDetailStatusSummary(selectedMaterial)}
                   </span>
                 ) : null}
               </div>
@@ -267,7 +357,17 @@ export function MaterialLibraryPage({
             </div>
 
             {selectedMaterial && detailPreview ? (
-              imagePreviewAvailable ? (
+              selectedMaterial.material_type === "audio" ? (
+                <div className="materialDetailPreview materialAudioPreview">
+                  <div>
+                    <strong>{selectedMaterial.file_name}</strong>
+                    <span>{formatMaterialFileSummary(selectedMaterial)}</span>
+                  </div>
+                  <audio controls preload="none" src={selectedMaterial.file_url}>
+                    浏览器不支持音频播放。
+                  </audio>
+                </div>
+              ) : imagePreviewAvailable ? (
                 <button
                   ref={previewTriggerRef}
                   aria-label={`查看${selectedMaterial.file_name}大图`}
@@ -311,6 +411,7 @@ export function MaterialLibraryPage({
             <MaterialForm
               creatingMaterial={creatingMaterial}
               form={form}
+              showAudioUsage={creatingMaterial && isAudioUploadFile(uploadFile)}
               onFormChange={onFormChange}
             />
 
@@ -320,6 +421,24 @@ export function MaterialLibraryPage({
                 <span>{formatMaterialFileSummary(selectedMaterial)}</span>
                 <small>上传后自动生成并保持只读</small>
               </div>
+            ) : null}
+
+            {selectedMaterial?.generation && generationRows.length > 0 ? (
+              <section aria-label="生成来源详情" className="materialGenerationInfo">
+                <header>
+                  <h3>生成来源</h3>
+                  <span>只读</span>
+                </header>
+                <dl>
+                  {generationRows.map((row) => (
+                    <div key={`${row.label}-${row.value}`}>
+                      <dt>{row.label}</dt>
+                      <dd className={row.mono ? "mono" : undefined} title={row.value}>{row.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <p className="materialCredentialStatus">凭据未记录</p>
+              </section>
             ) : null}
 
             <div className="materialDetailActions">
@@ -368,10 +487,12 @@ export function MaterialLibraryPage({
 function MaterialForm({
   creatingMaterial,
   form,
+  showAudioUsage,
   onFormChange,
 }: {
   creatingMaterial: boolean;
   form: MaterialFormState;
+  showAudioUsage: boolean;
   onFormChange: (form: MaterialFormState) => void;
 }) {
   return (
@@ -384,6 +505,26 @@ function MaterialForm({
           onChange={(event) => onFormChange({ ...form, file_name: event.target.value })}
         />
       </label>
+      {showAudioUsage ? (
+        <label>
+          声音用途（选填）
+          <select
+            aria-label="声音用途（选填）"
+            value={form.audio_usage}
+            onChange={(event) => onFormChange({
+              ...form,
+              audio_usage: event.target.value as MaterialFormState["audio_usage"],
+            })}
+          >
+            <option value="">未分类</option>
+            {audioUsageOptions
+              .filter((option) => option.value !== "all")
+              .map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+          </select>
+        </label>
+      ) : null}
       <label>
         {creatingMaterial ? "标签（选填）" : "标签"}
         <input
@@ -402,4 +543,36 @@ function formatSelectedFile(file: File) {
     ? `${(file.size / 1024).toFixed(1)} KB`
     : `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
   return `${type} · ${size}`;
+}
+
+function materialListSummary(material: Material) {
+  const parts = [materialTypeLabels[material.material_type]];
+  if (material.audio_usage) {
+    parts.push(audioUsageLabels[material.audio_usage]);
+  }
+  if (material.source) {
+    parts.push(materialSourceLabels[material.source]);
+  }
+  parts.push(materialStatusLabels[material.status], formatMaterialDate(material.updated_at));
+  return parts.join(" · ");
+}
+
+function materialDetailStatusSummary(material: Material) {
+  const parts = [materialTypeLabels[material.material_type]];
+  if (material.audio_usage) {
+    parts.push(audioUsageLabels[material.audio_usage]);
+  }
+  if (material.source) {
+    parts.push(materialSourceLabels[material.source]);
+  }
+  parts.push(materialStatusLabels[material.status]);
+  return parts.join(" · ");
+}
+
+function uniqueReferences(values: Array<string | null>) {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function shortReference(value: string) {
+  return value.length > 12 ? value.slice(0, 8) : value;
 }

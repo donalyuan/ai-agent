@@ -39,6 +39,75 @@ impl TryFrom<&str> for MaterialType {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AudioUsage {
+    Tts,
+    Bgm,
+    Ambient,
+    ActionSfx,
+    Mixed,
+    Other,
+}
+
+impl AudioUsage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tts => "tts",
+            Self::Bgm => "bgm",
+            Self::Ambient => "ambient",
+            Self::ActionSfx => "action_sfx",
+            Self::Mixed => "mixed",
+            Self::Other => "other",
+        }
+    }
+}
+
+impl TryFrom<&str> for AudioUsage {
+    type Error = MaterialParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "tts" => Ok(Self::Tts),
+            "bgm" => Ok(Self::Bgm),
+            "ambient" => Ok(Self::Ambient),
+            "action_sfx" => Ok(Self::ActionSfx),
+            "mixed" => Ok(Self::Mixed),
+            "other" => Ok(Self::Other),
+            other => Err(MaterialParseError::AudioUsage(other.to_string())),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MaterialSourceFilter {
+    UserUpload,
+    AiGenerated,
+    WorkGeneration,
+}
+
+impl MaterialSourceFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserUpload => "user_upload",
+            Self::AiGenerated => "ai_generated",
+            Self::WorkGeneration => "work_generation",
+        }
+    }
+}
+
+impl TryFrom<&str> for MaterialSourceFilter {
+    type Error = MaterialParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "user_upload" => Ok(Self::UserUpload),
+            "ai_generated" => Ok(Self::AiGenerated),
+            "work_generation" => Ok(Self::WorkGeneration),
+            other => Err(MaterialParseError::SourceFilter(other.to_string())),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MaterialStatus {
     Active,
     Archived,
@@ -106,6 +175,10 @@ pub struct Material {
     pub thumbnail_url: Option<String>,
     pub tags: Vec<String>,
     pub metadata: Value,
+    pub source: Option<String>,
+    pub audio_usage: Option<AudioUsage>,
+    pub work_id: Option<Uuid>,
+    pub work_version_id: Option<Uuid>,
     pub usage_count: i32,
     pub status: MaterialStatus,
     pub created_at: DateTime<Utc>,
@@ -118,6 +191,10 @@ pub struct MaterialListFilter {
     pub status: MaterialStatusFilter,
     pub q: Option<String>,
     pub tag: Option<String>,
+    pub audio_usage: Option<AudioUsage>,
+    pub source: Option<MaterialSourceFilter>,
+    pub work_id: Option<Uuid>,
+    pub work_version_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -260,6 +337,10 @@ impl MaterialRepository for PostgresMaterialRepository {
             .tag
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
+        let audio_usage = filter.audio_usage.map(AudioUsage::as_str);
+        let source = filter.source.map(MaterialSourceFilter::as_str);
+        let work_id = filter.work_id.map(|value| value.to_string());
+        let work_version_id = filter.work_version_id.map(|value| value.to_string());
         let rows = sqlx::query(
             r#"
             SELECT id, project_id, material_type, file_url, file_name, tags,
@@ -270,6 +351,10 @@ impl MaterialRepository for PostgresMaterialRepository {
               AND ($3::text IS NULL OR status = $3)
               AND ($4::text IS NULL OR file_name ILIKE '%' || $4 || '%' OR file_url ILIKE '%' || $4 || '%')
               AND ($5::text IS NULL OR tags @> ARRAY[$5]::text[])
+              AND ($6::text IS NULL OR metadata ->> 'audio_usage' = $6)
+              AND ($7::text IS NULL OR metadata ->> 'source' = $7)
+              AND ($8::text IS NULL OR metadata ->> 'work_id' = $8)
+              AND ($9::text IS NULL OR metadata ->> 'work_version_id' = $9)
             ORDER BY updated_at DESC, id DESC
             "#,
         )
@@ -278,6 +363,10 @@ impl MaterialRepository for PostgresMaterialRepository {
         .bind(status)
         .bind(q)
         .bind(tag)
+        .bind(audio_usage)
+        .bind(source)
+        .bind(work_id)
+        .bind(work_version_id)
         .fetch_all(&self.pool)
         .await
         .map_err(MaterialRepositoryError::from)?;
@@ -405,7 +494,84 @@ fn material_metadata(
             Value::String(thumbnail_url.trim().to_string()),
         );
     }
-    Ok(Value::Object(object))
+    let metadata = Value::Object(object);
+    validate_material_metadata(&metadata)?;
+    Ok(metadata)
+}
+
+/// 对所有素材写入路径执行递归敏感键校验，数据库 CHECK 提供第二道不可绕过约束。
+pub fn validate_material_metadata(metadata: &Value) -> Result<(), MaterialRepositoryError> {
+    if let Some(path) = sensitive_metadata_path(metadata, "metadata") {
+        return Err(MaterialRepositoryError::InvalidMetadata(format!(
+            "素材 metadata 禁止包含敏感字段: {path}"
+        )));
+    }
+    Ok(())
+}
+
+/// 历史异常数据即使绕过当前写入约束，API 也不会把敏感字段返回给客户端。
+pub fn redact_sensitive_material_metadata(value: Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .into_iter()
+                .filter(|(key, _)| !is_sensitive_metadata_key(key))
+                .map(|(key, value)| (key, redact_sensitive_material_metadata(value)))
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(redact_sensitive_material_metadata)
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn sensitive_metadata_path(value: &Value, path: &str) -> Option<String> {
+    match value {
+        Value::Object(object) => object.iter().find_map(|(key, child)| {
+            let child_path = format!("{path}.{key}");
+            if is_sensitive_metadata_key(key) {
+                Some(child_path)
+            } else {
+                sensitive_metadata_path(child, &child_path)
+            }
+        }),
+        Value::Array(values) => values
+            .iter()
+            .enumerate()
+            .find_map(|(index, child)| sensitive_metadata_path(child, &format!("{path}[{index}]"))),
+        _ => None,
+    }
+}
+
+fn is_sensitive_metadata_key(key: &str) -> bool {
+    let normalized = key
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    matches!(
+        normalized.as_str(),
+        "cookie"
+            | "setcookie"
+            | "credential"
+            | "credentials"
+            | "headers"
+            | "authheaders"
+            | "authenticationheaders"
+    ) || [
+        "apikey",
+        "authorization",
+        "token",
+        "secret",
+        "password",
+        "privatekey",
+    ]
+    .iter()
+    .any(|suffix| normalized.ends_with(suffix))
 }
 
 fn material_from_row(row: PgRow) -> Result<Material, MaterialRepositoryError> {
@@ -417,6 +583,12 @@ fn material_from_row(row: PgRow) -> Result<Material, MaterialRepositoryError> {
         .map_err(|error| MaterialRepositoryError::Storage(error.to_string()))?;
     let metadata: Value = row.get("metadata");
     let thumbnail_url = metadata_thumbnail_url(&metadata);
+    let source = metadata_string(&metadata, "source");
+    let audio_usage = metadata_string(&metadata, "audio_usage")
+        .as_deref()
+        .and_then(|value| AudioUsage::try_from(value).ok());
+    let work_id = metadata_uuid(&metadata, "work_id");
+    let work_version_id = metadata_uuid(&metadata, "work_version_id");
 
     Ok(Material {
         id: row.get("id"),
@@ -427,11 +599,29 @@ fn material_from_row(row: PgRow) -> Result<Material, MaterialRepositoryError> {
         thumbnail_url,
         tags: row.get("tags"),
         metadata,
+        source,
+        audio_usage,
+        work_id,
+        work_version_id,
         usage_count: row.get("usage_count"),
         status,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })
+}
+
+fn metadata_string(metadata: &Value, key: &str) -> Option<String> {
+    metadata
+        .as_object()
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn metadata_uuid(metadata: &Value, key: &str) -> Option<Uuid> {
+    metadata_string(metadata, key).and_then(|value| Uuid::parse_str(&value).ok())
 }
 
 fn metadata_thumbnail_url(metadata: &Value) -> Option<String> {
@@ -449,6 +639,8 @@ fn metadata_thumbnail_url(metadata: &Value) -> Option<String> {
 #[derive(Debug, Eq, PartialEq)]
 pub enum MaterialParseError {
     MaterialType(String),
+    AudioUsage(String),
+    SourceFilter(String),
     Status(String),
     StatusFilter(String),
 }
@@ -457,6 +649,8 @@ impl fmt::Display for MaterialParseError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MaterialType(value) => write!(formatter, "unknown material type: {value}"),
+            Self::AudioUsage(value) => write!(formatter, "unknown audio usage: {value}"),
+            Self::SourceFilter(value) => write!(formatter, "unknown material source: {value}"),
             Self::Status(value) => write!(formatter, "unknown material status: {value}"),
             Self::StatusFilter(value) => {
                 write!(formatter, "unknown material status filter: {value}")
@@ -472,6 +666,7 @@ pub enum MaterialRepositoryError {
     MaterialNotFound(Uuid),
     ProjectNotFound(Uuid),
     MaterialInUseAsSelectedCandidate(Uuid),
+    InvalidMetadata(String),
     Storage(String),
 }
 
@@ -496,6 +691,7 @@ impl fmt::Display for MaterialRepositoryError {
                     "material is selected by scene candidate: {material_id}"
                 )
             }
+            Self::InvalidMetadata(message) => formatter.write_str(message),
             Self::Storage(message) => write!(formatter, "material storage error: {message}"),
         }
     }

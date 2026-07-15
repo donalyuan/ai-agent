@@ -1,7 +1,7 @@
 use novex_api::repositories::{
-    CreateMaterialInput, MaterialListFilter, MaterialRepository, MaterialRepositoryError,
-    MaterialStatus, MaterialStatusFilter, MaterialType, PostgresMaterialRepository,
-    UpdateMaterialInput,
+    AudioUsage, CreateMaterialInput, MaterialListFilter, MaterialRepository,
+    MaterialRepositoryError, MaterialSourceFilter, MaterialStatus, MaterialStatusFilter,
+    MaterialType, PostgresMaterialRepository, UpdateMaterialInput,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -234,6 +234,129 @@ async fn material_repository_rejects_cross_project_update() {
         error,
         MaterialRepositoryError::MaterialNotFound(id) if id == material.id
     ));
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn material_repository_filters_work_generation_snapshots_and_keeps_legacy_audio_visible() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let repository = PostgresMaterialRepository::new(test_pool.clone());
+    let project_id = Uuid::new_v4();
+    let work_id = Uuid::new_v4();
+    let work_version_id = Uuid::new_v4();
+    insert_project(&test_pool, project_id, "作品素材账号").await;
+
+    let generated = repository
+        .create_material(CreateMaterialInput {
+            project_id,
+            material_type: MaterialType::Audio,
+            file_url: "/assets/generated/artifacts/tts.wav".to_string(),
+            file_name: "作品配音.wav".to_string(),
+            thumbnail_url: None,
+            tags: vec!["TTS".to_string()],
+            metadata: json!({
+                "source": "work_generation",
+                "storage_provider": "local",
+                "audio_usage": "tts",
+                "work_id": work_id,
+                "work_version_id": work_version_id,
+                "generation_run_id": Uuid::new_v4(),
+                "generation_step_id": Uuid::new_v4(),
+                "artifact_role": "tts_audio",
+                "model_snapshot": {"model_id": Uuid::new_v4(), "upstream_model": "doubao-tts"},
+                "voice_snapshot": {"voice_id": "zh_female_1", "language": "zh-CN"},
+                "prompt_snapshot": {"text_summary": "测试配音"},
+                "timeline_snapshot": {"version": "timeline-v1"},
+                "resource_usage": {"duration_sec": 1.0, "character_count": 4}
+            }),
+        })
+        .await
+        .expect("work-generated audio should be created");
+    let legacy = repository
+        .create_material(CreateMaterialInput {
+            project_id,
+            material_type: MaterialType::Audio,
+            file_url: "https://cdn.example.com/legacy.mp3".to_string(),
+            file_name: "历史音频.mp3".to_string(),
+            thumbnail_url: None,
+            tags: Vec::new(),
+            metadata: json!({}),
+        })
+        .await
+        .expect("legacy audio without usage should remain valid");
+
+    assert_eq!(generated.audio_usage, Some(AudioUsage::Tts));
+    assert_eq!(generated.source.as_deref(), Some("work_generation"));
+    assert_eq!(generated.work_id, Some(work_id));
+    assert_eq!(generated.work_version_id, Some(work_version_id));
+    assert_eq!(legacy.audio_usage, None);
+
+    let filtered = repository
+        .list_materials(
+            project_id,
+            MaterialListFilter {
+                material_type: Some(MaterialType::Audio),
+                audio_usage: Some(AudioUsage::Tts),
+                source: Some(MaterialSourceFilter::WorkGeneration),
+                work_id: Some(work_id),
+                work_version_id: Some(work_version_id),
+                ..MaterialListFilter::default()
+            },
+        )
+        .await
+        .expect("work production filters should compose");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].id, generated.id);
+
+    let all_audio = repository
+        .list_materials(
+            project_id,
+            MaterialListFilter {
+                material_type: Some(MaterialType::Audio),
+                ..MaterialListFilter::default()
+            },
+        )
+        .await
+        .expect("legacy audio should stay visible without an audio usage filter");
+    assert_eq!(all_audio.len(), 2);
+    assert!(all_audio.iter().any(|material| material.id == legacy.id));
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn materials_database_constraint_rejects_nested_credentials() {
+    let (admin_pool, test_pool, database_name) = migrated_pool().await;
+    let project_id = Uuid::new_v4();
+    insert_project(&test_pool, project_id, "敏感信息约束账号").await;
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO materials (project_id, material_type, file_url, file_name, metadata)
+        VALUES ($1, 'audio', '/assets/generated/secret.wav', 'secret.wav', $2)
+        "#,
+    )
+    .bind(project_id)
+    .bind(json!({"model_snapshot": {"id_token": "must-not-persist"}}))
+    .execute(&test_pool)
+    .await;
+
+    assert!(
+        result.is_err(),
+        "nested credential keys must be rejected by PostgreSQL"
+    );
+    let count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM materials WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_one(&test_pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

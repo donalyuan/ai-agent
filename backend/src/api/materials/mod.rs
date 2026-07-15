@@ -18,6 +18,10 @@ pub(crate) fn router() -> Router<AppState> {
             "/api/projects/:project_id/materials/upload",
             post(handlers::upload_material),
         )
+        .route(
+            "/api/projects/:project_id/materials/generated",
+            post(handlers::register_generated_material),
+        )
         .layer(DefaultBodyLimit::max(MULTIPART_BODY_LIMIT))
         .layer(RequestBodyLimitLayer::new(MULTIPART_BODY_LIMIT));
 

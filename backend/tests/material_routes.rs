@@ -146,12 +146,108 @@ fn multipart_upload(file_name: &str, content_type: &str, bytes: &[u8]) -> (Strin
     (boundary.to_string(), body)
 }
 
+fn generated_material_upload(
+    file_name: &str,
+    content_type: &str,
+    bytes: &[u8],
+    generation: &Value,
+) -> (String, Vec<u8>) {
+    let boundary = "novex-generated-material-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file_name\"\r\n\r\n作品配音.wav\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"tags\"\r\n\r\n[\"TTS\",\"作品生产\"]\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"generation\"\r\nContent-Type: application/json\r\n\r\n{}\r\n",
+            generation
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\nContent-Type: {content_type}\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (boundary.to_string(), body)
+}
+
+fn audio_material_upload(audio_usage: &str, bytes: &[u8]) -> (String, Vec<u8>) {
+    let boundary = "novex-audio-material-boundary";
+    let mut body = Vec::new();
+    for (name, value) in [
+        ("file_name", "背景音乐.wav"),
+        ("tags", "[\"背景音乐\"]"),
+        ("audio_usage", audio_usage),
+    ] {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"bgm.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (boundary.to_string(), body)
+}
+
+fn one_second_wav() -> Vec<u8> {
+    let sample_rate = 8_000_u32;
+    let data_size = sample_rate * 2;
+    let mut bytes = Vec::with_capacity(44 + data_size as usize);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_size).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    bytes.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
+    bytes.extend_from_slice(&16_u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_size.to_le_bytes());
+    bytes.resize(44 + data_size as usize, 0);
+    bytes
+}
+
 fn stored_file_count(storage_root: &std::path::Path, project_id: Uuid) -> usize {
     let project_directory = storage_root.join("uploads").join(project_id.to_string());
     match fs::read_dir(project_directory) {
         Ok(entries) => entries.count(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
         Err(error) => panic!("读取上传目录失败: {error}"),
+    }
+}
+
+fn stored_generated_file_count(storage_root: &std::path::Path, project_id: Uuid) -> usize {
+    let project_directory = storage_root
+        .join("generated")
+        .join("artifacts")
+        .join(project_id.to_string());
+    match fs::read_dir(project_directory) {
+        Ok(entries) => entries.count(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => panic!("读取生成素材目录失败: {error}"),
     }
 }
 
@@ -255,6 +351,412 @@ async fn material_upload_route_persists_png_metadata_and_serves_file() {
         .await
         .unwrap();
     assert_eq!(file_bytes.as_ref(), PNG_1X1);
+
+    let _ = fs::remove_dir_all(storage_root);
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn material_upload_route_classifies_existing_audio_for_work_mixing() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let storage_root =
+        std::env::temp_dir().join(format!("novex-audio-material-route-{}", Uuid::new_v4()));
+    let app = build_app_with_state(app_state_with_storage(
+        test_url,
+        test_pool.clone(),
+        storage_root.to_string_lossy().into_owned(),
+    ));
+    let (boundary, body) = audio_material_upload("bgm", &one_second_wav());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/materials/upload"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let uploaded = response_json(response).await;
+    assert_eq!(uploaded["material_type"], "audio");
+    assert_eq!(uploaded["source"], "user_upload");
+    assert_eq!(uploaded["audio_usage"], "bgm");
+    assert_eq!(uploaded["metadata"]["audio_usage"], "bgm");
+
+    let list_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/projects/{project_id}/materials?type=audio&audio_usage=bgm&source=user_upload"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(list_response).await["materials"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let _ = fs::remove_dir_all(storage_root);
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn generated_material_route_validates_stores_filters_and_exposes_read_only_snapshot() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let work_id = Uuid::new_v4();
+    let work_version_id = Uuid::new_v4();
+    let storage_root =
+        std::env::temp_dir().join(format!("novex-generated-material-route-{}", Uuid::new_v4()));
+    let app = build_app_with_state(app_state_with_storage(
+        test_url,
+        test_pool.clone(),
+        storage_root.to_string_lossy().into_owned(),
+    ));
+    let generation = json!({
+        "work_id": work_id,
+        "work_version_id": work_version_id,
+        "generation_run_id": Uuid::new_v4(),
+        "generation_step_id": Uuid::new_v4(),
+        "artifact_role": "tts_audio",
+        "audio_usage": "tts",
+        "model_snapshot": {
+            "model_id": Uuid::new_v4(),
+            "provider": "volcengine",
+            "upstream_model": "doubao-tts",
+            "capability_version": "2026-07"
+        },
+        "voice_snapshot": {
+            "voice_id": "zh_female_1",
+            "language": "zh-CN",
+            "style": "自然"
+        },
+        "prompt_snapshot": {"text_summary": "测试配音文本", "character_count": 6},
+        "timeline_snapshot": {"version": "timeline-v1"},
+        "resource_usage": {"duration_sec": 1.0, "character_count": 6},
+        "request_trace_id": "trace-safe-1"
+    });
+    let wav = one_second_wav();
+    let (boundary, body) = generated_material_upload("voice.wav", "audio/wav", &wav, &generation);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/materials/generated"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = response_json(response).await;
+    let material_id = created["material_id"].as_str().unwrap();
+    assert_eq!(created["material_type"], "audio");
+    assert_eq!(created["audio_usage"], "tts");
+    assert_eq!(created["source"], "work_generation");
+    assert_eq!(created["work_id"], work_id.to_string());
+    assert_eq!(created["work_version_id"], work_version_id.to_string());
+    assert_eq!(created["generation"]["artifact_role"], "tts_audio");
+    assert_eq!(
+        created["generation"]["model_snapshot"]["provider"],
+        "volcengine"
+    );
+    let file_url = created["file_url"].as_str().unwrap();
+    assert!(file_url.starts_with(&format!("/assets/generated/artifacts/{project_id}/")));
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/projects/{project_id}/materials?type=audio&audio_usage=tts&source=work_generation&work_id={work_id}&work_version_id={work_version_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let listed = response_json(list_response).await;
+    assert_eq!(listed["materials"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["materials"][0]["material_id"], material_id);
+
+    let archive_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/materials/{material_id}/status"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"status": "archived"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(archive_response.status(), StatusCode::OK);
+
+    let selectable_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/projects/{project_id}/materials?type=audio&audio_usage=tts"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response_json(selectable_response).await["materials"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0,
+        "archived audio must not be selectable for new work"
+    );
+
+    let historical_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/materials/{material_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(historical_response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(historical_response).await["generation"]["request_trace_id"],
+        "trace-safe-1",
+        "archiving must preserve historical generation snapshots"
+    );
+
+    let (second_boundary, second_body) =
+        generated_material_upload("voice.wav", "audio/wav", &wav, &generation);
+    let regenerated_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/materials/generated"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={second_boundary}"),
+                )
+                .body(Body::from(second_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(regenerated_response.status(), StatusCode::CREATED);
+    let regenerated = response_json(regenerated_response).await;
+    assert_ne!(regenerated["material_id"].as_str(), Some(material_id));
+    assert_ne!(regenerated["file_url"].as_str(), Some(file_url));
+    assert_eq!(stored_generated_file_count(&storage_root, project_id), 2);
+
+    let regenerated_id = regenerated["material_id"].as_str().unwrap();
+    let mut subtitle_generation = generation.clone();
+    subtitle_generation["artifact_role"] = json!("subtitle");
+    subtitle_generation
+        .as_object_mut()
+        .unwrap()
+        .remove("audio_usage");
+    subtitle_generation["alignment_source"] = json!("tts_timestamp");
+    subtitle_generation["source_audio_material_id"] = json!(regenerated_id);
+    subtitle_generation["generation_step_id"] = json!(Uuid::new_v4());
+    let (subtitle_boundary, subtitle_body) = generated_material_upload(
+        "captions.srt",
+        "application/x-subrip",
+        b"1\n00:00:00,000 --> 00:00:01,000\ntest\n",
+        &subtitle_generation,
+    );
+    let subtitle_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/materials/generated"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={subtitle_boundary}"),
+                )
+                .body(Body::from(subtitle_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(subtitle_response.status(), StatusCode::CREATED);
+    let subtitle = response_json(subtitle_response).await;
+    assert_eq!(subtitle["material_type"], "subtitle");
+    assert_eq!(subtitle["generation"]["alignment_source"], "tts_timestamp");
+    assert_eq!(
+        subtitle["generation"]["source_audio_material_id"],
+        regenerated_id
+    );
+    assert_eq!(stored_generated_file_count(&storage_root, project_id), 3);
+
+    let _ = fs::remove_dir_all(storage_root);
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn material_detail_recursively_redacts_historical_credentials() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    sqlx::query("ALTER TABLE materials DROP CONSTRAINT materials_metadata_no_credentials_check")
+        .execute(&test_pool)
+        .await
+        .unwrap();
+    let material_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO materials (project_id, material_type, file_url, file_name, metadata)
+        VALUES (
+            $1,
+            'audio',
+            'https://cdn.example.com/historical.mp3',
+            '历史生成音频.mp3',
+            '{"source":"ai_generated","model_snapshot":{"api_key":"hidden","headers":{"Authorization":"Bearer hidden"}}}'
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    let app = build_app_with_state(app_state(test_url, test_pool.clone()));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/materials/{material_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let material = response_json(response).await;
+    assert!(material["metadata"]["model_snapshot"]
+        .get("api_key")
+        .is_none());
+    assert!(material["metadata"]["model_snapshot"]["headers"]
+        .get("Authorization")
+        .is_none());
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn generated_material_route_rejects_invalid_media_and_credentials_without_side_effects() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let storage_root =
+        std::env::temp_dir().join(format!("novex-generated-material-route-{}", Uuid::new_v4()));
+    let app = build_app_with_state(app_state_with_storage(
+        test_url,
+        test_pool.clone(),
+        storage_root.to_string_lossy().into_owned(),
+    ));
+    let base_generation = json!({
+        "work_id": Uuid::new_v4(),
+        "work_version_id": Uuid::new_v4(),
+        "generation_run_id": Uuid::new_v4(),
+        "generation_step_id": Uuid::new_v4(),
+        "artifact_role": "tts_audio",
+        "audio_usage": "tts",
+        "model_snapshot": {"model_id": Uuid::new_v4()},
+        "voice_snapshot": {},
+        "prompt_snapshot": {},
+        "timeline_snapshot": {},
+        "resource_usage": {}
+    });
+    let mut monetary_generation = base_generation.clone();
+    monetary_generation["resource_usage"] = json!({"duration_sec": 1, "estimated_cost": 0.1});
+
+    let invalid_cases = [
+        (base_generation.clone(), b"not-a-wav".to_vec()),
+        (
+            json!({
+                "work_id": Uuid::new_v4(),
+                "work_version_id": Uuid::new_v4(),
+                "generation_run_id": Uuid::new_v4(),
+                "generation_step_id": Uuid::new_v4(),
+                "artifact_role": "tts_audio",
+                "audio_usage": "tts",
+                "model_snapshot": {"headers": {"Authorization": "Bearer secret"}},
+                "voice_snapshot": {},
+                "prompt_snapshot": {},
+                "timeline_snapshot": {},
+                "resource_usage": {}
+            }),
+            one_second_wav(),
+        ),
+        (monetary_generation, one_second_wav()),
+    ];
+
+    for (generation, bytes) in invalid_cases {
+        let (boundary, body) =
+            generated_material_upload("voice.wav", "audio/wav", &bytes, &generation);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/projects/{project_id}/materials/generated"))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    let count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM materials WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_one(&test_pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(stored_generated_file_count(&storage_root, project_id), 0);
 
     let _ = fs::remove_dir_all(storage_root);
     test_pool.close().await;

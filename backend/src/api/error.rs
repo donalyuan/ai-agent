@@ -166,6 +166,7 @@ impl From<MaterialApplicationError> for ScriptApiError {
                 Self::MaterialValidation(error.to_string())
             }
             MaterialApplicationError::UploadStorage(message) => Self::State(message),
+            MaterialApplicationError::Validation(message) => Self::MaterialValidation(message),
         }
     }
 }
@@ -387,6 +388,9 @@ fn material_repository_error_response(
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "已选为分镜主素材的素材不可归档", "material_id": material_id })),
         ),
+        MaterialRepositoryError::InvalidMetadata(message) => {
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": message })))
+        }
         MaterialRepositoryError::Storage(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "素材存储失败", "details": message })),

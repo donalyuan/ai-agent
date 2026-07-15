@@ -637,6 +637,11 @@ const subtitleMaterial = {
   file_name: "demo.vtt",
   tags: ["字幕", "中英双语"],
   metadata: { language: "zh-CN", subtitle_format: "vtt" },
+  source: null,
+  audio_usage: null,
+  work_id: null,
+  work_version_id: null,
+  generation: null,
   usage_count: 0,
   status: "active",
   created_at: "2026-07-09T00:00:00Z",
@@ -660,6 +665,46 @@ const uploadedImageMaterial = {
     width: 1,
     height: 1,
   },
+  source: "user_upload",
+};
+
+const generatedTtsMaterial = {
+  ...subtitleMaterial,
+  material_id: "edededed-eded-4ded-8ded-edededededed",
+  material_type: "audio",
+  file_url: `/assets/generated/${projectId}/tts.wav`,
+  file_name: "Debug不内耗-V3-旁白.wav",
+  tags: ["旁白", "TTS", "作品 V3"],
+  metadata: { format: "wav", duration_sec: 31.4 },
+  source: "work_generation",
+  audio_usage: "tts",
+  work_id: "31313131-3131-4131-8131-313131313131",
+  work_version_id: "32323232-3232-4232-8232-323232323232",
+  generation: {
+    work_id: "31313131-3131-4131-8131-313131313131",
+    work_version_id: "32323232-3232-4232-8232-323232323232",
+    generation_run_id: "33333333-3333-4333-8333-333333333333",
+    generation_step_id: "34343434-3434-4434-8434-343434343434",
+    model_snapshot: { display_name: "豆包语音 2.0" },
+    voice_snapshot: { speaker_name: "灿灿", language: "zh-CN", emotion: "温暖", speed: 1.05 },
+    prompt_snapshot: { text_summary: "三段旁白，共 128 字" },
+    request_trace_id: "req_7P2K8",
+    duration_sec: 31.4,
+  },
+};
+
+const uploadedAudioMaterial = {
+  ...generatedTtsMaterial,
+  material_id: "fefefefe-fefe-4efe-8efe-fefefefefefe",
+  file_url: `/assets/uploads/${projectId}/city-morning.wav`,
+  file_name: "城市清晨环境声",
+  tags: ["城市", "清晨", "环境声"],
+  metadata: { format: "wav", duration_sec: 42, file_size_bytes: 19_503_514 },
+  source: "user_upload",
+  audio_usage: "ambient",
+  work_id: null,
+  work_version_id: null,
+  generation: null,
 };
 
 const png1x1 = Buffer.from(
@@ -1307,8 +1352,16 @@ async function mockEmptyContentStrategyWorkflow(page: Page) {
   });
 }
 
-async function mockMaterialLibraryWorkflow(page: Page) {
-  const materials: typeof uploadedImageMaterial[] = [];
+async function mockMaterialLibraryWorkflow(
+  page: Page,
+  options: {
+    initialMaterials?: Array<Record<string, unknown>>;
+    uploadResponse?: Record<string, unknown>;
+    onUpload?: (postData: string) => void;
+  } = {},
+) {
+  const uploadResponse = options.uploadResponse || uploadedImageMaterial;
+  const materials: Array<Record<string, unknown>> = [...(options.initialMaterials || [])];
   await page.unroute(/\/api\/video-workspace\/menus$/);
   await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
     await route.fulfill({ contentType: "application/json", json: { menus: materialWorkspaceMenus } });
@@ -1334,8 +1387,9 @@ async function mockMaterialLibraryWorkflow(page: Page) {
   await page.route(new RegExp(`/api/projects/${projectId}/materials/upload$`), async (route) => {
     expect(route.request().method()).toBe("POST");
     expect(route.request().headers()["content-type"]).toContain("multipart/form-data; boundary=");
-    materials.splice(0, materials.length, uploadedImageMaterial);
-    await route.fulfill({ status: 201, contentType: "application/json", json: uploadedImageMaterial });
+    options.onUpload?.(route.request().postData() || "");
+    materials.splice(0, materials.length, uploadResponse);
+    await route.fulfill({ status: 201, contentType: "application/json", json: uploadResponse });
   });
   await page.route(new RegExp(`/api/projects/${projectId}/materials(\\?.*)?$`), async (route) => {
     await route.fulfill({ contentType: "application/json", json: { materials } });
@@ -1833,6 +1887,35 @@ test("素材库上传后回填系统信息并支持大图预览", async ({ page 
   await expect(page.getByLabel("素材详情浮层")).toHaveCount(0);
   await expect(page.getByLabel("画布工具栏")).toBeVisible();
   await expect(page.locator(".materialCanvasWorkspace canvas")).toBeVisible();
+  const materialTypeFilterLayout = await page.getByLabel("素材类型筛选").evaluate((filter) => {
+    const buttons = Array.from(filter.querySelectorAll("button"));
+    const buttonRects = buttons.map((button) => button.getBoundingClientRect());
+    const topPositions = buttonRects.map((rect) => Math.round(rect.top));
+    return {
+      buttonCount: buttons.length,
+      rowOffset: Math.max(...topPositions) - Math.min(...topPositions),
+      textFits: buttons.every((button) => button.scrollWidth <= button.clientWidth),
+    };
+  });
+  expect(materialTypeFilterLayout.buttonCount).toBe(5);
+  expect(materialTypeFilterLayout.rowOffset).toBeLessThanOrEqual(1);
+  expect(materialTypeFilterLayout.textFits).toBe(true);
+  const materialStatusFilterLayout = await page.getByLabel("素材状态筛选").evaluate((filter) => {
+    const filterRect = filter.getBoundingClientRect();
+    const buttons = Array.from(filter.querySelectorAll("button"));
+    const buttonRects = buttons.map((button) => button.getBoundingClientRect());
+    const widths = buttonRects.map((rect) => Math.round(rect.width));
+    return {
+      buttonCount: buttons.length,
+      leftOffset: Math.round(buttonRects[0].left - filterRect.left),
+      rightOffset: Math.round(filterRect.right - buttonRects.at(-1)!.right),
+      widthSpread: Math.max(...widths) - Math.min(...widths),
+    };
+  });
+  expect(materialStatusFilterLayout.buttonCount).toBe(3);
+  expect(materialStatusFilterLayout.leftOffset).toBeLessThanOrEqual(1);
+  expect(materialStatusFilterLayout.rightOffset).toBeLessThanOrEqual(1);
+  expect(materialStatusFilterLayout.widthSpread).toBeLessThanOrEqual(1);
   await page.getByRole("button", { name: "上传素材" }).click();
   await expect(page.getByLabel("素材详情浮层")).toBeVisible();
   await expect(page.getByRole("heading", { name: "上传素材" })).toBeVisible();
@@ -1897,4 +1980,71 @@ test("素材库上传后回填系统信息并支持大图预览", async ({ page 
   await expect(page.getByText("素材清单确认")).toHaveCount(0);
   await page.getByRole("button", { name: "关闭素材详情" }).click();
   await expect(page.getByLabel("素材详情浮层")).toHaveCount(0);
+});
+
+test("素材库支持作品声音筛选并展示只读生成快照", async ({ page }) => {
+  await mockMaterialLibraryWorkflow(page, { initialMaterials: [generatedTtsMaterial] });
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "视频工作台菜单" })
+    .getByRole("button", { name: /素材管理/ })
+    .click();
+
+  await page.getByLabel("声音用途筛选").selectOption("tts");
+  await page.getByLabel("生成来源筛选").selectOption("work_generation");
+  await page.getByLabel("来源作品筛选").selectOption(generatedTtsMaterial.work_id);
+  const finalRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname.endsWith(`/api/projects/${projectId}/materials`)
+      && url.searchParams.get("work_version_id") === generatedTtsMaterial.work_version_id;
+  });
+  await page.getByLabel("来源版本筛选").selectOption(generatedTtsMaterial.work_version_id);
+
+  const requestUrl = new URL((await finalRequest).url());
+  expect(requestUrl.searchParams.get("audio_usage")).toBe("tts");
+  expect(requestUrl.searchParams.get("source")).toBe("work_generation");
+  expect(requestUrl.searchParams.get("work_id")).toBe(generatedTtsMaterial.work_id);
+  expect(requestUrl.searchParams.get("work_version_id")).toBe(generatedTtsMaterial.work_version_id);
+
+  await page.getByLabel("素材资产浮层")
+    .getByRole("button", { name: /Debug不内耗-V3-旁白/ })
+    .click();
+  const detail = page.getByLabel("素材详情浮层");
+  await expect(detail.getByRole("heading", { name: "生成来源" })).toBeVisible();
+  await expect(detail.getByText("豆包语音 2.0")).toBeVisible();
+  await expect(detail.getByText("灿灿")).toBeVisible();
+  await expect(detail.getByText("req_7P2K8")).toBeVisible();
+  await expect(detail.getByText("凭据未记录")).toBeVisible();
+  await expect(page.getByText("AI 音乐")).toHaveCount(0);
+  await expect(page.getByText("环境音生成")).toHaveCount(0);
+  await expect(page.getByText("动作音效生成")).toHaveCount(0);
+});
+
+test("素材库上传音频时提交标准声音用途", async ({ page }) => {
+  let uploadBody = "";
+  await mockMaterialLibraryWorkflow(page, {
+    uploadResponse: uploadedAudioMaterial,
+    onUpload: (postData) => {
+      uploadBody = postData;
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "视频工作台菜单" })
+    .getByRole("button", { name: /素材管理/ })
+    .click();
+  await page.getByRole("button", { name: "上传素材" }).click();
+  await page.getByLabel("素材文件").setInputFiles({
+    name: "城市清晨环境声.wav",
+    mimeType: "audio/wav",
+    buffer: Buffer.from("RIFF-test-wave"),
+  });
+  await page.getByLabel("声音用途（选填）").selectOption("ambient");
+  await page.getByLabel("标签（选填）").fill("城市, 清晨, 环境声");
+  await page.getByRole("button", { name: "上传并保存" }).click();
+
+  await expect(page.getByLabel("素材资产浮层")
+    .getByRole("button", { name: /城市清晨环境声/ }))
+    .toBeVisible();
+  expect(uploadBody).toContain('name="audio_usage"');
+  expect(uploadBody).toContain("ambient");
+  await expect(page.getByLabel("素材详情浮层").getByText("环境音")).toBeVisible();
 });

@@ -704,6 +704,11 @@ const subtitleMaterial: Material = {
     subtitle_format: "vtt",
     source_note: "人工整理",
   },
+  source: null,
+  audio_usage: null,
+  work_id: null,
+  work_version_id: null,
+  generation: null,
   usage_count: 0,
   status: "active",
   created_at: "2026-07-09T00:00:00Z",
@@ -732,6 +737,46 @@ const uploadedImageMaterial: Material = {
     width: 1920,
     height: 1080,
   },
+  source: "user_upload",
+};
+
+const generatedTtsMaterial: Material = {
+  ...subtitleMaterial,
+  material_id: "edededed-eded-4ded-8ded-edededededed",
+  material_type: "audio",
+  file_url: "http://api.test/assets/generated/tts.wav",
+  file_name: "Debug不内耗-V3-旁白.wav",
+  tags: ["旁白", "TTS", "作品 V3"],
+  metadata: { format: "wav", duration_sec: 31.4 },
+  source: "work_generation",
+  audio_usage: "tts",
+  work_id: "31313131-3131-4131-8131-313131313131",
+  work_version_id: "32323232-3232-4232-8232-323232323232",
+  generation: {
+    work_id: "31313131-3131-4131-8131-313131313131",
+    work_version_id: "32323232-3232-4232-8232-323232323232",
+    generation_run_id: "33333333-3333-4333-8333-333333333333",
+    generation_step_id: "34343434-3434-4434-8434-343434343434",
+    model_snapshot: { display_name: "豆包语音 2.0" },
+    voice_snapshot: { speaker_name: "灿灿", language: "zh-CN", emotion: "温暖", speed: 1.05 },
+    prompt_snapshot: { text_summary: "三段旁白，共 128 字" },
+    request_trace_id: "req_7P2K8",
+    duration_sec: 31.4,
+  },
+};
+
+const uploadedAudioMaterial: Material = {
+  ...generatedTtsMaterial,
+  material_id: "fefefefe-fefe-4efe-8efe-fefefefefefe",
+  file_url: "http://api.test/assets/uploads/project/city-morning.wav",
+  file_name: "城市清晨环境声",
+  tags: ["城市", "清晨", "环境声"],
+  metadata: { format: "wav", duration_sec: 42, file_size_bytes: 19_503_514 },
+  source: "user_upload",
+  audio_usage: "ambient",
+  work_id: null,
+  work_version_id: null,
+  generation: null,
 };
 
 const assetGenerationPlan: AssetGenerationPlanResponse = {
@@ -1206,6 +1251,42 @@ describe("video-agent 视频工作台页面", () => {
       status: "active",
       q: "",
       tag: "",
+      audio_usage: "all",
+      source: "all",
+      work_id: "",
+      work_version_id: "",
+    });
+  });
+
+  it("素材库按声音用途、生成来源、作品和版本组合筛选", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockMaterials([generatedTtsMaterial]);
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    await screen.findByRole("heading", { name: "素材库" });
+
+    fireEvent.change(screen.getByLabelText("声音用途筛选"), { target: { value: "tts" } });
+    fireEvent.change(screen.getByLabelText("生成来源筛选"), { target: { value: "work_generation" } });
+    fireEvent.change(screen.getByLabelText("来源作品筛选"), {
+      target: { value: generatedTtsMaterial.work_id },
+    });
+    fireEvent.change(screen.getByLabelText("来源版本筛选"), {
+      target: { value: generatedTtsMaterial.work_version_id },
+    });
+
+    await waitFor(() => {
+      expect(api.listMaterials).toHaveBeenLastCalledWith(expect.anything(), project.project_id, {
+        material_type: "all",
+        status: "active",
+        q: "",
+        tag: "",
+        audio_usage: "tts",
+        source: "work_generation",
+        work_id: generatedTtsMaterial.work_id,
+        work_version_id: generatedTtsMaterial.work_version_id,
+      });
     });
   });
 
@@ -1295,6 +1376,53 @@ describe("video-agent 视频工作台页面", () => {
         name: /办公桌面近景/,
       }),
     ).toBeInTheDocument();
+  });
+
+  it("上传音频时可选择声音用途并提交标准值", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockMaterials([]);
+    vi.mocked(api.uploadMaterial).mockResolvedValue(uploadedAudioMaterial);
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "上传素材" }));
+    const file = new File(["wav"], "城市清晨环境声.wav", { type: "audio/wav" });
+    fireEvent.change(screen.getByLabelText("素材文件"), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("声音用途（选填）"), { target: { value: "ambient" } });
+    fireEvent.change(screen.getByLabelText("标签（选填）"), {
+      target: { value: "城市, 清晨, 环境声" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "上传并保存" }));
+
+    await waitFor(() => {
+      expect(api.uploadMaterial).toHaveBeenCalledWith(expect.anything(), project.project_id, {
+        file,
+        file_name: "城市清晨环境声",
+        tags: ["城市", "清晨", "环境声"],
+        audio_usage: "ambient",
+      });
+    });
+  });
+
+  it("作品生成素材详情展示只读审计快照且不出现未落地生成入口", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockMaterials([generatedTtsMaterial]);
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Debug不内耗-V3-旁白/ }));
+
+    const detail = screen.getByLabelText("素材详情浮层");
+    expect(within(detail).getByRole("heading", { name: "生成来源" })).toBeInTheDocument();
+    expect(within(detail).getByText("豆包语音 2.0")).toBeInTheDocument();
+    expect(within(detail).getByText("灿灿")).toBeInTheDocument();
+    expect(within(detail).getByText("req_7P2K8")).toBeInTheDocument();
+    expect(within(detail).getByText("凭据未记录")).toBeInTheDocument();
+    expect(screen.queryByText("AI 音乐")).not.toBeInTheDocument();
+    expect(screen.queryByText("环境音生成")).not.toBeInTheDocument();
+    expect(screen.queryByText("动作音效生成")).not.toBeInTheDocument();
   });
 
   it("图片详情可打开、缩放并关闭大图预览", async () => {

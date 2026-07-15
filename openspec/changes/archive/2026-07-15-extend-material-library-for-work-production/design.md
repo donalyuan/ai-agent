@@ -48,6 +48,21 @@
 
 筛选 API 需要支持 `material_type`、`audio_usage`、`source`、`work_id`、`work_version_id` 和现有状态/关键词/标签组合。历史未分类音频必须保持兼容。
 
+作品生产上下文的数据表由后续独立 change 创建，本 change 不提前创建空壳 `works`、`work_versions` 或任务表，也不建立指向尚不存在表的外键。作品来源 ID 以 UUID 字符串快照保存在 metadata，并建立表达式索引；后续作品表落地后再由对应 change 增加引用完整性约束。
+
+统一登记接口采用 `POST /api/projects/:project_id/materials/generated` multipart 请求，在一个用例内完成项目校验、文件内容检查、媒体探测、写入自管存储和素材登记。请求中的 `generation` JSON 使用以下稳定字段：
+
+- `work_id`、`work_version_id`、`generation_run_id`、`generation_step_id`
+- `artifact_role`，以及音频产物可选的 `audio_usage=tts|bgm|ambient|action_sfx|mixed|other`
+- `model_snapshot`、`voice_snapshot`、`prompt_snapshot`、`timeline_snapshot` 和 `resource_usage`
+- `request_trace_id`；字幕产物必须提供 `alignment_source=tts_timestamp|asr` 与 `source_audio_material_id`
+
+登记接口只接受 `audio`、`subtitle` 和 `video` 作品产物；客户端不得指定 `source`，服务端固定写入 `source=work_generation`、`storage_provider=local` 和经探测得到的文件事实。重新登记始终生成新的物理文件和素材 ID。文件校验或落盘失败不写数据库；数据库写入失败时删除本次文件。
+
+普通音频上传允许附带可选 `audio_usage`，用于登记已有 BGM、环境音、动作音效或其他声音；非音频上传不得携带该字段。作品生产生成的音频必须指定用途。`resource_usage` 只允许保存时长、字符数、任务数等非金额用量，拒绝 amount、cost、price、fee 和 currency 字段。
+
+素材详情继续返回素材 metadata，但在响应边界执行递归脱敏；数据库同时通过递归 JSONB 敏感键约束拒绝 `api_key`、鉴权 header、token、secret、password、cookie 和 credentials 等键，防止其他写入路径绕过应用层。
+
 ## TDD
 
 - Repository 测试覆盖新素材登记、重新生成不覆盖、作品来源筛选和归档行为。

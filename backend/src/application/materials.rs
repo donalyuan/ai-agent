@@ -4,9 +4,10 @@ use super::material_upload::{
     inspect_upload, probe_media, LocalMaterialStorage, UploadValidationError,
 };
 use crate::repositories::{
-    CreateMaterialInput, Material, MaterialListFilter, MaterialRepository, MaterialRepositoryError,
-    MaterialStatus, MaterialType, PostgresMaterialRepository, PostgresProjectRepository,
-    ProjectRepository, ProjectRepositoryError, UpdateMaterialInput,
+    validate_material_metadata, AudioUsage, CreateMaterialInput, Material, MaterialListFilter,
+    MaterialRepository, MaterialRepositoryError, MaterialStatus, MaterialType,
+    PostgresMaterialRepository, PostgresProjectRepository, ProjectRepository,
+    ProjectRepositoryError, UpdateMaterialInput,
 };
 use serde_json::{json, Map, Value};
 use std::fmt;
@@ -38,6 +39,11 @@ impl MaterialService {
         input: CreateMaterialInput,
     ) -> Result<Material, MaterialApplicationError> {
         self.ensure_project_exists(input.project_id).await?;
+        if input.metadata.get("source").and_then(Value::as_str) == Some("work_generation") {
+            return Err(MaterialApplicationError::Validation(
+                "作品生成素材必须通过统一生成物登记接口写入".to_string(),
+            ));
+        }
         self.material_repository
             .create_material(input)
             .await
@@ -66,6 +72,11 @@ impl MaterialService {
             command.content_type.as_deref(),
             &command.bytes,
         )?;
+        if detected.material_type != MaterialType::Audio && command.audio_usage.is_some() {
+            return Err(MaterialApplicationError::Validation(
+                "audio_usage 只能用于音频素材".to_string(),
+            ));
+        }
         let stored = self
             .storage
             .store(
@@ -116,6 +127,132 @@ impl MaterialService {
         }
         if detected.material_type == MaterialType::Subtitle {
             metadata.insert("subtitle_format".to_string(), json!(detected.extension));
+        }
+        match (detected.material_type, command.audio_usage) {
+            (MaterialType::Audio, Some(audio_usage)) => {
+                metadata.insert("audio_usage".to_string(), json!(audio_usage.as_str()));
+            }
+            (MaterialType::Audio, None) | (_, None) => {}
+            (_, Some(_)) => unreachable!("非音频用途已在落盘前校验"),
+        }
+
+        let input = CreateMaterialInput {
+            project_id: command.project_id,
+            material_type: detected.material_type,
+            file_url: stored.public_url.clone(),
+            file_name: command.file_name,
+            thumbnail_url: None,
+            tags: command.tags,
+            metadata: Value::Object(metadata),
+        };
+        match self.material_repository.create_material(input).await {
+            Ok(material) => Ok(material),
+            Err(error) => {
+                let _ = self.storage.remove(&stored).await;
+                Err(error.into())
+            }
+        }
+    }
+
+    pub async fn register_generated(
+        &self,
+        command: GeneratedMaterialCommand,
+    ) -> Result<Material, MaterialApplicationError> {
+        self.ensure_project_exists(command.project_id).await?;
+        validate_generation_snapshot(&command.generation)?;
+        let detected = inspect_upload(
+            &command.original_file_name,
+            command.content_type.as_deref(),
+            &command.bytes,
+        )?;
+        if detected.material_type == MaterialType::Image {
+            return Err(MaterialApplicationError::Validation(
+                "作品生成物登记仅支持音频、字幕和视频".to_string(),
+            ));
+        }
+        match (detected.material_type, command.generation.audio_usage) {
+            (MaterialType::Audio, None) => {
+                return Err(MaterialApplicationError::Validation(
+                    "音频生成物必须指定 audio_usage".to_string(),
+                ))
+            }
+            (MaterialType::Audio, Some(_)) | (_, None) => {}
+            (_, Some(_)) => {
+                return Err(MaterialApplicationError::Validation(
+                    "audio_usage 只能用于音频素材".to_string(),
+                ))
+            }
+        }
+        if detected.material_type == MaterialType::Subtitle
+            && (command.generation.alignment_source.is_none()
+                || command.generation.source_audio_material_id.is_none())
+        {
+            return Err(MaterialApplicationError::Validation(
+                "字幕生成物必须指定 alignment_source 和 source_audio_material_id".to_string(),
+            ));
+        }
+        if let Some(source_audio_material_id) = command.generation.source_audio_material_id {
+            let source_audio = self
+                .material_repository
+                .get_material(source_audio_material_id)
+                .await?;
+            if source_audio.project_id != command.project_id
+                || source_audio.material_type != MaterialType::Audio
+                || source_audio.status != MaterialStatus::Active
+            {
+                return Err(MaterialApplicationError::Validation(
+                    "来源音频必须是当前项目下可用的 audio 素材".to_string(),
+                ));
+            }
+        }
+
+        let mut metadata = generation_metadata(&command.generation);
+        metadata.insert("mime_type".to_string(), json!(detected.mime_type));
+        metadata.insert("format".to_string(), json!(detected.format));
+        metadata.insert("file_size_bytes".to_string(), json!(command.bytes.len()));
+        if let Some(width) = detected.width {
+            metadata.insert("width".to_string(), json!(width));
+        }
+        if let Some(height) = detected.height {
+            metadata.insert("height".to_string(), json!(height));
+        }
+        if detected.material_type == MaterialType::Subtitle {
+            metadata.insert("subtitle_format".to_string(), json!(detected.extension));
+        }
+        validate_material_metadata(&Value::Object(metadata.clone()))?;
+
+        let stored = self
+            .storage
+            .store_generated(
+                command.project_id,
+                Uuid::new_v4(),
+                &detected.extension,
+                &command.bytes,
+            )
+            .await
+            .map_err(|error| MaterialApplicationError::UploadStorage(error.to_string()))?;
+
+        if matches!(
+            detected.material_type,
+            MaterialType::Video | MaterialType::Audio
+        ) {
+            match probe_media(&stored.absolute_path).await {
+                Ok(probe) => {
+                    if let Some(duration_sec) = probe.duration_sec {
+                        metadata.insert("duration_sec".to_string(), json!(duration_sec));
+                    }
+                    if let Some(width) = probe.width {
+                        metadata.insert("width".to_string(), json!(width));
+                    }
+                    if let Some(height) = probe.height {
+                        metadata.insert("height".to_string(), json!(height));
+                    }
+                }
+                Err(error) => {
+                    let _ = self.storage.remove(&stored).await;
+                    return Err(error.into());
+                }
+            }
         }
 
         let input = CreateMaterialInput {
@@ -203,6 +340,174 @@ pub struct MaterialUploadCommand {
     pub bytes: Vec<u8>,
     pub file_name: String,
     pub tags: Vec<String>,
+    pub audio_usage: Option<AudioUsage>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeneratedMaterialCommand {
+    pub project_id: Uuid,
+    pub original_file_name: String,
+    pub content_type: Option<String>,
+    pub bytes: Vec<u8>,
+    pub file_name: String,
+    pub tags: Vec<String>,
+    pub generation: WorkGenerationSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkGenerationSnapshot {
+    pub work_id: Uuid,
+    pub work_version_id: Uuid,
+    pub generation_run_id: Uuid,
+    pub generation_step_id: Uuid,
+    pub artifact_role: String,
+    pub audio_usage: Option<AudioUsage>,
+    pub model_snapshot: Value,
+    pub voice_snapshot: Value,
+    pub prompt_snapshot: Value,
+    pub timeline_snapshot: Value,
+    pub resource_usage: Value,
+    pub request_trace_id: Option<String>,
+    pub alignment_source: Option<String>,
+    pub source_audio_material_id: Option<Uuid>,
+}
+
+fn validate_generation_snapshot(
+    snapshot: &WorkGenerationSnapshot,
+) -> Result<(), MaterialApplicationError> {
+    let artifact_role = snapshot.artifact_role.trim();
+    if artifact_role.is_empty()
+        || artifact_role.len() > 64
+        || !artifact_role.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+        })
+    {
+        return Err(MaterialApplicationError::Validation(
+            "artifact_role 必须是 1-64 位小写字母、数字或下划线".to_string(),
+        ));
+    }
+    for (label, value) in [
+        ("model_snapshot", &snapshot.model_snapshot),
+        ("voice_snapshot", &snapshot.voice_snapshot),
+        ("prompt_snapshot", &snapshot.prompt_snapshot),
+        ("timeline_snapshot", &snapshot.timeline_snapshot),
+        ("resource_usage", &snapshot.resource_usage),
+    ] {
+        if !value.is_object() {
+            return Err(MaterialApplicationError::Validation(format!(
+                "{label} 必须是 JSON 对象"
+            )));
+        }
+    }
+    if let Some(path) = monetary_field_path(&snapshot.resource_usage, "resource_usage") {
+        return Err(MaterialApplicationError::Validation(format!(
+            "资源用量快照禁止包含金额字段: {path}"
+        )));
+    }
+    if let Some(alignment_source) = snapshot.alignment_source.as_deref() {
+        if !matches!(alignment_source, "tts_timestamp" | "asr") {
+            return Err(MaterialApplicationError::Validation(
+                "alignment_source 仅支持 tts_timestamp 或 asr".to_string(),
+            ));
+        }
+    }
+    let metadata = Value::Object(generation_metadata(snapshot));
+    validate_material_metadata(&metadata)?;
+    Ok(())
+}
+
+fn monetary_field_path(value: &Value, path: &str) -> Option<String> {
+    match value {
+        Value::Object(object) => object.iter().find_map(|(key, child)| {
+            let child_path = format!("{path}.{key}");
+            let normalized = key
+                .chars()
+                .filter(|character| character.is_ascii_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect::<String>();
+            if matches!(
+                normalized.as_str(),
+                "currency" | "amount" | "cost" | "price" | "fee"
+            ) || ["amount", "cost", "price", "fee"]
+                .iter()
+                .any(|suffix| normalized.ends_with(suffix))
+            {
+                Some(child_path)
+            } else {
+                monetary_field_path(child, &child_path)
+            }
+        }),
+        Value::Array(values) => values
+            .iter()
+            .enumerate()
+            .find_map(|(index, child)| monetary_field_path(child, &format!("{path}[{index}]"))),
+        _ => None,
+    }
+}
+
+fn generation_metadata(snapshot: &WorkGenerationSnapshot) -> Map<String, Value> {
+    let mut metadata = Map::from_iter([
+        ("source".to_string(), json!("work_generation")),
+        ("storage_provider".to_string(), json!("local")),
+        ("work_id".to_string(), json!(snapshot.work_id)),
+        (
+            "work_version_id".to_string(),
+            json!(snapshot.work_version_id),
+        ),
+        (
+            "generation_run_id".to_string(),
+            json!(snapshot.generation_run_id),
+        ),
+        (
+            "generation_step_id".to_string(),
+            json!(snapshot.generation_step_id),
+        ),
+        (
+            "artifact_role".to_string(),
+            json!(snapshot.artifact_role.trim()),
+        ),
+        (
+            "model_snapshot".to_string(),
+            snapshot.model_snapshot.clone(),
+        ),
+        (
+            "voice_snapshot".to_string(),
+            snapshot.voice_snapshot.clone(),
+        ),
+        (
+            "prompt_snapshot".to_string(),
+            snapshot.prompt_snapshot.clone(),
+        ),
+        (
+            "timeline_snapshot".to_string(),
+            snapshot.timeline_snapshot.clone(),
+        ),
+        (
+            "resource_usage".to_string(),
+            snapshot.resource_usage.clone(),
+        ),
+    ]);
+    if let Some(audio_usage) = snapshot.audio_usage {
+        metadata.insert("audio_usage".to_string(), json!(audio_usage.as_str()));
+    }
+    if let Some(request_trace_id) = snapshot
+        .request_trace_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        metadata.insert("request_trace_id".to_string(), json!(request_trace_id));
+    }
+    if let Some(alignment_source) = snapshot.alignment_source.as_deref() {
+        metadata.insert("alignment_source".to_string(), json!(alignment_source));
+    }
+    if let Some(source_audio_material_id) = snapshot.source_audio_material_id {
+        metadata.insert(
+            "source_audio_material_id".to_string(),
+            json!(source_audio_material_id),
+        );
+    }
+    metadata
 }
 
 #[derive(Debug)]
@@ -212,6 +517,7 @@ pub enum MaterialApplicationError {
     ProjectNotFound(Uuid),
     UploadValidation(UploadValidationError),
     UploadStorage(String),
+    Validation(String),
 }
 
 impl From<ProjectRepositoryError> for MaterialApplicationError {
@@ -244,6 +550,7 @@ impl fmt::Display for MaterialApplicationError {
             Self::UploadStorage(message) => {
                 write!(formatter, "material upload storage error: {message}")
             }
+            Self::Validation(message) => formatter.write_str(message),
         }
     }
 }

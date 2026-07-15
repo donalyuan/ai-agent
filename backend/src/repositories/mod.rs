@@ -23,9 +23,10 @@ pub use conversation_repository::{
     ConversationRepository, ConversationRepositoryError, PostgresConversationRepository,
 };
 pub use material_repository::{
+    redact_sensitive_material_metadata, validate_material_metadata, AudioUsage,
     CreateMaterialInput, Material, MaterialListFilter, MaterialParseError, MaterialRepository,
-    MaterialRepositoryError, MaterialStatus, MaterialStatusFilter, MaterialType,
-    PostgresMaterialRepository, UpdateMaterialInput,
+    MaterialRepositoryError, MaterialSourceFilter, MaterialStatus, MaterialStatusFilter,
+    MaterialType, PostgresMaterialRepository, UpdateMaterialInput,
 };
 pub use project_repository::{
     AccountStrategyProfile, CreateProjectInput, PostgresProjectRepository, Project,

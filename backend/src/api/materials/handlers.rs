@@ -1,7 +1,8 @@
 use super::dto::*;
 use crate::api::error::{ScriptApiError, ValidJson};
-use crate::application::materials::MaterialUploadCommand;
+use crate::application::materials::{GeneratedMaterialCommand, MaterialUploadCommand};
 use crate::bootstrap::AppState;
+use crate::repositories::AudioUsage;
 use axum::{
     extract::{multipart::MultipartRejection, Multipart, Path, Query, State},
     http::StatusCode,
@@ -24,6 +25,7 @@ pub(super) async fn upload_material(
     let mut file = None;
     let mut file_name = None;
     let mut tags = Vec::new();
+    let mut audio_usage = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -67,6 +69,16 @@ pub(super) async fn upload_material(
                     ScriptApiError::MaterialValidation("素材标签格式无效".to_string())
                 })?;
             }
+            Some("audio_usage") => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|_| invalid_multipart_request())?;
+                audio_usage =
+                    Some(AudioUsage::try_from(value.trim()).map_err(|_| {
+                        ScriptApiError::MaterialValidation("音频用途无效".to_string())
+                    })?);
+            }
             _ => {}
         }
     }
@@ -89,6 +101,104 @@ pub(super) async fn upload_material(
             bytes: file.bytes,
             file_name,
             tags,
+            audio_usage,
+        })
+        .await?;
+    Ok((StatusCode::CREATED, Json(MaterialResponse::from(material))))
+}
+
+pub(super) async fn register_generated_material(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> Result<(StatusCode, Json<MaterialResponse>), ScriptApiError> {
+    let mut multipart = multipart.map_err(|_| invalid_multipart_request())?;
+    let mut file = None;
+    let mut file_name = None;
+    let mut tags = Vec::new();
+    let mut generation = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| invalid_multipart_request())?
+    {
+        match field.name() {
+            Some("file") => {
+                let original_file_name = field
+                    .file_name()
+                    .map(str::to_string)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        ScriptApiError::MaterialValidation("生成素材文件缺少文件名".to_string())
+                    })?;
+                let content_type = field.content_type().map(str::to_string);
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|_| invalid_multipart_request())?;
+                file = Some(MultipartMaterialFile {
+                    original_file_name,
+                    content_type,
+                    bytes: bytes.to_vec(),
+                });
+            }
+            Some("file_name") => {
+                file_name = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|_| invalid_multipart_request())?,
+                );
+            }
+            Some("tags") => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|_| invalid_multipart_request())?;
+                tags = serde_json::from_str::<Vec<String>>(&value).map_err(|_| {
+                    ScriptApiError::MaterialValidation("素材标签格式无效".to_string())
+                })?;
+            }
+            Some("generation") => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|_| invalid_multipart_request())?;
+                generation = Some(
+                    serde_json::from_str::<WorkGenerationSnapshotRequest>(&value).map_err(
+                        |_| ScriptApiError::MaterialValidation("生成来源快照格式无效".to_string()),
+                    )?,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let file = file.ok_or_else(|| {
+        ScriptApiError::MaterialValidation("请选择要登记的生成素材文件".to_string())
+    })?;
+    let generation = generation
+        .ok_or_else(|| ScriptApiError::MaterialValidation("缺少生成来源快照".to_string()))?
+        .into_snapshot()
+        .map_err(ScriptApiError::MaterialValidation)?;
+    let fallback_name = std::path::Path::new(&file.original_file_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(&file.original_file_name);
+    let file_name = normalize_material_name(file_name.as_deref().unwrap_or(fallback_name))
+        .map_err(ScriptApiError::MaterialValidation)?;
+    let tags = normalize_material_tags(&tags).map_err(ScriptApiError::MaterialValidation)?;
+    let material = state
+        .material_service()?
+        .register_generated(GeneratedMaterialCommand {
+            project_id,
+            original_file_name: file.original_file_name,
+            content_type: file.content_type,
+            bytes: file.bytes,
+            file_name,
+            tags,
+            generation,
         })
         .await?;
     Ok((StatusCode::CREATED, Json(MaterialResponse::from(material))))

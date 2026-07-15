@@ -717,7 +717,7 @@ describe("video-agent api client", () => {
     expect(result.topics[0].title).toBe(contentTopic.title);
   });
 
-  it("请求素材列表时带类型、状态、关键词和标签筛选", async () => {
+  it("请求素材列表时带类型、状态、关键词、标签和作品来源筛选", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ materials: [material] }));
     const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
 
@@ -726,10 +726,14 @@ describe("video-agent api client", () => {
       status: "archived",
       q: "demo",
       tag: "字幕",
+      audio_usage: "tts",
+      source: "work_generation",
+      work_id: "31313131-3131-4131-8131-313131313131",
+      work_version_id: "32323232-3232-4232-8232-323232323232",
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      `http://api.test/api/projects/${project.project_id}/materials?type=subtitle&status=archived&q=demo&tag=%E5%AD%97%E5%B9%95`,
+      `http://api.test/api/projects/${project.project_id}/materials?type=subtitle&status=archived&q=demo&tag=%E5%AD%97%E5%B9%95&audio_usage=tts&source=work_generation&work_id=31313131-3131-4131-8131-313131313131&work_version_id=32323232-3232-4232-8232-323232323232`,
       { headers: { accept: "application/json" } },
     );
     expect(result.materials[0].material_id).toBe(material.material_id);
@@ -815,6 +819,7 @@ describe("video-agent api client", () => {
       file,
       file_name: "封面素材",
       tags: ["封面", "办公"],
+      audio_usage: "ambient",
     });
 
     const [url, init] = fetchMock.mock.calls[0];
@@ -826,6 +831,7 @@ describe("video-agent api client", () => {
     expect(body.get("file")).toBe(file);
     expect(body.get("file_name")).toBe("封面素材");
     expect(body.get("tags")).toBe(JSON.stringify(["封面", "办公"]));
+    expect(body.get("audio_usage")).toBe("ambient");
     expect(uploaded.file_url).toBe("http://api.test/assets/uploads/project/upload.png");
   });
 

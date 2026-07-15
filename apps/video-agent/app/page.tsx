@@ -19,8 +19,6 @@ import {
   ContentTopicStatus,
   Material,
   MaterialStatus,
-  MaterialStatusFilter,
-  MaterialType,
   ModelOption,
   PrepareScriptFromTopicResponse,
   Project,
@@ -102,10 +100,13 @@ import { upsertSummary } from "./pages/script-creation/scriptModel";
 import { AssetGenerationPage } from "./pages/asset-generation/AssetGenerationPage";
 import { MaterialLibraryPage } from "./pages/material-library/MaterialLibraryPage";
 import {
+  defaultMaterialFilters,
   defaultMaterialForm,
+  isAudioUploadFile,
   materialEditPayload,
   materialToForm,
   parseMaterialTags,
+  type MaterialFiltersState,
   type MaterialFormState,
 } from "./pages/material-library/materialModel";
 
@@ -231,17 +232,8 @@ export default function Home() {
   const [savingMaterial, setSavingMaterial] = useState(false);
   const [creatingMaterial, setCreatingMaterial] = useState(false);
   const [materialUploadFile, setMaterialUploadFile] = useState<File | null>(null);
-  const [materialFilters, setMaterialFilters] = useState<{
-    material_type: MaterialType | "all";
-    status: MaterialStatusFilter;
-    q: string;
-    tag: string;
-  }>({
-    material_type: "all",
-    status: "active",
-    q: "",
-    tag: "",
-  });
+  const [materialFilters, setMaterialFilters] =
+    useState<MaterialFiltersState>(defaultMaterialFilters);
   const [materialForm, setMaterialForm] = useState<MaterialFormState>(defaultMaterialForm);
   const [topicStats, setTopicStats] = useState<ContentTopicStats>(emptyTopicStats);
   const [topicBatches, setTopicBatches] = useState<TopicGenerationBatchSummary[]>([]);
@@ -1092,7 +1084,7 @@ export default function Home() {
     setSavingMaterial(false);
     setCreatingMaterial(false);
     setMaterialUploadFile(null);
-    setMaterialFilters({ material_type: "all", status: "active", q: "", tag: "" });
+    setMaterialFilters(defaultMaterialFilters);
     setMaterialForm(defaultMaterialForm);
   }, [selectedProjectId]);
 
@@ -1217,10 +1209,15 @@ export default function Home() {
   function handleMaterialUploadFile(file: File | null) {
     setMaterialUploadFile(file);
     if (!file) {
+      setMaterialForm((current) => ({ ...current, audio_usage: "" }));
       return;
     }
     const inferredName = file.name.replace(/\.[^.]+$/, "");
-    setMaterialForm((current) => ({ ...current, file_name: inferredName || file.name }));
+    setMaterialForm((current) => ({
+      ...current,
+      file_name: inferredName || file.name,
+      audio_usage: isAudioUploadFile(file) ? current.audio_usage : "",
+    }));
   }
 
   function handleCloseMaterialDetail() {
@@ -1260,6 +1257,7 @@ export default function Home() {
             file: materialUploadFile as File,
             file_name: materialForm.file_name,
             tags: parseMaterialTags(materialForm.tags_text),
+            ...(materialForm.audio_usage ? { audio_usage: materialForm.audio_usage } : {}),
           });
       setMaterials((currentMaterials) => {
         const withoutSaved = currentMaterials.filter(
