@@ -87,12 +87,11 @@ metadata:
 
 ## 项目、选题与脚本关系
 
-- `projects` 表示内容项目、账号方向或内容生产边界，承载脚本、素材、视频、发布和数据回流等产物；它不是具体选题。
-- 脚本创作当前必须保留项目选择，因为 `scripts.project_id` 是必填外键，脚本列表和脚本生成都必须绑定真实存在的 `project_id`，不得硬编码项目 ID。
-- 当前阶段还没有独立选题管理模型；脚本生成里的 `topic` 只是用户手动输入的选题文本，并作为脚本内容上下文保存。
-- 在选题池实现前，视频工作台不应显示“当前选题”、选题管理入口或让用户误以为已有独立选题生命周期。
-- 后续进入“内容策略与选题池”阶段时，应先实现账号定位、选题生成、选题确认和选题池；确认后的选题再进入脚本创作，脚本应引用稳定的 `topic_id` 或至少保存选题快照，保证脚本项目与选题链路可追踪。
-- 2026-07-06 用户确认：账号/项目管理先作为后续功能处理，优先完善“内容策略”页面和选题池体验。2026-07-08 用户进一步确认第一版账号/策略资料沉淀进入当前内容策略范围，采用 `projects` 作为内容账号/内容生产边界并扩展结构化 `strategy_profile`；前端展示语义统一为“账号”。本轮只做内容账号策略资料，不做抖音、小红书等平台账号凭据、发布账号管理或 `accounts` 表改造；删除、归档、权限、多成员管理如需要应单独提出 OpenSpec change。
+- `projects` 表示内容账号、账号方向或内容生产边界，承载策略、选题、脚本、素材、作品、发布和数据回流等产物；前端统一展示为“账号”，不得硬编码 `project_id`。
+- `projects.strategy_profile` 保存结构化账号策略；账号策略只在“内容策略 / 账号策略”维护，不在当前选题池重复展示编辑入口。
+- `content_topics` 承载独立选题生命周期 `idea -> approved -> scripted -> archived`；原始批次和补充批次按主题组聚合，批次只承担生成来源和审计。
+- 脚本生成必须绑定真实项目和选题，保存 `scripts.topic_id` 与 `scripts.content.topic_snapshot`；成功后把选题更新为 `scripted`，保证项目、选题和脚本链路可追踪。
+- 当前范围不包含抖音、小红书等平台账号凭据、发布账号管理或 `accounts` 表改造；删除、归档、权限和多成员管理需要独立 OpenSpec change。
 
 ## 底层平台边界
 
@@ -140,18 +139,16 @@ metadata:
 - 实现素材库列表、标签、素材候选、语义检索、素材替换和素材清单确认。
 - 接入或预留 `素材检索 Agent`、Embedding 检索服务。
 - 验收：脚本分镜可关联素材候选，素材清单可被作品生产读取。
-- 2026-07-09 用户确认 Phase 3 第一版先做“素材库管理”，采用画布优先的素材画布工作台方案，前端画布技术选型为 `Konva.js + react-konva`：主画布占据素材库主工作区，资产栏和详情编辑作为画布上的辅助浮层或窄面板，底部提供轻量画布工具栏；不得把画布切分成三个等价栏目。第一版沿用 `materials` 作为素材库聚合根，归属 `projects.id`；画布节点由前端素材列表派生，不新增画布节点或连线持久化模型，不保存节点位置，不表达任务编排或 DAG 语义。素材类型为 `video/image/audio/subtitle`，前端显示“视频/图片/音频/字幕”；字幕素材同样按 URL 登记，语言和格式进入 `metadata`。素材来源只录入已有素材 URL，不做文件上传或远程元数据抓取。生命周期采用 `active/archived` 软归档，默认只展示可用素材，可筛选归档素材并恢复。用户进一步确认第一版素材节点需要缩略图：采用可选手动 `metadata.thumbnail_url`，图片素材未填写时可用 `file_url` 预览，视频/音频可手动填封面图 URL，音频/字幕缺省显示类型占位；不得自动抽取视频帧、生成音频波形或抓取远程封面。本版不做 Embedding、Milvus、语义检索、素材检索 Agent、分镜素材候选、素材清单确认或作品生产读取素材清单。
-- 2026-07-09 用户确认素材 Agent 下一步规划方向：旧素材优先复用，尤其人物、固定 IP、常用场景；已登记、可用、非归档的旧人物/IP 素材允许作为 AI 图片生成参考图，并需在生成记录中保存引用来源，降低人物形象漂移风险；AI 图片允许自动生成，默认每个分镜 3 张候选，生成前可调整为 1-4 张；单次脚本批量图片候选生成上限为 12 个分镜 × 4 张 = 48 张，超过上限必须拒绝并提示减少分镜或候选数；AI 视频只生成待确认任务，必须人工二次确认后才启动。AI 图片候选由人工选择后绑定分镜，未被选中的候选也进入素材库，但必须标记为 `ai_generated`、未选候选和来源分镜，便于后续复用并避免重复付费生成。AI 图片生成后必须下载到自管素材存储，再将稳定 URL 写入 `materials.file_url`；不得只保存供应商返回的临时 URL。第一版自管存储采用本地持久化卷 + API 静态访问前缀，写入类似 `/app/storage/assets/generated/images/...` 的后端或 worker 可写目录，并通过 `/assets/...` 暴露稳定访问；`metadata` 需记录 `storage_provider=local`、`source=ai_generated`、`generation_task_id`，后续可再抽象到 MinIO/S3。AI 图片生成调用放到 `services/video-worker` 异步执行，`backend` 只负责创建任务、校验成本上限、记录状态和入库，不同步等待外部生成。第一版真实图片生成供应商为 OpenAI `gpt-image-2` 与即梦；OpenAI 接口口径已按官方文档核对，支持 `v1/images/generations`、多图 `n` 参数、`low/medium/high` 质量和 base64 返回；即梦接口字段后续实现前必须再以火山引擎官方文档/SDK 或实测为准。素材生成时用户可以选择供应商；默认使用 `gpt-image-2`，可切换即梦；失败不得自动跨供应商重试，跨供应商重试必须人工确认；同供应商临时错误最多自动重试 1 次，部分成功允许保留，成功图片入素材库，失败分镜显示失败状态并允许单独重生；供应商返回临时 URL 时必须下载到本地持久化存储，下载失败则候选失败且不得写入 `materials`。后续需要做“大模型管理”功能时归 `admin/` 平台控制面，不放在视频工作台；视频工作台只消费已启用供应商、默认模型和限额配置。2026-07-10 用户进一步确认：素材生成必须拆到 `素材管理 / 素材生成` 独立二级入口，不嵌入 `脚本创作 / 脚本生成` 页面；页面名称中保留 `Agent`，只去掉 `Topic Source`、独立 `Agent`、`素材 Agent` 等说明性小标题。
-- 2026-07-14 用户确认素材库 v2 交互并完成实现：进入“素材管理 / 素材库”时不再自动选中首条素材，右侧详情默认隐藏；点击资产栏或画布节点后按需打开详情抽屉，关闭时清除当前选择或新建状态，点击“新增素材”直接打开新建抽屉。详情继续承担编辑、保存、归档和恢复，只展示当前素材类型适用的扩展字段，payload 也不得携带其他类型的隐藏 metadata。画布节点采用统一尺寸，长文件名固定两行并截断，节点列数根据工作区宽度与详情抽屉状态确定性重排，必须避开资产栏、详情抽屉和底部工具栏；本次仍不持久化节点位置、不引入编排语义。
-- 2026-07-14 用户确认素材库正式入口以文件上传取代手工 URL 登记，此条覆盖 2026-07-09 的旧登记约定：操作者只选择文件、确认自动回填的素材名称并可选填写标签；系统负责自管存储、稳定地址、类型识别和 metadata 提取。素材地址、缩略图地址、来源/授权备注及格式、尺寸、时长等技术字段不在素材库 UI 展示或编辑；编辑只允许修改名称和标签并保留系统字段。图片详情可点击打开大图预览，支持 50%-200% 缩放、Escape、遮罩和关闭按钮退出。
-- 2026-07-11 统一 AI 模型管理已覆盖上条中的直接供应商选择：素材生成页改为选择后台启用的图片模型并提交 `model_id`，批量生成与单镜头重生必须使用同一当前选择；模型停用或删除后保留旧选择和用户输入，禁用调用并要求用户重新选择，不得静默切换。文本调用同样按各操作维护独立模型选择；PostgreSQL `ai_models` 是运行时唯一配置来源。
-- 2026-07-10 `gpt-image-2` 真实连通性结论：先使用共享文本 Key 和用户配置的文本 Base URL 规范化后的 `/v1/images/generations` 做一次 `n=1`、无重试请求，返回 `HTTP 403 permission_error: Image generation is not enabled for this group`；随后用户配置独立 `OPENAI_IMAGE_KEY` 与 `OPENAI_IMAGE_BASE_URL=https://api.zeekai.cc`，再次对 `https://api.zeekai.cc/v1/images/generations` 发送一次 `n=1`、`stream=true`、`partial_images=3`、无重试请求，仍返回同一 `HTTP 403 permission_error`。两次请求均未生成图片。当前证据表明请求已到达图片 API，但对应 Key 所属分组未启用图片生成；在 ZeekAI 后台确认并启用图片生成前，不得继续盲目真实重试，不得开启素材生成 Worker，也不得把该能力标记为可用。确认权限后只允许先做一次受控单图验证。真实 Key、完整鉴权头和一次性 Request ID 不得写入项目记忆或日志。
-- 2026-07-13 用户确认回退 `model_type=image + api_protocol=openai_responses`，并进一步确认以正式 `volcengine_ark_images` 完整替换内部旧协议 `jimeng_visual`：图片最终只允许 `openai_images | volcengine_ark_images`，Ark 固定使用 Bearer API Key；每个候选独立调用一次，单候选临时错误最多重试一次，永久错误停止剩余调用；不得保留旧协议、旧 `jimeng` 审计值、VisualService SDK 或 `JIMENG_*` 兼容路径。Admin“设为默认”使用 `POST` 与 Worker `/assets/...` 本地参考图安全读取属于独立修复，继续保留。
-- 2026-07-14 `see-dream` 已通过火山方舟图片协议的受控真实验证：单分镜、单候选、无参考图，首次调用成功且未重试，生成 2048x2048 JPEG 并落入自管素材存储。验证后 Worker 自动执行仍关闭，Ark 结构化请求/curl 日志已接入 Uvicorn INFO handler。
-- 2026-07-14 用户进一步明确确认启用图片任务自动执行，并接受后续任务按候选计费。本地运行环境已设为 `ASSET_GENERATION_WORKER_ENABLED=true`，仓库默认模板仍保持 `false` 以防其他环境无意产生费用。
-- 2026-07-14 用户确认 AI 新生成图片的实际文件名统一为 `{脚本名称}-镜头{两位序号}-第{两位候选序号}张.{实际扩展名}`：保留中文并执行 NFC、非法字符清理和 255 UTF-8 字节安全截断，空标题回退“未命名脚本”；使用 Worker 领取任务时的脚本标题快照，batch 与 `per_candidate` 都按原始 1-based 候选槽位编号，部分失败不得重排。文件继续位于生成任务 UUID 目录，`materials.file_name` 与物理 basename 一致，素材/候选 metadata 记录 `script_title_snapshot`、`scene_sequence`、`candidate_index`；只影响新文件，不重命名历史素材。用户随后确认已通过自然任务验证。
-- 2026-07-14 用户确认后续 Ark 受控调用与自然任务已经补齐 `script-to-asset-generation` 12.5 的成功链路验收；结合此前 `gpt-image-2` 失败终态、错误展示、永久错误熔断和费用上限验证，该 OpenSpec change 已达到 `64/64`、`all_done`。
-- 2026-07-14 已归档当前全部 active OpenSpec change：`script-to-asset-generation`、`support-image-responses-protocol`、`fix-ai-model-default-request-method`、`remove-image-responses-protocol`、`replace-jimeng-with-volcengine-ark-images`、`friendly-generated-image-filenames`。最终主规格删除整份 `image-responses-generation` capability，图片协议只保留 `openai_images | volcengine_ark_images`，并保留友好图片文件名规则；active change 列表为空。
+- 素材库采用 `Konva.js + react-konva` 的画布工作台；`materials` 是归属 `projects.id` 的聚合根，画布节点由素材列表派生，不持久化节点位置或连线，也不表达 DAG 语义。
+- 素材生命周期为 `active/archived`。进入素材库时不自动选中首条素材；详情抽屉按需打开，只编辑名称和标签，技术字段由系统维护。图片详情支持 50%-200% 大图预览。
+- 素材正式入口使用文件上传：系统负责自管存储、稳定地址、类型识别和 metadata 提取，不再由操作者登记素材 URL 或编辑技术字段。
+- 画面生成遵循“旧素材复用优先”：可用人物/IP 素材可作为参考图；AI 图片默认每分镜 3 张，可调整为 1-4 张，单次最多 `12 × 4 = 48` 张。未选候选也进入素材库并记录来源，所有生成结果必须先落入自管存储。
+- 图片调用由 `services/video-worker` 异步执行；`backend` 负责校验、创建任务、记录状态和入库。视频工作台只选择 Admin 中启用的图片 `model_id`，PostgreSQL `ai_models` 是运行时唯一配置来源。
+- 图片协议最终只允许 `openai_images | volcengine_ark_images`；Ark 使用 Bearer API Key。每个候选独立调用，单候选临时错误最多同模型重试一次，永久错误停止剩余调用，禁止自动跨模型切换。
+- 火山方舟 `see-dream` 已完成单分镜、单候选、无参考图的受控真实验证并成功落入自管存储。当前本地环境 `ASSET_GENERATION_WORKER_ENABLED=true`，仓库模板默认仍为 `false`，避免其他环境无意产生费用。
+- AI 图片文件名为 `{脚本名称}-镜头{两位序号}-第{两位候选序号}张.{实际扩展名}`；执行 NFC、非法字符清理和 255 UTF-8 字节安全截断，部分失败不得重排候选编号，只影响新文件。
+- `redefine-scene-visual-generation` 已完成并归档：画面生成新写路径只允许图片候选；历史逐分镜视频任务只读保留；作品生成只能消费按分镜排序且带 SHA-256 `input_version` 的 `SceneVisualManifest`，缺图、失败、归档、文件缺失或输入过期必须阻断。
+- 图片生成相关 change 已归档，当前正式规格不得恢复旧 `jimeng_visual`、`openai_responses` 图片协议、VisualService SDK 或 `JIMENG_*` 兼容路径。
 
 ### Phase 4：作品生产与视频生成任务
 
@@ -180,11 +177,14 @@ metadata:
 - 2026-07-14 用户最终确认作品生产不建设任何金额费用能力：不维护价格、币种或金额快照，不展示预计/实际/增量费用，也不设置金额授权上限；此条覆盖此前本轮作品生产讨论中的所有金额费用表述。系统仍必须保留非金额安全控制，包括生成/试听/重试前的主动确认、任务数/视频时长/TTS 字符数等资源用量、作品最长 `60秒`、幂等、防重复提交、并发限制、不自动跨模型、上游任务恢复和人工重试。此变更只作用于新作品生产范围，不改变已归档图片素材生成能力的既有数量上限和历史审计事实。
 - 2026-07-14 用户明确确认 TTS 音色必须可由操作者从动态目录中选择，禁止在前端、代码枚举或 migration 中写死音色。针对豆包语音，后台使用官方 `ListSpeakers`（`Action=ListSpeakers&Version=2025-05-20`）按 `ResourceID` 分页全量同步并缓存，Admin 提供主动同步，系统可定期同步，视频工作台展示目录更新时间并允许触发检查更新；新音色同步后自动可选。完整同步成功后，目录中消失的音色只标记为不可用于新生成，不删除；草稿中的失效音色保留原选择并阻止生成，禁止静默替换，历史作品保存 `VoiceType`、名称、语言、nullable 情绪和参数快照并继续可审计。
 - 2026-07-15 实施时按最新官方文档修正首版语音协议：TTS 使用 `doubao-seed-tts-2.0`（`seed-tts-2.0`）与 HTTP Chunked V3 `/api/v3/tts/unidirectional`，发送 `X-Api-Key`、`X-Api-Resource-Id`、`X-Api-Request-Id` 并保存 `X-Tt-Logid`，字幕时间轴读取真实 `sentence.words`，不再发送官方当前协议未定义的 `enable_subtitle`。ASR 使用 `doubao-seed-asr-2.0` 与 API 资源 `volc.seedasr.auc`，只处理已有音频，不进入新生成 TTS 主链路。
+- TTS 中转模型只有在 `api_protocol`、`upstream_model` 和 `resource_id` 均与官方目录模型一致时才能复用同一音色目录；必须使用显式官方根目录来源关系，禁止自引用、共享链和不匹配绑定。
+- ZeekAI/New API 类 TTS 中转使用独立 `openai_audio_speech` 协议、Bearer API Key 和 `/v1/audio/speech`；首版只生成音频且 `supports_word_timestamps=false`，同步字幕必须明确阻断，不得伪造时间轴或自动追加 ASR。
 - 2026-07-14 用户确认首版最终成片由 FFmpeg 合成，标准输出为 `MP4(H.264) + AAC`。字幕默认烧录进成片，同时独立生成并保存 `SRT`；用户可在生成前关闭字幕烧录，此时只输出外挂字幕文件。字幕烧录开关、字幕样式和字幕文件必须进入作品版本快照，后续修改字幕仅触发必要的字幕重建与最终合成，不重新调用 Seedance。
 - 2026-07-14 用户确认作品生成时必须允许选择是否使用 Seedance 原声，不得固定 `generate_audio`。该选项只在当前视频模型真实支持原声生成时展示；页面必须说明 Seedance 原声可能同时包含不可分离的人声、音效和背景音乐，选择结果进入作品版本快照。切换后必须重新计算提示词、字幕来源、任务计划和资源用量并再次确认。Seedance 原声与独立 TTS 如何组合仍需继续确认，不能擅自固定。
 - 2026-07-16 用户纠正并确认已有/上传音频调用 `volc.seedasr.auc` 时采用系统公用的私有 TOS 临时中转：TOS 归属 Admin“工具与 MCP”控制面，独立于全部 ASR 模型，系统维护一个启用的版本化配置供所有 ASR 模型共用；ASR 模型新增、编辑、停用和删除不得携带或受 TOS 配置约束。任务幂等上传并只提交短期签名 GET URL，任务终态后删除临时对象，清理失败保留审计并可重试；存在待清理对象时只阻止 TOS 配置变更或停用，不阻止模型 CRUD。TOS 只承担外部处理暂存，不替代素材库自管存储；凭据、签名 URL 和查询参数禁止进入快照、metadata、Agent 消息或日志。真实 Bucket 连接检查使用独立且默认关闭的 `TOS_TOOL_WORKER_ENABLED`，不得联动开启 TTS/ASR 任务消费。
 - 2026-07-15 用户确认素材管理和作品生产的 6 个二级模块必须拆成 6 个独立 OpenSpec change，不得再合并为单一聚合 change：`extend-material-library-for-work-production`、`redefine-scene-visual-generation`、`add-sound-subtitle-generation`、`add-work-generation`、`add-work-generation-task-management`、`add-work-library-management`。每个 change 独立维护详细设计、规格、验收边界和未来任务。
-- 2026-07-16 `add-sound-subtitle-generation` 当前为 `30/32`；声音/字幕主流程、系统 TOS 工具解耦、数据库 `route_path` 驱动的工作台路由持久化及独立音色目录 Worker 均已实现并通过全量相关回归。当前环境目录 Worker 已启用，真实 `ListSpeakers` 同步成功获取 14 页、415 个音色；语言按真实代码映射中文并使用触发框下方的自定义单选弹层，当前 `volcengine_tts_v3` 只发送 `explicit_language`，不展示空情绪占位，也不发送未定义的 `language/emotion`。音色弹层按 `中文/英文/多语言` 与 `男声/女声` 两排可取消 Tag 做交集筛选，结果保持扁平单选列表；`多语言` 包含其他单语种、语言未知及真正多语言音色。工作台 1440px 保持 `1118px` 与 `250/520/276px`，1920px 使用 `1598px` 与 `250/1000/276px`；宽屏中栏使用 `484/462px` 顶部同高、`650/302px` 音色语言、`964×180px` 旁白、`154/200/586px` 底部控制行及 `964×70px` 当前任务；两基准之间在中栏内容宽达到 `700px` 后连续使用双区布局，试听与模型目录同排、操作与语速同排并占满剩余宽度，不得因未达到 1920 临界值退回半宽单列，也不得等比例缩放字体。右栏 Agent 头部固定为“标题和在线状态 / 会话信息和模型选择”两行且不得重叠；目录未声明 `speed_ratio.default` 时初始语速使用合法范围内的 `1.0`，不得用区间中点推导。任务列表只在左栏，中栏包含目录、试听和当前任务状态，右栏包含 Agent 会话与运行审计，底部重复任务表已删除。供应商空数组字段已归一化，失败自动调度按配置间隔退避并限制未知异常摘要。TOS 不再进入模型表、模型 DTO/表单或模型运行配置，ASR 任务和清理器只读任务锁定版本；系统 TOS 已完成一次受控真实能力检查并成功清理探针，仅剩经单独许可的受控真实 TTS/ASR 验证及其后归档申请。语音 Worker 与系统 TOS 工具 Worker 默认均关闭。
+- `add-sound-subtitle-generation` 已于 2026-07-17 经用户明确确认以 `45/47` 强制归档。声音/字幕主流程、系统 TOS 工具解耦、数据库 `route_path` 路由持久化和独立音色目录 Worker 已实现；真实 `ListSpeakers` 同步曾成功获取 14 页、415 个音色。
+- 归档不代表真实供应商链路验收成功：用户明确放弃最小受控真实 TTS/ASR 验证和最终全量验收。归档前 TTS 尝试分别出现中转 HTTP 403 与另一中转域名 TLS `unexpected eof while reading`，ASR 未完成真实验证；恢复真实验收必须新建独立 OpenSpec change 并重新取得成本许可。
 
 ### Phase 5：发布运营与多平台分发
 
