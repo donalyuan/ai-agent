@@ -10,6 +10,7 @@ pub enum ModelType {
     Text,
     Image,
     Video,
+    Speech,
 }
 
 impl ModelType {
@@ -18,6 +19,7 @@ impl ModelType {
             Self::Text => "text",
             Self::Image => "image",
             Self::Video => "video",
+            Self::Speech => "speech",
         }
     }
 }
@@ -36,6 +38,7 @@ impl FromStr for ModelType {
             "text" => Ok(Self::Text),
             "image" => Ok(Self::Image),
             "video" => Ok(Self::Video),
+            "speech" => Ok(Self::Speech),
             _ => Err(ModelSettingsError::InvalidModelType(value.to_string())),
         }
     }
@@ -46,6 +49,7 @@ impl FromStr for ModelType {
 pub enum AuthScheme {
     Bearer,
     AccessKeySecret,
+    ApiKey,
 }
 
 impl AuthScheme {
@@ -53,6 +57,7 @@ impl AuthScheme {
         match self {
             Self::Bearer => "bearer",
             Self::AccessKeySecret => "access_key_secret",
+            Self::ApiKey => "api_key",
         }
     }
 }
@@ -64,6 +69,7 @@ impl FromStr for AuthScheme {
         match value {
             "bearer" => Ok(Self::Bearer),
             "access_key_secret" => Ok(Self::AccessKeySecret),
+            "api_key" => Ok(Self::ApiKey),
             _ => Err(ModelSettingsError::InvalidAuthScheme(value.to_string())),
         }
     }
@@ -81,6 +87,10 @@ pub enum ApiProtocol {
     VolcengineArkImages,
     RunwayApi,
     KlingApi,
+    VolcengineTtsV3,
+    #[serde(rename = "openai_audio_speech")]
+    OpenAiAudioSpeech,
+    VolcengineAsrV3,
 }
 
 impl ApiProtocol {
@@ -92,6 +102,9 @@ impl ApiProtocol {
             Self::VolcengineArkImages => "volcengine_ark_images",
             Self::RunwayApi => "runway_api",
             Self::KlingApi => "kling_api",
+            Self::VolcengineTtsV3 => "volcengine_tts_v3",
+            Self::OpenAiAudioSpeech => "openai_audio_speech",
+            Self::VolcengineAsrV3 => "volcengine_asr_v3",
         }
     }
 
@@ -105,15 +118,21 @@ impl ApiProtocol {
                 Self::OpenAiImages | Self::VolcengineArkImages,
                 ModelType::Image
             ) | (Self::RunwayApi | Self::KlingApi, ModelType::Video)
+                | (
+                    Self::VolcengineTtsV3 | Self::OpenAiAudioSpeech | Self::VolcengineAsrV3,
+                    ModelType::Speech
+                )
         )
     }
 
     pub const fn required_auth(self) -> AuthScheme {
         match self {
             Self::KlingApi => AuthScheme::AccessKeySecret,
+            Self::VolcengineTtsV3 | Self::VolcengineAsrV3 => AuthScheme::ApiKey,
             Self::OpenAiResponses
             | Self::OpenAiChatCompletions
             | Self::OpenAiImages
+            | Self::OpenAiAudioSpeech
             | Self::VolcengineArkImages
             | Self::RunwayApi => AuthScheme::Bearer,
         }
@@ -137,6 +156,9 @@ impl FromStr for ApiProtocol {
             "volcengine_ark_images" => Ok(Self::VolcengineArkImages),
             "runway_api" => Ok(Self::RunwayApi),
             "kling_api" => Ok(Self::KlingApi),
+            "volcengine_tts_v3" => Ok(Self::VolcengineTtsV3),
+            "openai_audio_speech" => Ok(Self::OpenAiAudioSpeech),
+            "volcengine_asr_v3" => Ok(Self::VolcengineAsrV3),
             _ => Err(ModelSettingsError::InvalidProtocol(value.to_string())),
         }
     }
@@ -170,12 +192,44 @@ pub struct VideoModelSettings {
     pub max_duration_seconds: Option<u32>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeechModelSettings {
+    #[serde(default)]
+    pub resource_id: String,
+    #[serde(default)]
+    pub supported_audio_formats: Vec<String>,
+    #[serde(default)]
+    pub default_audio_format: Option<String>,
+    #[serde(default)]
+    pub supported_sample_rates: Vec<u32>,
+    #[serde(default)]
+    pub default_sample_rate: Option<u32>,
+    #[serde(default)]
+    pub max_input_characters: Option<u32>,
+    #[serde(default)]
+    pub max_audio_duration_seconds: Option<u32>,
+    #[serde(default)]
+    pub supports_word_timestamps: bool,
+    #[serde(default)]
+    pub word_timestamp_languages: Vec<String>,
+    #[serde(default)]
+    pub catalog_sync_interval_minutes: Option<u32>,
+    #[serde(default = "empty_object")]
+    pub parameters: Value,
+}
+
+fn empty_object() -> Value {
+    Value::Object(serde_json::Map::new())
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "model_type", content = "settings", rename_all = "snake_case")]
 pub enum ModelSettings {
     Text(TextModelSettings),
     Image(ImageModelSettings),
     Video(VideoModelSettings),
+    Speech(SpeechModelSettings),
 }
 
 impl ModelSettings {
@@ -184,6 +238,7 @@ impl ModelSettings {
             ModelType::Text => Self::Text(serde_json::from_value(value)?),
             ModelType::Image => Self::Image(serde_json::from_value(value)?),
             ModelType::Video => Self::Video(serde_json::from_value(value)?),
+            ModelType::Speech => Self::Speech(serde_json::from_value(value)?),
         };
         settings.validate()?;
         Ok(settings)
@@ -203,6 +258,13 @@ impl ModelSettings {
                 max_duration_seconds: Some(maximum),
                 ..
             }) => Some((*minimum, *maximum)),
+            _ => None,
+        }
+    }
+
+    pub fn speech_resource_id(&self) -> Option<&str> {
+        match self {
+            Self::Speech(settings) => Some(settings.resource_id.as_str()),
             _ => None,
         }
     }
@@ -241,6 +303,70 @@ impl ModelSettings {
                     )),
                     _ => Ok(()),
                 }
+            }
+            Self::Speech(settings) => {
+                if settings.resource_id.trim().is_empty() {
+                    return Err(ModelSettingsError::InvalidSettings(
+                        "speech resource_id is required".to_string(),
+                    ));
+                }
+                if settings.supported_audio_formats.is_empty() {
+                    return Err(ModelSettingsError::InvalidSettings(
+                        "speech supported_audio_formats is required".to_string(),
+                    ));
+                }
+                if let Some(default_format) = &settings.default_audio_format {
+                    if !settings.supported_audio_formats.contains(default_format) {
+                        return Err(ModelSettingsError::InvalidSettings(
+                            "speech default_audio_format must be supported".to_string(),
+                        ));
+                    }
+                }
+                if settings.supported_sample_rates.contains(&0) {
+                    return Err(ModelSettingsError::InvalidSettings(
+                        "speech sample rates must be positive".to_string(),
+                    ));
+                }
+                if let Some(default_rate) = settings.default_sample_rate {
+                    if !settings.supported_sample_rates.contains(&default_rate) {
+                        return Err(ModelSettingsError::InvalidSettings(
+                            "speech default_sample_rate must be supported".to_string(),
+                        ));
+                    }
+                }
+                if settings.max_input_characters == Some(0)
+                    || settings.max_audio_duration_seconds == Some(0)
+                    || settings.catalog_sync_interval_minutes == Some(0)
+                {
+                    return Err(ModelSettingsError::InvalidSettings(
+                        "speech limits must be positive".to_string(),
+                    ));
+                }
+                if settings.supports_word_timestamps
+                    && (settings.word_timestamp_languages.is_empty()
+                        || settings
+                            .word_timestamp_languages
+                            .iter()
+                            .any(|language| language.trim().is_empty()))
+                {
+                    return Err(ModelSettingsError::InvalidSettings(
+                        "speech word_timestamp_languages must be explicit when timestamps are supported"
+                            .to_string(),
+                    ));
+                }
+                if !settings.supports_word_timestamps
+                    && !settings.word_timestamp_languages.is_empty()
+                {
+                    return Err(ModelSettingsError::InvalidSettings(
+                        "speech word_timestamp_languages require timestamp support".to_string(),
+                    ));
+                }
+                if !settings.parameters.is_object() {
+                    return Err(ModelSettingsError::InvalidSettings(
+                        "speech parameters must be an object".to_string(),
+                    ));
+                }
+                Ok(())
             }
         }
     }

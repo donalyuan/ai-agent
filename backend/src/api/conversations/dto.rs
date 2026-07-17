@@ -29,7 +29,7 @@ impl CreateAgentConversationRequest {
             return Err("会话标题不能为空".to_string());
         }
         let agent_type = self.agent_type.trim();
-        if !matches!(agent_type, "script" | "topic") {
+        if !matches!(agent_type, "script" | "topic" | "sound") {
             return Err("暂不支持该 Agent 类型".to_string());
         }
         if self.project_id.is_none() {
@@ -47,6 +47,24 @@ impl CreateAgentConversationRequest {
             && subject_type.is_some_and(|value| !value.is_empty())
         {
             return Err("未绑定脚本会话不能传 subject_type".to_string());
+        }
+        if agent_type == "sound" {
+            if self.subject_id.is_some() || subject_type.is_some() {
+                return Err("声音会话暂不绑定 subject".to_string());
+            }
+            let metadata = self
+                .metadata
+                .as_object()
+                .ok_or_else(|| "声音会话 metadata 必须是 object".to_string())?;
+            if metadata.len() != 1
+                || metadata
+                    .get("speech_model_id")
+                    .and_then(Value::as_str)
+                    .and_then(|value| Uuid::parse_str(value).ok())
+                    .is_none()
+            {
+                return Err("声音会话 metadata 只能包含有效 speech_model_id".to_string());
+            }
         }
         self.validate()
             .map_err(|error| format!("会话参数无效: {error}"))

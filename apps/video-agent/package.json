@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "rm -rf .next-dev && NEXT_DIST_DIR=.next-dev npm run dev:next",
+    "dev:e2e": "rm -rf .next-e2e && NEXT_DIST_DIR=.next-e2e npm run dev:next",
     "dev:next": "next dev --hostname 0.0.0.0 --port ${PORT:-3000}",
     "build": "next build",
     "lint": "tsc --project tsconfig.lint.json --noEmit",

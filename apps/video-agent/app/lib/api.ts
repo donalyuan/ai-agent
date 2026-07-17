@@ -84,6 +84,7 @@ export type ScriptSummary = {
   scene_count: number;
   parent_id: string | null;
   created_at: string;
+  updated_at: string;
 };
 
 export type Scene = {
@@ -547,7 +548,7 @@ export type UpdateScriptStatusResponse = {
   updated_at: string;
 };
 
-export type AgentType = "script" | "topic" | "material" | "video" | "publish" | "optimization";
+export type AgentType = "script" | "topic" | "sound" | "material" | "video" | "publish" | "optimization";
 export type AgentMessageRole = "user" | "assistant" | "system";
 export type AgentRunStatus = "running" | "succeeded" | "completed" | "failed";
 export type ScriptAgentIntent = "generate_script" | "edit_script";
@@ -603,6 +604,7 @@ export type CreateAgentConversationPayload = {
   subject_type?: string | null;
   subject_id?: string | null;
   title?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type AgentMessageListResponse = {
@@ -626,7 +628,7 @@ export type ApiClient = {
   fetcher: typeof fetch;
 };
 
-export type ModelType = "text" | "image" | "video";
+export type ModelType = "text" | "image" | "video" | "speech";
 export type ModelOption = {
   model_id: string;
   display_name: string;
@@ -638,6 +640,159 @@ export type ModelOption = {
 };
 
 export type ModelOptionListResponse = { models: ModelOption[] };
+
+export type VoiceCatalogSync = {
+  sync_id: string;
+  model_id: string;
+  trigger_source: "admin" | "workspace" | "scheduled";
+  status: "queued" | "running" | "succeeded" | "failed";
+  page_limit: number;
+  page_count: number;
+  speaker_count: number;
+  error_summary: string | null;
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VoiceCatalogEntry = {
+  voice_id: string;
+  voice_type: string;
+  resource_id: string;
+  name: string;
+  avatar_url: string | null;
+  gender: string | null;
+  age: string | null;
+  categories: unknown;
+  normal_labels: string[];
+  special_labels: string[];
+  trial_url: string | null;
+  short_trial_url: string | null;
+  languages: unknown;
+  emotions: unknown;
+  description: string;
+  is_available: boolean;
+  catalog_version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VoiceCatalog = {
+  model_id: string;
+  source_model_id: string;
+  model_settings: Record<string, unknown>;
+  last_sync: VoiceCatalogSync | null;
+  voices: VoiceCatalogEntry[];
+};
+
+export type SoundTaskType = "tts_preview" | "tts" | "asr";
+export type SoundTaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export type SoundTaskIntent = {
+  task_type: SoundTaskType;
+  model_id: string;
+  text_content?: string;
+  voice_type?: string | null;
+  language?: string | null;
+  emotion?: string | null;
+  parameters?: Record<string, unknown>;
+  generate_subtitle?: boolean;
+  subtitle_segments?: string[];
+  source_audio_material_id?: string | null;
+  audio_inspection_id?: string | null;
+  source_script_id?: string | null;
+  source_script_updated_at?: string | null;
+  source_script_scene_ids?: string[];
+};
+
+export type SoundScriptSourceSnapshot = {
+  script_id: string;
+  title: string;
+  updated_at: string;
+  scenes: Array<{ scene_id: string; sequence: number; narration: string }>;
+};
+
+export type ConfirmedSoundTaskIntent = SoundTaskIntent & { confirmation_token: string };
+
+export type SoundTaskPreflight = {
+  task_type: SoundTaskType;
+  model_id: string;
+  model_display_name: string;
+  voice_snapshot: Record<string, unknown> | null;
+  resource_usage: Record<string, unknown>;
+  normalized_parameters: Record<string, unknown>;
+  source_script_snapshot: SoundScriptSourceSnapshot | null;
+  confirmation_token: string;
+};
+
+export type AudioInspection = {
+  inspection_id: string;
+  project_id: string;
+  material_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  source_sha256: string | null;
+  file_size_bytes: number | null;
+  duration_ms: number | null;
+  container_format: string | null;
+  audio_codec: string | null;
+  sample_rate_hz: number | null;
+  channel_count: number | null;
+  error_code: string | null;
+  error_summary: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SoundTask = {
+  task_id: string;
+  project_id: string;
+  parent_task_id: string | null;
+  task_type: SoundTaskType;
+  status: SoundTaskStatus;
+  model_id: string;
+  audio_inspection_id: string | null;
+  source_audio_material_id: string | null;
+  source_script_id: string | null;
+  source_script_snapshot: SoundScriptSourceSnapshot | null;
+  output_audio_material_id: string | null;
+  output_subtitle_material_id: string | null;
+  text_content: string;
+  voice_type: string | null;
+  language: string | null;
+  emotion: string | null;
+  parameters: Record<string, unknown>;
+  generate_subtitle: boolean;
+  subtitle_segments: string[];
+  model_snapshot: Record<string, unknown> | null;
+  voice_snapshot: Record<string, unknown> | null;
+  resource_usage: Record<string, unknown>;
+  timeline: unknown;
+  result: Record<string, unknown> | null;
+  request_id: string;
+  upstream_log_id: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  error_code: string | null;
+  error_summary: string | null;
+  error_details: {
+    http_status?: number;
+    provider_error_code?: string;
+    provider_error_message?: string;
+  };
+  staging_status: string;
+  cleanup_attempt_count: number;
+  cleanup_error_summary: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SoundTaskListResponse = { tasks: SoundTask[] };
 
 export class ApiError extends Error {
   status: number;
@@ -707,6 +862,113 @@ export function listModelOptions(client: ApiClient, modelType: ModelType) {
   );
 }
 
+export function getVoiceCatalog(
+  client: ApiClient,
+  modelId: string,
+  includeUnavailable = false,
+) {
+  const query = includeUnavailable ? "?include_unavailable=true" : "";
+  return request<VoiceCatalog>(
+    client,
+    `/api/speech/models/${modelId}/voice-catalog${query}`,
+  );
+}
+
+export function requestWorkspaceVoiceCatalogCheck(client: ApiClient, modelId: string) {
+  return request<VoiceCatalogSync>(
+    client,
+    `/api/speech/models/${modelId}/voice-catalog/check`,
+    { method: "POST" },
+  );
+}
+
+export function requestAudioInspection(
+  client: ApiClient,
+  projectId: string,
+  materialId: string,
+  idempotencyKey: string,
+) {
+  return request<AudioInspection>(
+    client,
+    `/api/projects/${projectId}/audio-materials/${materialId}/inspection`,
+    { method: "POST", headers: { "Idempotency-Key": idempotencyKey } },
+  );
+}
+
+export function getAudioInspection(client: ApiClient, projectId: string, materialId: string) {
+  return request<AudioInspection>(
+    client,
+    `/api/projects/${projectId}/audio-materials/${materialId}/inspection`,
+  );
+}
+
+export function preflightSoundTask(
+  client: ApiClient,
+  projectId: string,
+  payload: SoundTaskIntent,
+) {
+  return request<SoundTaskPreflight>(
+    client,
+    `/api/projects/${projectId}/sound-subtitle/tasks/preflight`,
+    { method: "POST", body: payload },
+  );
+}
+
+export function createSoundTask(
+  client: ApiClient,
+  projectId: string,
+  payload: ConfirmedSoundTaskIntent,
+  idempotencyKey: string,
+) {
+  return request<SoundTask>(client, `/api/projects/${projectId}/sound-subtitle/tasks`, {
+    method: "POST",
+    body: payload,
+    headers: { "Idempotency-Key": idempotencyKey },
+  }).then((task) => normalizeSoundTaskUrls(client, task));
+}
+
+export function listSoundTasks(client: ApiClient, projectId: string) {
+  return request<SoundTaskListResponse>(
+    client,
+    `/api/projects/${projectId}/sound-subtitle/tasks`,
+  ).then((response) => ({
+    tasks: response.tasks.map((task) => normalizeSoundTaskUrls(client, task)),
+  }));
+}
+
+export function getSoundTask(client: ApiClient, projectId: string, taskId: string) {
+  return request<SoundTask>(
+    client,
+    `/api/projects/${projectId}/sound-subtitle/tasks/${taskId}`,
+  ).then((task) => normalizeSoundTaskUrls(client, task));
+}
+
+export function retrySoundTask(
+  client: ApiClient,
+  projectId: string,
+  taskId: string,
+  payload: ConfirmedSoundTaskIntent,
+  idempotencyKey: string,
+) {
+  return request<SoundTask>(
+    client,
+    `/api/projects/${projectId}/sound-subtitle/tasks/${taskId}/retry`,
+    {
+      method: "POST",
+      body: payload,
+      headers: { "Idempotency-Key": idempotencyKey },
+    },
+  ).then((task) => normalizeSoundTaskUrls(client, task));
+}
+
+export function cancelSoundTask(client: ApiClient, projectId: string, taskId: string) {
+  return request<SoundTask>(
+    client,
+    `/api/projects/${projectId}/sound-subtitle/tasks/${taskId}/cancel`,
+    { method: "POST" },
+  ).then((task) => normalizeSoundTaskUrls(client, task));
+}
+
 export function updateProjectStrategyProfile(
   client: ApiClient,
   projectId: string,
@@ -736,12 +998,14 @@ export function generateStrategyProfileDraft(
 export function listScripts(
   client: ApiClient,
   projectId: string,
-  filters: { status?: ScriptStatus | "all" } = {},
+  filters: { status?: ScriptStatus | "all"; limit?: number; offset?: number } = {},
 ) {
   const searchParams = new URLSearchParams();
   if (filters.status && filters.status !== "all") {
     searchParams.set("status", filters.status);
   }
+  if (filters.limit !== undefined) searchParams.set("limit", String(filters.limit));
+  if (filters.offset !== undefined) searchParams.set("offset", String(filters.offset));
   const query = searchParams.toString();
   return request<ScriptListResponse>(
     client,
@@ -1209,6 +1473,19 @@ function normalizeMaterialUrls(client: ApiClient, material: Material): Material 
   };
 }
 
+function normalizeSoundTaskUrls(client: ApiClient, task: SoundTask): SoundTask {
+  if (!task.result) {
+    return task;
+  }
+  const result = { ...task.result };
+  for (const key of ["audio_file_url", "subtitle_file_url"]) {
+    if (typeof result[key] === "string") {
+      result[key] = resolveApiAssetUrl(client, result[key] as string);
+    }
+  }
+  return { ...task, result };
+}
+
 function stableApiAssetUrl(client: ApiClient, value: string | null): string | null {
   const assetPrefix = `${client.baseUrl}/assets/`;
   return value?.startsWith(assetPrefix) ? value.slice(client.baseUrl.length) : value;
@@ -1264,6 +1541,12 @@ function errorMessage(body: unknown) {
     const error = (body as { error: unknown }).error;
     if (typeof error === "string" && error.trim()) {
       return error;
+    }
+    if (error && typeof error === "object" && "message" in error) {
+      const message = (error as { message?: unknown }).message;
+      if (typeof message === "string" && message.trim()) {
+        return message;
+      }
     }
   }
 

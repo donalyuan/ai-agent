@@ -77,7 +77,7 @@ export type ApiClient = {
   fetcher: typeof fetch;
 };
 
-export type AiModelType = "text" | "image" | "video";
+export type AiModelType = "text" | "image" | "video" | "speech";
 export type AiModelStatus = "enabled" | "disabled" | "deleted";
 export type AiModelProtocol =
   | "openai_responses"
@@ -85,8 +85,12 @@ export type AiModelProtocol =
   | "openai_images"
   | "volcengine_ark_images"
   | "runway_api"
-  | "kling_api";
-export type AuthScheme = "bearer" | "access_key_secret";
+  | "kling_api"
+  | "volcengine_tts_v3"
+  | "openai_audio_speech"
+  | "volcengine_asr_v3";
+export type AuthScheme = "bearer" | "access_key_secret" | "api_key";
+export type VoiceCatalogMode = "official_sync" | "shared";
 
 export type AiModel = {
   model_id: string;
@@ -100,8 +104,15 @@ export type AiModel = {
   upstream_model: string;
   api_key_masked: string;
   api_secret_masked: string | null;
+  catalog_access_key_masked: string | null;
+  catalog_secret_key_masked: string | null;
   api_key_configured: boolean;
   api_secret_configured: boolean;
+  catalog_access_key_configured: boolean;
+  catalog_secret_key_configured: boolean;
+  voice_catalog_mode: VoiceCatalogMode;
+  voice_catalog_source_model_id: string | null;
+  voice_catalog_source_display_name: string | null;
   timeout_seconds: number;
   reasoning_effort: string | null;
   max_output_tokens: number | null;
@@ -131,6 +142,10 @@ export type AiModelPayload = {
   upstream_model: string;
   api_key: string;
   api_secret: string | null;
+  catalog_access_key?: string | null;
+  catalog_secret_key?: string | null;
+  voice_catalog_mode?: VoiceCatalogMode;
+  voice_catalog_source_model_id?: string | null;
   timeout_seconds: number;
   reasoning_effort: string | null;
   max_output_tokens: number | null;
@@ -144,6 +159,100 @@ export type VersionedModelAction = {
   version: number;
   replacement_model_id?: string | null;
   allow_no_default?: boolean;
+};
+
+export type VoiceCatalogSync = {
+  sync_id: string;
+  model_id: string;
+  trigger_source: "admin" | "workspace" | "scheduled";
+  status: "queued" | "running" | "succeeded" | "failed";
+  page_limit: number;
+  page_count: number;
+  speaker_count: number;
+  error_summary: string | null;
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VoiceCatalogEntry = {
+  voice_id: string;
+  voice_type: string;
+  resource_id: string;
+  name: string;
+  avatar_url: string | null;
+  gender: string | null;
+  age: string | null;
+  categories: unknown;
+  normal_labels: string[];
+  special_labels: string[];
+  trial_url: string | null;
+  short_trial_url: string | null;
+  languages: unknown;
+  emotions: unknown;
+  description: string;
+  is_available: boolean;
+  catalog_version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VoiceCatalog = {
+  model_id: string;
+  source_model_id: string;
+  model_settings: Record<string, unknown>;
+  last_sync: VoiceCatalogSync | null;
+  voices: VoiceCatalogEntry[];
+};
+
+export type TosStagingCheckStatus =
+  | "never"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed";
+
+export type TosStagingToolConfig = {
+  configured: boolean;
+  config_id: string | null;
+  version: number | null;
+  enabled: boolean;
+  storage_provider: "volcengine_tos" | null;
+  endpoint: string | null;
+  region: string | null;
+  bucket: string | null;
+  object_prefix: string | null;
+  access_key_masked: string | null;
+  secret_key_masked: string | null;
+  access_key_configured: boolean;
+  secret_key_configured: boolean;
+  signed_url_ttl_seconds: number | null;
+  max_file_bytes: number | null;
+  max_audio_duration_seconds: number | null;
+  pending_cleanup_count: number;
+  last_check_status: TosStagingCheckStatus;
+  last_check_requested_at: string | null;
+  last_checked_at: string | null;
+  last_check_error_summary: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type SaveTosStagingToolPayload = {
+  version: number | null;
+  enabled: boolean;
+  storage_provider: "volcengine_tos";
+  endpoint: string;
+  region: string;
+  bucket: string;
+  object_prefix: string;
+  access_key: string;
+  secret_key: string;
+  signed_url_ttl_seconds: number;
+  max_file_bytes: number;
+  max_audio_duration_seconds: number;
 };
 
 export class ApiError extends Error {
@@ -299,6 +408,47 @@ export function deleteAiModel(
   );
 }
 
+export function requestAdminVoiceCatalogSync(client: ApiClient, modelId: string) {
+  return request<VoiceCatalogSync>(
+    client,
+    `/api/admin/models/${modelId}/voice-catalog/sync`,
+    { method: "POST" },
+  );
+}
+
+export function getVoiceCatalog(
+  client: ApiClient,
+  modelId: string,
+  includeUnavailable = false,
+) {
+  const query = includeUnavailable ? "?include_unavailable=true" : "";
+  return request<VoiceCatalog>(
+    client,
+    `/api/speech/models/${modelId}/voice-catalog${query}`,
+  );
+}
+
+export function getTosStagingTool(client: ApiClient) {
+  return request<TosStagingToolConfig>(client, "/api/tools/tos-staging");
+}
+
+export function saveTosStagingTool(
+  client: ApiClient,
+  payload: SaveTosStagingToolPayload,
+) {
+  return request<TosStagingToolConfig>(client, "/api/tools/tos-staging", {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function checkTosStagingTool(client: ApiClient, version: number) {
+  return request<TosStagingToolConfig>(client, "/api/tools/tos-staging/check", {
+    method: "POST",
+    body: { version },
+  });
+}
+
 async function request<T>(
   client: ApiClient,
   path: string,
@@ -344,6 +494,12 @@ function errorMessage(body: unknown) {
     const error = (body as { error: unknown }).error;
     if (typeof error === "string" && error.trim()) {
       return error;
+    }
+    if (error && typeof error === "object" && "message" in error) {
+      const message = (error as { message?: unknown }).message;
+      if (typeof message === "string" && message.trim()) {
+        return message;
+      }
     }
   }
 

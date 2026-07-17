@@ -239,6 +239,10 @@ async fn migrations_create_video_agent_core_schema() {
         "asset_generation_task_requests",
         "scene_asset_candidates",
         "ai_models",
+        "voice_catalog_syncs",
+        "voice_catalog_entries",
+        "audio_material_inspections",
+        "sound_subtitle_tasks",
     ] {
         assert!(
             table_exists(&test_pool, table).await,
@@ -279,7 +283,16 @@ async fn migrations_create_video_agent_core_schema() {
         "idx_scene_asset_candidates_script_scene_rank",
         "scene_asset_candidates_one_selected_per_scene",
         "ai_models_one_default_per_type",
+        "ai_models_one_default_per_speech_protocol",
         "idx_ai_models_type_status_sort",
+        "idx_ai_models_voice_catalog_source",
+        "voice_catalog_syncs_one_active_per_model",
+        "idx_voice_catalog_entries_available",
+        "audio_material_inspections_one_active_per_material",
+        "idx_audio_material_inspections_queue",
+        "idx_sound_subtitle_tasks_queue",
+        "tos_staging_tool_configs_one_current",
+        "idx_tos_staging_tool_configs_pending_check",
     ] {
         assert!(
             index_exists(&test_pool, index).await,
@@ -300,6 +313,15 @@ async fn migrations_create_video_agent_core_schema() {
         ("agent_runs", "model_snapshot"),
         ("asset_generation_tasks", "model_id"),
         ("asset_generation_tasks", "model_snapshot"),
+        ("ai_models", "catalog_access_key"),
+        ("ai_models", "catalog_secret_key"),
+        ("ai_models", "voice_catalog_source_model_id"),
+        ("sound_subtitle_tasks", "tos_staging_config_id"),
+        ("sound_subtitle_tasks", "tos_staging_config_version"),
+        ("sound_subtitle_tasks", "error_details"),
+        ("tos_staging_tool_configs", "last_check_requested_at"),
+        ("tos_staging_tool_configs", "check_locked_at"),
+        ("tos_staging_tool_configs", "check_worker_id"),
     ] {
         assert!(
             column_exists(&test_pool, table, column).await,
@@ -315,6 +337,9 @@ async fn migrations_create_video_agent_core_schema() {
         "ai_models_max_output_tokens_check",
         "ai_models_version_check",
         "ai_models_type_protocol_check",
+        "ai_models_catalog_credentials_pair_check",
+        "ai_models_voice_catalog_binding_check",
+        "ai_models_voice_catalog_not_self_check",
     ] {
         assert!(
             constraint_exists(&test_pool, "ai_models", constraint).await,
@@ -326,9 +351,56 @@ async fn migrations_create_video_agent_core_schema() {
     let type_protocol_constraint =
         constraint_definition(&test_pool, "ai_models", "ai_models_type_protocol_check").await;
     assert!(protocol_constraint.contains("volcengine_ark_images"));
+    assert!(protocol_constraint.contains("volcengine_tts_v3"));
+    assert!(protocol_constraint.contains("openai_audio_speech"));
+    assert!(protocol_constraint.contains("volcengine_asr_v3"));
     assert!(!protocol_constraint.contains("jimeng_visual"));
     assert!(type_protocol_constraint.contains("volcengine_ark_images"));
+    assert!(type_protocol_constraint.contains("speech"));
+    assert!(type_protocol_constraint.contains("openai_audio_speech"));
     assert!(!type_protocol_constraint.contains("jimeng_visual"));
+
+    let conversation_agent_constraint = constraint_definition(
+        &test_pool,
+        "agent_conversations",
+        "agent_conversations_agent_type_check",
+    )
+    .await;
+    let run_agent_constraint =
+        constraint_definition(&test_pool, "agent_runs", "agent_runs_type_check").await;
+    assert!(conversation_agent_constraint.contains("sound"));
+    assert!(run_agent_constraint.contains("sound"));
+
+    assert!(
+        table_exists(&test_pool, "tos_staging_tool_configs").await,
+        "system TOS tool config table should exist"
+    );
+    for column in [
+        "staging_storage_provider",
+        "staging_endpoint",
+        "staging_region",
+        "staging_bucket",
+        "staging_object_prefix",
+        "staging_access_key",
+        "staging_secret_key",
+        "staging_signed_url_ttl_seconds",
+        "staging_max_file_bytes",
+        "staging_max_audio_duration_seconds",
+    ] {
+        assert!(
+            !column_exists(&test_pool, "ai_models", column).await,
+            "ai_models.{column} must be removed after system TOS migration"
+        );
+    }
+    assert!(
+        !constraint_exists(
+            &test_pool,
+            "ai_models",
+            "ai_models_asr_staging_config_check"
+        )
+        .await,
+        "model table must not retain the ASR staging constraint"
+    );
 
     let ark_insert = sqlx::query(
         r#"
@@ -384,6 +456,44 @@ async fn migrations_create_video_agent_core_schema() {
         image_responses_insert.is_err(),
         "image models should reject openai_responses after the rollback migration"
     );
+    let tts_insert = sqlx::query(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key, catalog_access_key,
+            catalog_secret_key, settings, is_default
+        )
+        VALUES (
+            'Doubao TTS', 'speech', '火山引擎', 'volcengine_tts_v3', 'api_key',
+            'https://openspeech.bytedance.com/api/v3', 'doubao-seed-tts-2.0',
+            'tts-key', 'catalog-ak', 'catalog-sk',
+            '{"resource_id":"seed-tts-2.0","supported_audio_formats":["mp3"]}', TRUE
+        )
+        "#,
+    )
+    .execute(&test_pool)
+    .await;
+    assert!(tts_insert.is_ok(), "speech TTS model should be accepted");
+    let asr_insert = sqlx::query(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key, settings, is_default
+        )
+        VALUES (
+            'Doubao ASR', 'speech', '火山引擎', 'volcengine_asr_v3', 'api_key',
+            'https://openspeech.bytedance.com/api/v3', 'doubao-seed-asr-2.0',
+            'asr-key',
+            '{"resource_id":"volc.seedasr.auc","supported_audio_formats":["mp3"]}', TRUE
+        )
+        "#,
+    )
+    .execute(&test_pool)
+    .await;
+    assert!(
+        asr_insert.is_ok(),
+        "speech ASR should maintain a default independent from TTS"
+    );
     for (name, model_type, protocol) in [
         ("Invalid Image Chat", "image", "openai_chat_completions"),
         ("Invalid Video Responses", "video", "openai_responses"),
@@ -413,7 +523,8 @@ async fn migrations_create_video_agent_core_schema() {
             .expect("default model index should be unique and partial");
     assert!(
         default_model_predicate.contains("is_default")
-            && default_model_predicate.contains("deleted_at"),
+            && default_model_predicate.contains("deleted_at")
+            && default_model_predicate.contains("speech"),
         "default model index should only cover active records, got {default_model_predicate}"
     );
     assert!(
@@ -796,8 +907,8 @@ async fn migrations_create_video_agent_core_schema() {
             (
                 "sound-subtitle-generation".to_string(),
                 "声音与字幕生成".to_string(),
-                false,
-                "planned".to_string(),
+                true,
+                "active".to_string(),
                 "materials.sound-subtitle-generation".to_string(),
             ),
         ]

@@ -1,7 +1,8 @@
 use super::error::ModelApiError;
 use crate::repositories::{
     AiModel, AiModelListFilter, AiModelStatus, ChangeAiModelStatusInput, CreateAiModelInput,
-    DeleteAiModelInput, UpdateAiModelInput,
+    DeleteAiModelInput, UpdateAiModelInput, VoiceCatalogEntry, VoiceCatalogSnapshot,
+    VoiceCatalogSync,
 };
 use chrono::{DateTime, Utc};
 use novex_model::{ApiProtocol, AuthScheme, ModelType};
@@ -56,6 +57,14 @@ pub(super) struct CreateAiModelRequest {
     api_key: String,
     #[serde(default)]
     api_secret: Option<String>,
+    #[serde(default)]
+    catalog_access_key: Option<String>,
+    #[serde(default)]
+    catalog_secret_key: Option<String>,
+    #[serde(default = "default_voice_catalog_mode")]
+    voice_catalog_mode: String,
+    #[serde(default)]
+    voice_catalog_source_model_id: Option<Uuid>,
     timeout_seconds: i32,
     #[serde(default)]
     reasoning_effort: Option<String>,
@@ -72,9 +81,13 @@ pub(super) struct CreateAiModelRequest {
 }
 
 impl CreateAiModelRequest {
-    pub(super) fn into_input(self) -> (CreateAiModelInput, bool) {
+    pub(super) fn into_input(self) -> Result<(CreateAiModelInput, bool), ModelApiError> {
         let requested_default = self.is_default;
-        (
+        let voice_catalog_source_model_id = parse_create_voice_catalog_binding(
+            &self.voice_catalog_mode,
+            self.voice_catalog_source_model_id,
+        )?;
+        Ok((
             CreateAiModelInput {
                 display_name: self.display_name,
                 model_type: self.model_type,
@@ -86,6 +99,9 @@ impl CreateAiModelRequest {
                 upstream_model: self.upstream_model,
                 api_key: self.api_key,
                 api_secret: normalize_optional(self.api_secret),
+                catalog_access_key: normalize_optional(self.catalog_access_key),
+                catalog_secret_key: normalize_optional(self.catalog_secret_key),
+                voice_catalog_source_model_id,
                 timeout_seconds: self.timeout_seconds,
                 reasoning_effort: normalize_optional(self.reasoning_effort),
                 max_output_tokens: self.max_output_tokens,
@@ -97,7 +113,7 @@ impl CreateAiModelRequest {
                 source_key: None,
             },
             requested_default,
-        )
+        ))
     }
 }
 
@@ -117,6 +133,14 @@ pub(super) struct UpdateAiModelRequest {
     api_key: String,
     #[serde(default)]
     api_secret: Option<String>,
+    #[serde(default)]
+    catalog_access_key: Option<String>,
+    #[serde(default)]
+    catalog_secret_key: Option<String>,
+    #[serde(default)]
+    voice_catalog_mode: Option<String>,
+    #[serde(default)]
+    voice_catalog_source_model_id: Option<Uuid>,
     timeout_seconds: i32,
     #[serde(default)]
     reasoning_effort: Option<String>,
@@ -137,9 +161,13 @@ pub(super) struct UpdateAiModelRequest {
 }
 
 impl UpdateAiModelRequest {
-    pub(super) fn into_input(self) -> (UpdateAiModelInput, bool) {
+    pub(super) fn into_input(self) -> Result<(UpdateAiModelInput, bool), ModelApiError> {
         let requested_default = self.is_default;
-        (
+        let voice_catalog_source_model_id = parse_update_voice_catalog_binding(
+            self.voice_catalog_mode.as_deref(),
+            self.voice_catalog_source_model_id,
+        )?;
+        Ok((
             UpdateAiModelInput {
                 version: self.version,
                 model_type: self.model_type,
@@ -152,6 +180,9 @@ impl UpdateAiModelRequest {
                 upstream_model: self.upstream_model,
                 api_key: normalize_optional(Some(self.api_key)),
                 api_secret: normalize_optional(self.api_secret),
+                catalog_access_key: normalize_optional(self.catalog_access_key),
+                catalog_secret_key: normalize_optional(self.catalog_secret_key),
+                voice_catalog_source_model_id,
                 timeout_seconds: self.timeout_seconds,
                 reasoning_effort: normalize_optional(self.reasoning_effort),
                 max_output_tokens: self.max_output_tokens,
@@ -162,7 +193,7 @@ impl UpdateAiModelRequest {
                 allow_no_default: self.allow_no_default,
             },
             requested_default,
-        )
+        ))
     }
 }
 
@@ -241,8 +272,15 @@ pub(super) struct AiModelAdminResponse {
     upstream_model: String,
     api_key_masked: String,
     api_secret_masked: Option<String>,
+    catalog_access_key_masked: Option<String>,
+    catalog_secret_key_masked: Option<String>,
     api_key_configured: bool,
     api_secret_configured: bool,
+    catalog_access_key_configured: bool,
+    catalog_secret_key_configured: bool,
+    voice_catalog_mode: String,
+    voice_catalog_source_model_id: Option<Uuid>,
+    voice_catalog_source_display_name: Option<String>,
     timeout_seconds: i32,
     reasoning_effort: Option<String>,
     max_output_tokens: Option<i32>,
@@ -268,6 +306,20 @@ impl From<AiModel> for AiModelAdminResponse {
             .api_secret
             .as_ref()
             .is_some_and(|value| !value.is_empty());
+        let catalog_access_key_configured = model
+            .catalog_access_key
+            .as_ref()
+            .is_some_and(|value| !value.is_empty());
+        let catalog_secret_key_configured = model
+            .catalog_secret_key
+            .as_ref()
+            .is_some_and(|value| !value.is_empty());
+        let voice_catalog_mode = if model.voice_catalog_source_model_id.is_some() {
+            "shared"
+        } else {
+            "official_sync"
+        }
+        .to_string();
         Self {
             model_id: model.id,
             display_name: model.display_name,
@@ -280,8 +332,15 @@ impl From<AiModel> for AiModelAdminResponse {
             upstream_model: model.upstream_model,
             api_key_masked: mask_credential(&model.api_key),
             api_secret_masked: model.api_secret.as_deref().map(mask_credential),
+            catalog_access_key_masked: model.catalog_access_key.as_deref().map(mask_credential),
+            catalog_secret_key_masked: model.catalog_secret_key.as_deref().map(mask_credential),
             api_key_configured,
             api_secret_configured,
+            catalog_access_key_configured,
+            catalog_secret_key_configured,
+            voice_catalog_mode,
+            voice_catalog_source_model_id: model.voice_catalog_source_model_id,
+            voice_catalog_source_display_name: model.voice_catalog_source_display_name,
             timeout_seconds: model.timeout_seconds,
             reasoning_effort: model.reasoning_effort,
             max_output_tokens: model.max_output_tokens,
@@ -348,6 +407,50 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
     })
 }
 
+fn default_voice_catalog_mode() -> String {
+    "official_sync".to_string()
+}
+
+fn parse_create_voice_catalog_binding(
+    mode: &str,
+    source_model_id: Option<Uuid>,
+) -> Result<Option<Uuid>, ModelApiError> {
+    match mode {
+        "official_sync" if source_model_id.is_none() => Ok(None),
+        "shared" => source_model_id.map(Some).ok_or_else(|| {
+            ModelApiError::InvalidConfig("复用已有目录时必须选择来源模型".to_string())
+        }),
+        "official_sync" => Err(ModelApiError::InvalidConfig(
+            "官方同步模式不能指定目录来源模型".to_string(),
+        )),
+        _ => Err(ModelApiError::InvalidConfig(
+            "未知音色目录来源模式".to_string(),
+        )),
+    }
+}
+
+fn parse_update_voice_catalog_binding(
+    mode: Option<&str>,
+    source_model_id: Option<Uuid>,
+) -> Result<Option<Option<Uuid>>, ModelApiError> {
+    match mode {
+        None if source_model_id.is_none() => Ok(None),
+        None => Err(ModelApiError::InvalidConfig(
+            "指定音色目录来源时必须同时提交来源模式".to_string(),
+        )),
+        Some("official_sync") if source_model_id.is_none() => Ok(Some(None)),
+        Some("shared") => source_model_id.map(|id| Some(Some(id))).ok_or_else(|| {
+            ModelApiError::InvalidConfig("复用已有目录时必须选择来源模型".to_string())
+        }),
+        Some("official_sync") => Err(ModelApiError::InvalidConfig(
+            "官方同步模式不能指定目录来源模型".to_string(),
+        )),
+        Some(_) => Err(ModelApiError::InvalidConfig(
+            "未知音色目录来源模式".to_string(),
+        )),
+    }
+}
+
 fn mask_credential(value: &str) -> String {
     let characters: Vec<char> = value.chars().collect();
     if characters.len() <= 8 {
@@ -356,6 +459,119 @@ fn mask_credential(value: &str) -> String {
     let prefix: String = characters.iter().take(4).collect();
     let suffix: String = characters.iter().rev().take(4).rev().collect();
     format!("{prefix}****{suffix}")
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct VoiceCatalogQuery {
+    #[serde(default)]
+    pub(super) include_unavailable: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct VoiceCatalogSyncResponse {
+    sync_id: Uuid,
+    model_id: Uuid,
+    trigger_source: String,
+    status: String,
+    page_limit: i32,
+    page_count: i32,
+    speaker_count: i32,
+    error_summary: Option<String>,
+    requested_at: DateTime<Utc>,
+    started_at: Option<DateTime<Utc>>,
+    completed_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<VoiceCatalogSync> for VoiceCatalogSyncResponse {
+    fn from(sync: VoiceCatalogSync) -> Self {
+        Self {
+            sync_id: sync.id,
+            model_id: sync.model_id,
+            trigger_source: sync.trigger_source,
+            status: sync.status,
+            page_limit: sync.page_limit,
+            page_count: sync.page_count,
+            speaker_count: sync.speaker_count,
+            error_summary: sync.error_summary,
+            requested_at: sync.requested_at,
+            started_at: sync.started_at,
+            completed_at: sync.completed_at,
+            created_at: sync.created_at,
+            updated_at: sync.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct VoiceCatalogEntryResponse {
+    voice_id: Uuid,
+    voice_type: String,
+    resource_id: String,
+    name: String,
+    avatar_url: Option<String>,
+    gender: Option<String>,
+    age: Option<String>,
+    categories: Value,
+    normal_labels: Vec<String>,
+    special_labels: Vec<String>,
+    trial_url: Option<String>,
+    short_trial_url: Option<String>,
+    languages: Value,
+    emotions: Value,
+    description: String,
+    is_available: bool,
+    catalog_version: i64,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<VoiceCatalogEntry> for VoiceCatalogEntryResponse {
+    fn from(voice: VoiceCatalogEntry) -> Self {
+        Self {
+            voice_id: voice.id,
+            voice_type: voice.voice_type,
+            resource_id: voice.resource_id,
+            name: voice.name,
+            avatar_url: voice.avatar_url,
+            gender: voice.gender,
+            age: voice.age,
+            categories: voice.categories,
+            normal_labels: voice.normal_labels,
+            special_labels: voice.special_labels,
+            trial_url: voice.trial_url,
+            short_trial_url: voice.short_trial_url,
+            languages: voice.languages,
+            emotions: voice.emotions,
+            description: voice.description,
+            is_available: voice.is_available,
+            catalog_version: voice.catalog_version,
+            created_at: voice.created_at,
+            updated_at: voice.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct VoiceCatalogResponse {
+    model_id: Uuid,
+    source_model_id: Uuid,
+    model_settings: Value,
+    last_sync: Option<VoiceCatalogSyncResponse>,
+    voices: Vec<VoiceCatalogEntryResponse>,
+}
+
+impl From<VoiceCatalogSnapshot> for VoiceCatalogResponse {
+    fn from(catalog: VoiceCatalogSnapshot) -> Self {
+        Self {
+            model_id: catalog.model_id,
+            source_model_id: catalog.source_model_id,
+            model_settings: catalog.model_settings,
+            last_sync: catalog.last_sync.map(Into::into),
+            voices: catalog.voices.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 fn parse_model_type(value: &str) -> Result<ModelType, ModelApiError> {

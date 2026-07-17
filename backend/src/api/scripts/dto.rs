@@ -91,6 +91,7 @@ pub struct ScriptSummaryResponse {
     pub scene_count: usize,
     pub parent_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 impl From<Script> for ScriptSummaryResponse {
@@ -105,6 +106,7 @@ impl From<Script> for ScriptSummaryResponse {
             scene_count: script.scenes.len(),
             parent_id: script.parent_id,
             created_at: script.created_at,
+            updated_at: script.updated_at,
         }
     }
 }
@@ -120,6 +122,7 @@ impl From<ScriptSummary> for ScriptSummaryResponse {
             scene_count: usize::try_from(summary.scene_count).unwrap_or(usize::MAX),
             parent_id: summary.parent_id,
             created_at: summary.created_at,
+            updated_at: summary.updated_at,
         }
     }
 }

@@ -5,10 +5,15 @@ import {
   deleteAiModel,
   createProject,
   generateScript,
+  getTosStagingTool,
   getApiBaseUrl,
   getScript,
   listProjects,
   listAiModels,
+  getVoiceCatalog,
+  requestAdminVoiceCatalogSync,
+  saveTosStagingTool,
+  checkTosStagingTool,
   setDefaultAiModel,
   updateAiModel,
   changeAiModelStatus,
@@ -240,6 +245,21 @@ describe("api client", () => {
       });
   });
 
+  it("解析后端对象形式错误消息", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { error: { code: "tos_staging_cleanup_pending", message: "TOS 临时对象尚未清理" } },
+        { status: 409 },
+      ),
+    );
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await expect(setDefaultAiModel(client, "model-id", { version: 1 })).rejects.toMatchObject({
+      status: 409,
+      message: "TOS 临时对象尚未清理",
+    });
+  });
+
   it("按筛选条件管理 AI 模型完整生命周期", async () => {
     const model = {
       model_id: "44444444-4444-4444-8444-444444444444",
@@ -308,5 +328,80 @@ describe("api client", () => {
       body: JSON.stringify({ version: 3 }),
     });
     expect(fetchMock.mock.calls[5][1]).toMatchObject({ method: "DELETE" });
+  });
+
+  it("请求音色目录同步并读取包含下线音色的目录", async () => {
+    const modelId = "44444444-4444-4444-8444-444444444444";
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ status: "queued", model_id: modelId }, { status: 201 }))
+      .mockResolvedValueOnce(jsonResponse({ model_id: modelId, voices: [] }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await requestAdminVoiceCatalogSync(client, modelId);
+    await getVoiceCatalog(client, modelId, true);
+
+    expect(fetchMock.mock.calls).toEqual([
+      [
+        `http://api.test/api/admin/models/${modelId}/voice-catalog/sync`,
+        { method: "POST", headers: { accept: "application/json" } },
+      ],
+      [
+        `http://api.test/api/speech/models/${modelId}/voice-catalog?include_unavailable=true`,
+        { headers: { accept: "application/json" } },
+      ],
+    ]);
+  });
+
+  it("读取、保存并发起系统 TOS 连接检查", async () => {
+    const response = {
+      configured: true,
+      config_id: "66666666-6666-4666-8666-666666666666",
+      version: 2,
+      enabled: true,
+      last_check_status: "queued",
+    };
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(response)));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+    const payload = {
+      version: 1,
+      enabled: true,
+      storage_provider: "volcengine_tos" as const,
+      endpoint: "https://tos-cn-beijing.volces.com",
+      region: "cn-beijing",
+      bucket: "novex-private-staging",
+      object_prefix: "novex/asr",
+      access_key: "",
+      secret_key: "",
+      signed_url_ttl_seconds: 600,
+      max_file_bytes: 104857600,
+      max_audio_duration_seconds: 7200,
+    };
+
+    await getTosStagingTool(client);
+    await saveTosStagingTool(client, payload);
+    await checkTosStagingTool(client, 2);
+
+    expect(fetchMock.mock.calls).toEqual([
+      [
+        "http://api.test/api/tools/tos-staging",
+        { headers: { accept: "application/json" } },
+      ],
+      [
+        "http://api.test/api/tools/tos-staging",
+        {
+          method: "PUT",
+          headers: { accept: "application/json", "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      ],
+      [
+        "http://api.test/api/tools/tos-staging/check",
+        {
+          method: "POST",
+          headers: { accept: "application/json", "content-type": "application/json" },
+          body: JSON.stringify({ version: 2 }),
+        },
+      ],
+    ]);
   });
 });

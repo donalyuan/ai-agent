@@ -236,13 +236,14 @@ impl ScriptRepository for PostgresScriptRepository {
                     s.status,
                     s.parent_id,
                     s.created_at,
+                    s.updated_at,
                     COUNT(sc.id) AS scene_count
                 FROM scripts s
                 LEFT JOIN scenes sc ON sc.script_id = s.id
                 LEFT JOIN content_topics t ON t.id = s.topic_id
                 WHERE s.project_id = $1 AND s.status = $2
                 GROUP BY s.id, t.title
-                ORDER BY s.created_at DESC
+                ORDER BY s.updated_at DESC, s.id DESC
                 LIMIT $3 OFFSET $4
                 "#,
             )
@@ -264,13 +265,14 @@ impl ScriptRepository for PostgresScriptRepository {
                     s.status,
                     s.parent_id,
                     s.created_at,
+                    s.updated_at,
                     COUNT(sc.id) AS scene_count
                 FROM scripts s
                 LEFT JOIN scenes sc ON sc.script_id = s.id
                 LEFT JOIN content_topics t ON t.id = s.topic_id
                 WHERE s.project_id = $1
                 GROUP BY s.id, t.title
-                ORDER BY s.created_at DESC
+                ORDER BY s.updated_at DESC, s.id DESC
                 LIMIT $2 OFFSET $3
                 "#,
             )
@@ -443,5 +445,6 @@ fn script_summary_from_row(row: PgRow) -> Result<ScriptSummary, ScriptRepository
         scene_count: row.get("scene_count"),
         parent_id: row.get("parent_id"),
         created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
     })
 }

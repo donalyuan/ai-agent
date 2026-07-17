@@ -121,6 +121,7 @@ impl ModelResolveError {
             | AiModelRepositoryError::ReplacementRequired(_)
             | AiModelRepositoryError::InvalidReplacement(_)
             | AiModelRepositoryError::NoDefaultConfirmation(_)
+            | AiModelRepositoryError::VoiceCatalogSourceInUse(_)
             | AiModelRepositoryError::Storage(_) => Self::Storage,
         }
     }

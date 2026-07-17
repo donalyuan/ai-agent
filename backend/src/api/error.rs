@@ -16,7 +16,7 @@ use crate::model_routing::ModelResolveError;
 use crate::repositories::{
     AssetGenerationRepositoryError, ConversationRepositoryError, MaterialRepositoryError,
     ProjectRepositoryError, ScriptRepositoryError, TopicRepositoryError,
-    WorkspaceMenuRepositoryError,
+    VoiceCatalogRepositoryError, WorkspaceMenuRepositoryError,
 };
 use axum::{
     extract::{rejection::JsonRejection, FromRequest},
@@ -202,6 +202,9 @@ impl From<ConversationApplicationError> for ScriptApiError {
             }
             ConversationApplicationError::ProjectRepository(error) => {
                 Self::ProjectRepository(error)
+            }
+            ConversationApplicationError::VoiceCatalog(error) => {
+                Self::ConversationValidation(error.to_string())
             }
             ConversationApplicationError::Agent(error) => Self::Agent(error),
             ConversationApplicationError::Runtime(error) => Self::AgentRuntime(error),
@@ -604,6 +607,23 @@ fn agent_runtime_error_response(error: AgentRuntimeError) -> (StatusCode, Json<s
             ),
         },
         AgentRuntimeError::TopicRepository(error) => topic_repository_error_response(error),
+        AgentRuntimeError::VoiceCatalogRepository(error) => match error {
+            VoiceCatalogRepositoryError::ModelNotFound(model_id) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "语音模型不存在", "model_id": model_id })),
+            ),
+            VoiceCatalogRepositoryError::ModelUnavailable(model_id) => (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "语音模型不可用", "model_id": model_id })),
+            ),
+            VoiceCatalogRepositoryError::InvalidRequest(message) => {
+                (StatusCode::BAD_REQUEST, Json(json!({ "error": message })))
+            }
+            VoiceCatalogRepositoryError::Storage(message) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "音色目录读取失败", "details": message })),
+            ),
+        },
         AgentRuntimeError::ScriptAgent(error) => script_agent_error_response(error),
         AgentRuntimeError::InvalidLlmOutput(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,

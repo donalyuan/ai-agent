@@ -6,6 +6,9 @@ const previousTopicBatchId = "77777777-7777-4777-8777-777777777777";
 const supplementTopicBatchId = "99999999-9999-4999-8999-999999999901";
 const textModelId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const imageModelId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const ttsModelId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const openAiTtsModelId = "cececece-cece-4cec-8cec-cececececece";
+const asrModelId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 
 const textModelOption = {
   model_id: textModelId,
@@ -26,6 +29,36 @@ const imageModelOption = {
   upstream_model: "gpt-image-test",
   is_default: true,
 };
+
+const speechModelOptions = [
+  {
+    model_id: ttsModelId,
+    display_name: "豆包 TTS",
+    model_type: "speech",
+    provider_name: "火山引擎",
+    api_protocol: "volcengine_tts_v3",
+    upstream_model: "doubao-seed-tts-2.0",
+    is_default: true,
+  },
+  {
+    model_id: openAiTtsModelId,
+    display_name: "ZeekAI Seed TTS",
+    model_type: "speech",
+    provider_name: "ZeekAI",
+    api_protocol: "openai_audio_speech",
+    upstream_model: "doubao-seed-tts-2.0",
+    is_default: false,
+  },
+  {
+    model_id: asrModelId,
+    display_name: "豆包 ASR",
+    model_type: "speech",
+    provider_name: "火山引擎",
+    api_protocol: "volcengine_asr_v3",
+    upstream_model: "doubao-seed-asr-2.0",
+    is_default: true,
+  },
+];
 
 const emptyStrategyProfile = {
   target_audience: "",
@@ -64,11 +97,14 @@ const accountStrategyProject = {
 
 const scriptSummary = {
   script_id: scriptId,
+  topic_id: null,
+  source_topic_title: null,
   title: "程序员必看：ChatGPT工作流",
   status: "draft",
   scene_count: 6,
   parent_id: null,
   created_at: "2026-07-02T00:05:00Z",
+  updated_at: "2026-07-02T00:05:00Z",
 };
 
 const scriptDetail = {
@@ -100,11 +136,14 @@ const generatedScriptId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
 const generatedScriptSummary = {
   script_id: generatedScriptId,
+  topic_id: null,
+  source_topic_title: null,
   title: "ChatGPT 工作流新脚本",
   status: "draft",
   scene_count: 3,
   parent_id: null,
   created_at: "2026-07-02T00:12:00Z",
+  updated_at: "2026-07-02T00:12:00Z",
 };
 
 const generatedScriptDetail = {
@@ -447,7 +486,7 @@ const materialWorkspaceMenus = [
 
 function soundSubtitleMenuNode() {
   return {
-    ...menuNode("sound-subtitle-generation", "声音与字幕生成", false, "planned", 30),
+    ...menuNode("sound-subtitle-generation", "声音与字幕生成", true, "active", 30),
     agent_key: "sound-generation-agent",
     menu_type: "page",
     module_key: "materials.sound-subtitle-generation",
@@ -862,7 +901,7 @@ function menuNode(menuKey: string, label: string, isEnabled: boolean, status: st
     menu_key: menuKey,
     label,
     description: `${label}说明`,
-    route_path: `/${menuKey}`,
+    route_path: workspaceRoutePath(menuKey),
     icon: "circle",
     menu_type: "section",
     module_key: menuKey,
@@ -885,11 +924,17 @@ test.beforeEach(async ({ page }) => {
   await page.route(/\/api\/projects$/, async (route) => {
     await route.fulfill({ contentType: "application/json", json: { projects: [project] } });
   });
-  await page.route(/\/api\/model-options\?type=(text|image|video)$/, async (route) => {
+  await page.route(/\/api\/model-options\?type=(text|image|video|speech)$/, async (route) => {
     const modelType = new URL(route.request().url()).searchParams.get("type");
     await route.fulfill({
       contentType: "application/json",
-      json: { models: modelType === "text" ? [textModelOption] : modelType === "image" ? [imageModelOption] : [] },
+      json: {
+        models: modelType === "text"
+          ? [textModelOption]
+          : modelType === "image"
+            ? [imageModelOption]
+            : modelType === "speech" ? speechModelOptions : [],
+      },
     });
   });
 });
@@ -1104,6 +1149,25 @@ async function mockScriptAssetWorkflow(page: Page) {
     selectAssetCandidateRequestCount: () => selectAssetCandidateRequestCount,
     dismissAssetGenerationTaskRequestCount: () => dismissAssetGenerationTaskRequestCount,
   };
+}
+
+function workspaceRoutePath(menuKey: string) {
+  return {
+    "content-strategy": "/strategy",
+    "account-strategy": "/strategy/account",
+    "topic-history": "/strategy/topic-history",
+    "topic-generator": "/strategy/topics",
+    "script-creation": "/scripts",
+    "script-generator": "/scripts/generator",
+    "material-management": "/materials",
+    "material-library": "/materials/library",
+    "asset-generation": "/materials/generation",
+    "sound-subtitle-generation": "/materials/sound-subtitle-generation",
+    production: "/production",
+    publishing: "/publishing",
+    analytics: "/analytics",
+    "workflow-tasks": "/workflow-tasks",
+  }[menuKey] ?? `/${menuKey}`;
 }
 
 async function mockContentStrategyWorkflow(page: Page) {
@@ -1502,6 +1566,32 @@ test("空脚本列表时通过脚本 Agent 对话生成脚本并打开时间轴�
   await expect(page.getByText("屏幕展示用户输入脚本需求。")).toBeVisible();
 });
 
+test("工作台深层路由在刷新和浏览器前进后退后保持当前页面", async ({ page }) => {
+  await page.goto("/materials/sound-subtitle-generation");
+
+  const workspaceMenu = page.getByRole("navigation", { name: "视频工作台菜单" });
+  await expect(page.getByRole("heading", { name: "声音与字幕生成" })).toBeVisible();
+  await expect(workspaceMenu.getByRole("button", { name: /素材管理/ })).toHaveClass(/active/);
+  await expect(workspaceMenu.getByRole("button", { name: "声音与字幕生成" })).toHaveClass(/active/);
+  await expect(page).toHaveURL(/\/materials\/sound-subtitle-generation$/);
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "声音与字幕生成" })).toBeVisible();
+  await expect(page).toHaveURL(/\/materials\/sound-subtitle-generation$/);
+
+  await workspaceMenu.getByRole("button", { name: "素材库" }).click();
+  await expect(page).toHaveURL(/\/materials\/library$/);
+  await expect(page.getByRole("heading", { name: "素材库" })).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/materials\/sound-subtitle-generation$/);
+  await expect(page.getByRole("heading", { name: "声音与字幕生成" })).toBeVisible();
+
+  await page.goForward();
+  await expect(page).toHaveURL(/\/materials\/library$/);
+  await expect(page.getByRole("heading", { name: "素材库" })).toBeVisible();
+});
+
 test("画面生成页支持生成、预览和选择主画面且不提供旧视频操作", async ({ page }) => {
   await mockExistingScriptWorkflow(page);
   const assetWorkflow = await mockScriptAssetWorkflow(page);
@@ -1592,6 +1682,690 @@ test("画面生成页支持生成、预览和选择主画面且不提供旧视�
   await expect.poll(() => assetWorkflow.dismissAssetGenerationTaskRequestCount()).toBe(1);
   await expect(panel.getByRole("button", { name: "清理失败任务" })).toHaveCount(0);
   await expect(dismissDialog).toHaveCount(0);
+});
+
+test("声音与字幕工作区使用动态中文语言并在确认后创建任务", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 980 });
+  await mockMaterialLibraryWorkflow(page);
+  let taskCreated = false;
+  const voice = {
+    voice_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    voice_type: "zh_female_fixture",
+    resource_id: "seed-tts-2.0",
+    name: "测试女声",
+    avatar_url: null,
+    gender: "female",
+    age: "adult",
+    categories: [],
+    normal_labels: ["沉稳"],
+    special_labels: [],
+    trial_url: null,
+    short_trial_url: null,
+    languages: [{ Language: "zh-cn", Text: "这是一段试听文案，不是语言名称。" }],
+    emotions: [{ Label: "", Value: "", Icon: "" }],
+    description: "适合知识旁白",
+    is_available: true,
+    catalog_version: 1,
+    created_at: "2026-07-15T00:00:00Z",
+    updated_at: "2026-07-15T00:00:00Z",
+  };
+  const alastorVoice = {
+    ...voice,
+    voice_id: "edededed-eded-4ded-8ded-edededededed",
+    voice_type: "ICL_uranus_en_male_alastor_tob",
+    name: "Alastor 2.0",
+    gender: "男",
+    age: "青年",
+    normal_labels: [],
+    languages: [{ Language: "en", Text: "Smile, smile darling, this is audition copy." }],
+    description: "恐怖电影里的小丑，声音尖锐，有侵略性，擅长英语",
+  };
+  const sourceScriptId = "12121212-1212-4212-8212-121212121212";
+  const sourceSceneIds = [
+    "13131313-1313-4313-8313-131313131313",
+    "14141414-1414-4414-8414-141414141414",
+  ];
+  const sourceScriptUpdatedAt = "2026-07-16T08:24:00Z";
+  await page.route(new RegExp(`/api/projects/${projectId}/scripts(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        scripts: [
+          {
+            script_id: sourceScriptId,
+            topic_id: null,
+            source_topic_title: "停止内耗，从拆小目标开始",
+            title: "别硬扛：稳定前进的方法",
+            status: "approved",
+            scene_count: 2,
+            parent_id: null,
+            created_at: "2026-07-15T00:00:00Z",
+            updated_at: sourceScriptUpdatedAt,
+          },
+          {
+            script_id: "15151515-1515-4515-8515-151515151515",
+            topic_id: null,
+            source_topic_title: "历史选题",
+            title: "已经归档的脚本",
+            status: "archived",
+            scene_count: 1,
+            parent_id: null,
+            created_at: "2026-07-14T00:00:00Z",
+            updated_at: "2026-07-14T08:24:00Z",
+          },
+        ],
+        total: 2,
+        limit: 100,
+        offset: 0,
+      },
+    });
+  });
+  await page.route(new RegExp(`/api/scripts/${sourceScriptId}$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        script_id: sourceScriptId,
+        project_id: projectId,
+        topic_id: null,
+        topic_snapshot: { title: "停止内耗，从拆小目标开始" },
+        title: "别硬扛：稳定前进的方法",
+        hook: "停止内耗",
+        status: "approved",
+        parent_id: null,
+        created_at: "2026-07-15T00:00:00Z",
+        updated_at: sourceScriptUpdatedAt,
+        scenes: [
+          { scene_id: sourceSceneIds[0], sequence: 1, narration: "允许自己停一停。", visual_description: "停顿", emotion: "温暖", duration_sec: 5 },
+          { scene_id: sourceSceneIds[1], sequence: 2, narration: "把目标拆小。", visual_description: "拆分", emotion: "平静", duration_sec: 5 },
+        ],
+      },
+    });
+  });
+  await page.route(new RegExp(`/api/speech/models/${ttsModelId}/voice-catalog(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        model_id: ttsModelId,
+        model_settings: {
+          supported_audio_formats: ["mp3"],
+          default_audio_format: "mp3",
+          supported_sample_rates: [24000],
+          default_sample_rate: 24000,
+          max_input_characters: 3000,
+          supports_word_timestamps: true,
+          word_timestamp_languages: ["zh-cn"],
+          parameters: { speed_ratio: { type: "number", minimum: 0.5, maximum: 2 } },
+        },
+        last_sync: {
+          sync_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          model_id: ttsModelId,
+          trigger_source: "admin",
+          status: "succeeded",
+          page_limit: 100,
+          page_count: 1,
+          speaker_count: 2,
+          error_summary: null,
+          requested_at: "2026-07-15T00:00:00Z",
+          started_at: "2026-07-15T00:00:00Z",
+          completed_at: "2026-07-15T00:01:00Z",
+          created_at: "2026-07-15T00:00:00Z",
+          updated_at: "2026-07-15T00:01:00Z",
+        },
+        voices: [voice, alastorVoice],
+      },
+    });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/sound-subtitle/tasks/preflight$`), async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({
+      task_type: "tts",
+      model_id: ttsModelId,
+      text_content: "你好世界",
+      voice_type: alastorVoice.voice_type,
+      language: "en",
+      parameters: { audio_format: "mp3", sample_rate: 24000, speed_ratio: 1 },
+      generate_subtitle: false,
+      source_script_id: sourceScriptId,
+      source_script_updated_at: sourceScriptUpdatedAt,
+      source_script_scene_ids: [sourceSceneIds[0]],
+    });
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        task_type: "tts",
+        model_id: ttsModelId,
+        model_display_name: "豆包 TTS",
+        voice_snapshot: { name: alastorVoice.name },
+        resource_usage: { character_count: 4, task_count: 1, output_count: 1 },
+        normalized_parameters: { audio_format: "mp3", sample_rate: 24000, speed_ratio: 1 },
+        confirmation_token: "confirmation-token",
+      },
+    });
+  });
+  const failedSoundTasks = Array.from({ length: 8 }, (_, index) => ({
+    task_id: `99999999-9999-4999-8999-99999999999${index}`,
+    project_id: projectId,
+    parent_task_id: null,
+    task_type: "tts",
+    status: "failed",
+    model_id: ttsModelId,
+    audio_inspection_id: null,
+    source_audio_material_id: null,
+    source_script_id: null,
+    source_script_snapshot: null,
+    output_audio_material_id: null,
+    output_subtitle_material_id: null,
+    text_content: `第 ${index + 1} 条项目旁白完整配音`,
+    voice_type: alastorVoice.voice_type,
+    language: "en",
+    emotion: null,
+    parameters: { audio_format: "mp3", sample_rate: 24000, speed_ratio: 1 },
+    generate_subtitle: false,
+    subtitle_segments: [],
+    model_snapshot: {
+      display_name: "豆包 TTS",
+      upstream_model: "doubao-seed-tts-2.0",
+      api_protocol: "volcengine_tts_v3",
+    },
+    voice_snapshot: { name: alastorVoice.name },
+    resource_usage: { character_count: 12, task_count: 1, output_count: 1 },
+    timeline: null,
+    result: null,
+    request_id: index === 0
+      ? "f1f273d6-82da-4101-a284-6c4b54b89910"
+      : `abababab-abab-4bab-8bab-abababababa${index}`,
+    upstream_log_id: index === 0 ? "20260717150632A1B2C3D4E5F60789" : null,
+    attempt_count: 1,
+    max_attempts: 2,
+    error_code: "tts_http_error",
+    error_summary: index === 0 ? "语音供应商返回 HTTP 403" : "语音供应商返回 HTTP 401",
+    error_details: index === 0 ? {
+      http_status: 403,
+      provider_error_code: "45000020",
+      provider_error_message: "Permission denied",
+    } : {
+      http_status: 401,
+      provider_error_code: "45000010",
+      provider_error_message: "Invalid X-Api-Key",
+    },
+    staging_status: "none",
+    cleanup_attempt_count: 0,
+    cleanup_error_summary: null,
+    started_at: "2026-07-17T07:06:28Z",
+    completed_at: "2026-07-17T07:06:29Z",
+    created_at: `2026-07-17T07:0${6 - Math.min(index, 6)}:28Z`,
+    updated_at: "2026-07-17T07:06:29Z",
+  }));
+  await page.route(new RegExp(`/api/projects/${projectId}/sound-subtitle/tasks$`), async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ contentType: "application/json", json: { tasks: failedSoundTasks } });
+      return;
+    }
+    taskCreated = true;
+    expect(route.request().headers()["idempotency-key"]).toBeTruthy();
+    expect(route.request().postDataJSON()).toMatchObject({ confirmation_token: "confirmation-token" });
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      json: {
+        task_id: "99999999-9999-4999-8999-999999999999",
+        project_id: projectId,
+        parent_task_id: null,
+        task_type: "tts",
+        status: "queued",
+        model_id: ttsModelId,
+        audio_inspection_id: null,
+        source_audio_material_id: null,
+        output_audio_material_id: null,
+        output_subtitle_material_id: null,
+        text_content: "你好世界",
+        voice_type: alastorVoice.voice_type,
+        language: "en",
+        emotion: null,
+        parameters: { audio_format: "mp3", sample_rate: 24000, speed_ratio: 1 },
+        generate_subtitle: false,
+        subtitle_segments: [],
+        model_snapshot: { display_name: "豆包 TTS" },
+        voice_snapshot: { name: alastorVoice.name },
+        resource_usage: { character_count: 4, task_count: 1, output_count: 1 },
+        timeline: null,
+        result: null,
+        request_id: "abababab-abab-4bab-8bab-abababababab",
+        upstream_log_id: null,
+        attempt_count: 0,
+        max_attempts: 2,
+        error_code: null,
+        error_summary: null,
+        staging_status: "not_required",
+        cleanup_attempt_count: 0,
+        cleanup_error_summary: null,
+        started_at: null,
+        completed_at: null,
+        created_at: "2026-07-15T00:02:00Z",
+        updated_at: "2026-07-15T00:02:00Z",
+      },
+    });
+  });
+
+  await page.goto("/");
+  const workspaceMenu = page.getByRole("navigation", { name: "视频工作台菜单" });
+  await workspaceMenu.getByRole("button", { name: /素材管理/ }).click();
+  await workspaceMenu.getByRole("button", { name: "声音与字幕生成" }).click();
+
+  await expect(page.getByRole("heading", { name: "声音与字幕生成" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "TTS配音" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "字幕" })).toBeVisible();
+  await expect(page.getByText("情绪风格")).toHaveCount(0);
+  const languageSelector = page.getByRole("combobox", { name: "语言 / 口音" });
+  await languageSelector.click();
+  const languageListbox = page.getByRole("listbox", { name: "语言 / 口音选项" });
+  await expect(languageListbox.getByRole("option", { name: "简体中文" })).toHaveAttribute("data-value", "zh-cn");
+  const languagePlacement = await Promise.all([
+    languageSelector.boundingBox(),
+    languageListbox.boundingBox(),
+  ]);
+  expect(languagePlacement[0]).not.toBeNull();
+  expect(languagePlacement[1]).not.toBeNull();
+  expect(languagePlacement[1]!.y).toBeGreaterThanOrEqual(languagePlacement[0]!.y + languagePlacement[0]!.height);
+  await languageListbox.getByRole("option", { name: "简体中文" }).click();
+  await expect(page.getByText("这是一段试听文案，不是语言名称。")).toHaveCount(0);
+  await expect(page.getByText("素材管理 / 声音与字幕生成")).toBeVisible();
+  await expect(page.getByRole("button", { name: "新建 TTS 任务" })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "配音任务列表" })).toBeVisible();
+  const failedDetail = page.getByLabel("当前失败任务详情");
+  await expect(failedDetail).toContainText("HTTP 403");
+  await expect(failedDetail).toContainText("Permission denied");
+  await expect(failedDetail).toContainText("45000020");
+  await expect(failedDetail).toContainText("f1f273d6-82da-4101-a284-6c4b54b89910");
+  await expect(failedDetail).toContainText("20260717150632A1B2C3D4E5F60789");
+  const taskListLayout = await page.getByRole("complementary", { name: "配音任务列表" }).evaluate((panel) => {
+    const list = panel.querySelector(".soundTaskCards") as HTMLElement | null;
+    const filters = panel.querySelector(".soundTaskFilters")?.getBoundingClientRect();
+    const concurrency = panel.querySelector(".soundConcurrencyStatus")?.getBoundingClientRect();
+    const cards = Array.from(panel.querySelectorAll<HTMLElement>(".soundTaskCard"));
+    if (!list || !filters || !concurrency) return null;
+    const listRect = list.getBoundingClientRect();
+    return {
+      count: cards.length,
+      verticalOverflow: list.scrollHeight - list.clientHeight,
+      horizontalOverflow: list.scrollWidth - list.clientWidth,
+      overflowX: getComputedStyle(list).overflowX,
+      cardsClipped: cards.some((card) => card.scrollHeight - card.clientHeight > 1),
+      cardsHorizontalOverflow: cards.some((card) => card.scrollWidth - card.clientWidth > 1),
+      ordered: filters.bottom <= listRect.top && listRect.bottom <= concurrency.top,
+      concurrencyContained: concurrency.bottom <= panel.getBoundingClientRect().bottom,
+    };
+  });
+  expect(taskListLayout).not.toBeNull();
+  expect(taskListLayout!.count).toBe(8);
+  expect(taskListLayout!.verticalOverflow).toBeGreaterThan(0);
+  expect(taskListLayout!.horizontalOverflow).toBeLessThanOrEqual(1);
+  expect(taskListLayout!.overflowX).toBe("hidden");
+  expect(taskListLayout!.cardsClipped).toBe(false);
+  expect(taskListLayout!.cardsHorizontalOverflow).toBe(false);
+  expect(taskListLayout!.ordered).toBe(true);
+  expect(taskListLayout!.concurrencyContained).toBe(true);
+  await expect(page.getByText("试听音频")).toBeVisible();
+  await expect(page.getByText("当前任务")).toBeVisible();
+  await expect(page.getByRole("slider", { name: "语速" })).toHaveValue("1");
+  await expect(page.locator(".soundTaskSection")).toHaveCount(0);
+  await expect(page.getByRole("table")).toHaveCount(0);
+  const ttsModelSelector = page.getByRole("combobox", { name: "TTS 模型" });
+  await expect(ttsModelSelector).toHaveJSProperty("tagName", "BUTTON");
+  await ttsModelSelector.click();
+  const ttsModelListbox = page.getByRole("listbox", { name: "TTS 模型选项" });
+  await expect(ttsModelListbox.getByRole("option", { name: /豆包 TTS/ })).toBeVisible();
+  const modelPlacement = await Promise.all([
+    ttsModelSelector.boundingBox(),
+    ttsModelListbox.boundingBox(),
+  ]);
+  expect(modelPlacement[0]).not.toBeNull();
+  expect(modelPlacement[1]).not.toBeNull();
+  expect(modelPlacement[1]!.x).toBeCloseTo(modelPlacement[0]!.x, 0);
+  expect(modelPlacement[1]!.width).toBeCloseTo(modelPlacement[0]!.width, 0);
+  expect(modelPlacement[1]!.y).toBeGreaterThanOrEqual(modelPlacement[0]!.y + modelPlacement[0]!.height);
+  expect(await ttsModelListbox.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe("rgb(255, 255, 255)");
+  await page.keyboard.press("Escape");
+  await expect(ttsModelListbox).toHaveCount(0);
+  await expect(ttsModelSelector).toBeFocused();
+  const layout = await page.locator(".soundWorkspaceGrid").evaluate((grid) => {
+    const gridRect = grid.getBoundingClientRect();
+    const taskRect = grid.querySelector(".soundTaskPanel")?.getBoundingClientRect();
+    const editorRect = grid.querySelector(".soundEditorPanel")?.getBoundingClientRect();
+    const agentRect = grid.querySelector(".soundAgentPanel")?.getBoundingClientRect();
+    return taskRect && editorRect && agentRect ? {
+      gridWidth: gridRect.width,
+      gridHeight: gridRect.height,
+      taskWidth: taskRect.width,
+      editorWidth: editorRect.width,
+      agentWidth: agentRect.width,
+      firstGap: editorRect.left - taskRect.right,
+      secondGap: agentRect.left - editorRect.right,
+      aligned: taskRect.top === editorRect.top && editorRect.top === agentRect.top,
+      ordered: taskRect.left < editorRect.left && editorRect.left < agentRect.left,
+      withinGrid: agentRect.right <= gridRect.right + 1,
+    } : null;
+  });
+  expect(layout).not.toBeNull();
+  expect(layout!.gridWidth).toBeCloseTo(1118, 0);
+  expect(layout!.gridHeight).toBeCloseTo(712, 0);
+  expect(layout!.taskWidth).toBeCloseTo(250, 0);
+  expect(layout!.editorWidth).toBeCloseTo(520, 0);
+  expect(layout!.agentWidth).toBeCloseTo(276, 0);
+  expect(layout!.firstGap).toBeCloseTo(16, 0);
+  expect(layout!.secondGap).toBeCloseTo(16, 0);
+  expect(layout!.aligned).toBe(true);
+  expect(layout!.ordered).toBe(true);
+  expect(layout!.withinGrid).toBe(true);
+  const panelOverflow = await page.locator(".soundWorkspaceGrid").evaluate((grid) => (
+    [".soundTaskPanel", ".soundEditorPanel", ".soundAgentPanel"].map((selector) => {
+      const panel = grid.querySelector(selector) as HTMLElement | null;
+      return panel ? {
+        horizontal: panel.scrollWidth - panel.clientWidth,
+        vertical: panel.scrollHeight - panel.clientHeight,
+      } : null;
+    })
+  ));
+  expect(panelOverflow).not.toContain(null);
+  expect(panelOverflow.every((overflow) => overflow && overflow.horizontal <= 1 && overflow.vertical <= 1)).toBe(true);
+  await page.setViewportSize({ width: 1700, height: 980 });
+  const intermediateOverflow = await page.locator(".soundEditorPanel").evaluate((editor) => {
+    const editorRect = editor.getBoundingClientRect();
+    const model = editor.querySelector(".soundModelCatalogRow")?.getBoundingClientRect();
+    const preview = editor.querySelector(".soundPreviewPlayer")?.getBoundingClientRect();
+    const form = editor.querySelector(".soundFormGrid")?.getBoundingClientRect();
+    const narration = editor.querySelector(".soundNarrationField")?.getBoundingClientRect();
+    const parameter = editor.querySelector(".speechParameterGrid label")?.getBoundingClientRect();
+    const actions = editor.querySelector(".soundPrimaryActions")?.getBoundingClientRect();
+    const current = editor.querySelector(".soundCurrentTask")?.getBoundingClientRect();
+    return model && preview && form && narration && parameter && actions && current ? {
+      horizontal: editor.scrollWidth - editor.clientWidth,
+      contentRight: editorRect.right - 18,
+      modelWidth: Math.round(model.width),
+      topRowAligned: Math.round(model.top) === Math.round(preview.top),
+      previewRight: Math.round(preview.right),
+      formRight: Math.round(form.right),
+      narrationRight: Math.round(narration.right),
+      actionRowAligned: Math.round(parameter.top) === Math.round(actions.top),
+      actionsRight: Math.round(actions.right),
+      currentRight: Math.round(current.right),
+    } : null;
+  });
+  expect(intermediateOverflow).not.toBeNull();
+  if (!intermediateOverflow) {
+    throw new Error("中间桌面宽度下声音配置布局元素缺失");
+  }
+  expect(intermediateOverflow.horizontal).toBeLessThanOrEqual(1);
+  expect(intermediateOverflow.modelWidth).toBe(484);
+  expect(intermediateOverflow.topRowAligned).toBe(true);
+  expect(intermediateOverflow.actionRowAligned).toBe(true);
+  for (const right of [
+    intermediateOverflow.previewRight,
+    intermediateOverflow.formRight,
+    intermediateOverflow.narrationRight,
+    intermediateOverflow.actionsRight,
+    intermediateOverflow.currentRight,
+  ]) {
+    expect(right).toBeCloseTo(intermediateOverflow.contentRight, 0);
+  }
+  await page.setViewportSize({ width: 1920, height: 980 });
+  const wideLayout = await page.locator(".soundWorkspaceGrid").evaluate((grid) => {
+    const gridRect = grid.getBoundingClientRect();
+    const editorRect = grid.querySelector(".soundEditorPanel")?.getBoundingClientRect();
+    const pageRect = document.querySelector(".soundSubtitlePage")?.getBoundingClientRect();
+    return editorRect && pageRect ? {
+      gridWidth: gridRect.width,
+      editorWidth: editorRect.width,
+      leftInset: gridRect.left - pageRect.left,
+      rightInset: pageRect.right - gridRect.right,
+    } : null;
+  });
+  expect(wideLayout).not.toBeNull();
+  expect(wideLayout!.gridWidth).toBeCloseTo(1598, 0);
+  expect(wideLayout!.editorWidth).toBeCloseTo(1000, 0);
+  expect(wideLayout!.leftInset).toBeCloseTo(24, 0);
+  expect(wideLayout!.rightInset).toBeCloseTo(26, 0);
+  const readableFontSizes = await page.locator(".soundSubtitlePage").evaluate((root) => {
+    const fontSize = (selector: string) => {
+      const element = root.querySelector(selector);
+      if (!element) throw new Error(`缺少字号验收元素：${selector}`);
+      return getComputedStyle(element).fontSize;
+    };
+    return {
+      editorMeta: fontSize(".soundEditorHeader p"),
+      taskTitle: fontSize(".soundTaskCard > strong"),
+      taskModel: fontSize(".soundTaskCard > p"),
+      taskStatus: fontSize(".soundTaskStatus"),
+      taskTime: fontSize(".soundTaskCardFooter small"),
+      taskError: fontSize(".soundTaskFailure"),
+      retryButton: fontSize(".soundTaskActions button"),
+      formLabel: fontSize(".soundModelTriggerCopy span"),
+      formValue: fontSize(".soundModelTriggerCopy strong"),
+      narration: fontSize(".soundNarrationField textarea"),
+      primaryButton: fontSize(".soundPrimaryActions .primaryAction"),
+      failureTitle: fontSize(".soundFailureHeader strong"),
+      failureMessage: fontSize(".soundFailureMessage"),
+      failureFact: fontSize(".soundFailureFacts dd"),
+      agentTitle: fontSize(".soundAgentTitleRow strong"),
+      agentMeta: fontSize(".soundAgentSessionRow > span"),
+      agentComposer: fontSize(".soundAgentComposer textarea"),
+    };
+  });
+  expect(readableFontSizes).toEqual({
+    editorMeta: "12px",
+    taskTitle: "13px",
+    taskModel: "12px",
+    taskStatus: "11px",
+    taskTime: "11px",
+    taskError: "11px",
+    retryButton: "11px",
+    formLabel: "12px",
+    formValue: "13px",
+    narration: "14px",
+    primaryButton: "13px",
+    failureTitle: "13px",
+    failureMessage: "12px",
+    failureFact: "11px",
+    agentTitle: "16px",
+    agentMeta: "11px",
+    agentComposer: "12px",
+  });
+  const agentHeaderLayout = await page.locator(".soundAgentHeader").evaluate((header) => {
+    const rect = (selector: string) => header.querySelector(selector)?.getBoundingClientRect();
+    const titleRow = rect(".soundAgentTitleRow");
+    const title = rect(".soundAgentTitleRow strong");
+    const online = rect(".soundAgentTitleRow > span");
+    const sessionRow = rect(".soundAgentSessionRow");
+    const session = rect(".soundAgentSessionRow > span");
+    const model = rect(".soundAgentSessionRow select");
+    return titleRow && title && online && sessionRow && session && model ? {
+      titleRowDisplay: getComputedStyle(header.querySelector(".soundAgentTitleRow")!).display,
+      sessionRowDisplay: getComputedStyle(header.querySelector(".soundAgentSessionRow")!).display,
+      rowsSeparated: titleRow.bottom <= sessionRow.top,
+      titleOnlineAligned: Math.abs((title.top + title.height / 2) - (online.top + online.height / 2)) <= 1,
+      sessionModelAligned: Math.abs((session.top + session.height / 2) - (model.top + model.height / 2)) <= 1,
+      titleBeforeOnline: title.right <= online.left,
+      sessionBeforeModel: session.right <= model.left,
+      contained: online.right <= titleRow.right && model.right <= sessionRow.right,
+    } : null;
+  });
+  expect(agentHeaderLayout).toEqual({
+    titleRowDisplay: "flex",
+    sessionRowDisplay: "flex",
+    rowsSeparated: true,
+    titleOnlineAligned: true,
+    sessionModelAligned: true,
+    titleBeforeOnline: true,
+    sessionBeforeModel: true,
+    contained: true,
+  });
+  const voiceSelector = page.getByRole("combobox", { name: "音色" });
+  await expect(voiceSelector).toContainText("测试女声");
+  await expect(voiceSelector).toContainText("适合知识旁白");
+  await expect(page.getByText("适合知识旁白", { exact: true })).toHaveCount(1);
+  const formControlRects = await page.locator(".soundFormGrid").first().evaluate((grid) => (
+    Array.from(grid.children).map((field) => {
+      const control = field.getBoundingClientRect();
+      return { top: Math.round(control.top), bottom: Math.round(control.bottom), width: Math.round(control.width), height: Math.round(control.height) };
+    })
+  ));
+  expect(formControlRects).not.toContain(null);
+  expect(new Set(formControlRects.map((rect) => rect?.top)).size).toBe(1);
+  expect(new Set(formControlRects.map((rect) => rect?.bottom)).size).toBe(1);
+  expect(new Set(formControlRects.map((rect) => rect?.height))).toEqual(new Set([56]));
+  expect(formControlRects.map((rect) => rect?.width)).toEqual([650, 302]);
+  const wideEditorRects = await page.locator(".soundEditorPanel").evaluate((editor) => {
+    const rect = (selector: string) => editor.querySelector(selector)?.getBoundingClientRect();
+    const model = rect(".soundModelCatalogRow");
+    const preview = rect(".soundPreviewPlayer");
+    const narration = rect(".soundNarrationField");
+    const parameter = rect(".speechParameterGrid label");
+    const actions = Array.from(editor.querySelectorAll(".soundPrimaryActions button")).map((button) => button.getBoundingClientRect());
+    const current = rect(".soundCurrentTask");
+    return model && preview && narration && parameter && current ? {
+      model: { width: Math.round(model.width), height: Math.round(model.height), top: Math.round(model.top) },
+      preview: { width: Math.round(preview.width), height: Math.round(preview.height), top: Math.round(preview.top) },
+      narration: { width: Math.round(narration.width), height: Math.round(narration.height) },
+      parameter: { width: Math.round(parameter.width), top: Math.round(parameter.top) },
+      actions: actions.map((action) => ({ width: Math.round(action.width), top: Math.round(action.top) })),
+      current: { width: Math.round(current.width), height: Math.round(current.height) },
+    } : null;
+  });
+  expect(wideEditorRects).not.toBeNull();
+  expect(wideEditorRects!.model).toEqual({ width: 484, height: 54, top: wideEditorRects!.preview.top });
+  expect(wideEditorRects!.preview).toEqual({ width: 462, height: 54, top: wideEditorRects!.model.top });
+  expect(wideEditorRects!.narration).toEqual({ width: 964, height: 180 });
+  expect(wideEditorRects!.parameter.width).toBe(154);
+  expect(wideEditorRects!.actions.map((action) => action.width)).toEqual([200, 586]);
+  expect(wideEditorRects!.actions.every((action) => action.top === wideEditorRects!.parameter.top)).toBe(true);
+  expect(wideEditorRects!.current).toEqual({ width: 964, height: 140 });
+  await page.getByLabel("配音文本").fill("旧旁白");
+  await page.getByRole("button", { name: "导入脚本" }).click();
+  const importDialog = page.getByRole("dialog", { name: "从脚本创作导入旁白" });
+  await expect(importDialog).toBeVisible();
+  await expect(importDialog.getByText("别硬扛：稳定前进的方法", { exact: true })).toBeVisible();
+  await expect(importDialog.getByText("已经归档的脚本", { exact: true })).toHaveCount(0);
+  await expect(importDialog.getByRole("checkbox", { name: "镜头 01" })).toBeChecked();
+  await expect(importDialog.getByRole("checkbox", { name: "镜头 02" })).toBeChecked();
+  const importLayout = await importDialog.evaluate((dialogNode) => {
+    const dialog = dialogNode.getBoundingClientRect();
+    const list = dialogNode.querySelector(".soundScriptImportList")?.getBoundingClientRect();
+    const scenes = dialogNode.querySelector(".soundScriptScenePicker")?.getBoundingClientRect();
+    return list && scenes ? {
+      width: Math.round(dialog.width),
+      ordered: list.right <= scenes.left,
+      aligned: Math.round(list.top) === Math.round(scenes.top),
+      contained: list.left >= dialog.left && scenes.right <= dialog.right,
+      horizontalOverflow: dialogNode.scrollWidth - dialogNode.clientWidth,
+    } : null;
+  });
+  expect(importLayout).toEqual({ width: 900, ordered: true, aligned: true, contained: true, horizontalOverflow: 0 });
+  await importDialog.getByRole("checkbox", { name: "镜头 02" }).uncheck();
+  await importDialog.getByRole("button", { name: "替换并导入" }).click();
+  await expect(page.getByLabel("配音文本")).toHaveValue("允许自己停一停。");
+  await expect(page.getByText("来源：别硬扛：稳定前进的方法")).toBeVisible();
+  expect(taskCreated).toBe(false);
+  await voiceSelector.click();
+  const voiceListbox = page.getByRole("listbox", { name: "可用音色" });
+  const voicePopover = page.locator(".voiceCatalogPopover");
+  const voicePlacement = await Promise.all([voiceSelector.boundingBox(), voicePopover.boundingBox()]);
+  expect(voicePlacement[0]?.width).toBeCloseTo(650, 0);
+  expect(voicePlacement[1]?.width).toBeCloseTo(650, 0);
+  expect(voicePlacement[1]!.y).toBeGreaterThanOrEqual(voicePlacement[0]!.y + voicePlacement[0]!.height);
+  const languageFilters = page.getByRole("group", { name: "按语言筛选音色" });
+  const genderFilters = page.getByRole("group", { name: "按声线筛选音色" });
+  await expect(languageFilters.getByRole("button")).toHaveText(["中文", "英文", "多语言"]);
+  await expect(genderFilters.getByRole("button")).toHaveText(["男声", "女声"]);
+  await languageFilters.getByRole("button", { name: "中文" }).click();
+  await genderFilters.getByRole("button", { name: "男声" }).click();
+  await expect(voiceListbox.getByText("没有匹配的音色")).toBeVisible();
+  await genderFilters.getByRole("button", { name: "男声" }).click();
+  await expect(voiceListbox.getByRole("option", { name: /测试女声/ })).toBeVisible();
+  await languageFilters.getByRole("button", { name: "英文" }).click();
+  await expect(voiceListbox.getByRole("option", { name: /测试女声/ })).toHaveCount(0);
+  await expect(voiceListbox.getByRole("option", { name: /Alastor 2\.0.*恐怖电影里的小丑.*男.*青年.*英语/ })).toBeVisible();
+  await page.getByRole("searchbox", { name: "搜索音色" }).fill("侵略性");
+  await voiceListbox.getByRole("option", { name: /Alastor 2\.0/ }).click();
+  await expect(voiceSelector).toContainText("Alastor 2.0");
+  await expect(voiceSelector).toContainText("恐怖电影里的小丑");
+  await expect(page.getByRole("combobox", { name: "语言 / 口音" })).toContainText("英语");
+  await page.getByLabel("配音文本").fill("你好世界");
+  await page.getByRole("button", { name: "生成配音" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "确认声音任务" });
+  await expect(dialog.getByText("4 字符")).toBeVisible();
+  await expect(dialog.getByText("1 个任务")).toBeVisible();
+  expect(taskCreated).toBe(false);
+  await dialog.getByRole("button", { name: "确认生成" }).click();
+  await expect.poll(() => taskCreated).toBe(true);
+  await expect(page.getByRole("complementary", { name: "配音任务列表" }).getByText("排队中", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "TTS 配音配置" }).getByText("排队中", { exact: true })).toBeVisible();
+});
+
+test("OpenAI Audio Speech 中转可生成配音但阻止 TTS 时间戳字幕", async ({ page }) => {
+  await mockMaterialLibraryWorkflow(page);
+  const voice = {
+    voice_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    voice_type: "zh_female_fixture",
+    resource_id: "seed-tts-2.0",
+    name: "测试女声",
+    avatar_url: null,
+    gender: "female",
+    age: "adult",
+    categories: [],
+    normal_labels: ["沉稳"],
+    special_labels: [],
+    trial_url: null,
+    short_trial_url: null,
+    languages: [{ Language: "zh-cn", Text: "试听文案" }],
+    emotions: [],
+    description: "适合知识旁白",
+    is_available: true,
+    catalog_version: 1,
+    created_at: "2026-07-15T00:00:00Z",
+    updated_at: "2026-07-15T00:00:00Z",
+  };
+  await page.route(/\/api\/speech\/models\/.*\/voice-catalog(?:\?.*)?$/, async (route) => {
+    const selectedModelId = route.request().url().split("/models/")[1].split("/")[0];
+    const isGateway = selectedModelId === openAiTtsModelId;
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        model_id: selectedModelId,
+        source_model_id: ttsModelId,
+        model_settings: {
+          supported_audio_formats: ["mp3"],
+          default_audio_format: "mp3",
+          supported_sample_rates: [24000],
+          default_sample_rate: 24000,
+          max_input_characters: 3000,
+          supports_word_timestamps: !isGateway,
+          word_timestamp_languages: isGateway ? [] : ["zh-cn"],
+          parameters: { speed_ratio: { type: "number", minimum: 0.25, maximum: 4 } },
+        },
+        last_sync: null,
+        voices: [voice],
+      },
+    });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/sound-subtitle/tasks$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { tasks: [] } });
+  });
+
+  await page.goto("/materials/sound-subtitle-generation");
+  const modelSelector = page.getByRole("combobox", { name: "TTS 模型" });
+  await expect(modelSelector).toContainText("豆包 TTS");
+  await modelSelector.click();
+  await page.getByRole("option", { name: /ZeekAI Seed TTS/ }).click();
+  await expect(modelSelector).toContainText("ZeekAI Seed TTS");
+  await expect(page.getByRole("combobox", { name: "音色" })).toContainText("测试女声");
+  await page.getByLabel("配音文本").fill("你好世界");
+  await expect(page.getByRole("button", { name: "生成配音" })).toBeEnabled();
+
+  await page.getByRole("tab", { name: "字幕" }).click();
+  await expect(page.getByRole("button", { name: "TTS 字词时间戳" })).toBeDisabled();
+  await expect(page.getByText("当前 TTS 中转模型不返回可信字词时间戳，请使用已有音频 ASR。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成配音与字幕" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "已有音频 ASR" })).toBeEnabled();
 });
 
 test("内容策略页从已确认选题确认参数并生成脚本", async ({ page }) => {

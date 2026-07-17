@@ -76,6 +76,12 @@ import {
   uploadMaterial,
   validateSceneVisualManifest,
 } from "./lib/api";
+import {
+  defaultWorkspaceRoute,
+  findWorkspaceRoute,
+  findWorkspaceRouteByMenuKey,
+  normalizeWorkspacePath,
+} from "./lib/workspaceRoute";
 import { AccountStrategyPage } from "./pages/content-strategy/AccountStrategyPage";
 import { ContentStrategyPage, ScriptPreparationDialog } from "./pages/content-strategy/ContentStrategyPage";
 import { TopicHistoryPage } from "./pages/content-strategy/TopicHistoryPage";
@@ -101,6 +107,7 @@ import {
 } from "./pages/script-creation/assetModel";
 import { upsertSummary } from "./pages/script-creation/scriptModel";
 import { AssetGenerationPage } from "./pages/asset-generation/AssetGenerationPage";
+import { SoundSubtitlePage } from "./pages/sound-subtitle/SoundSubtitlePage";
 import { MaterialLibraryPage } from "./pages/material-library/MaterialLibraryPage";
 import {
   defaultMaterialFilters,
@@ -120,6 +127,7 @@ const topicGeneratorMenuKey = "topic-generator";
 const materialManagementMenuKey = "material-management";
 const materialLibraryMenuKey = "material-library";
 const assetGenerationMenuKey = "asset-generation";
+const soundSubtitleMenuKey = "sound-subtitle-generation";
 const productionMenuKey = "production";
 const workGenerationMenuKey = "work-generation";
 const scriptCreationMenuKey = "script-creation";
@@ -265,6 +273,9 @@ export default function Home() {
   const [topicSourceFilter] = useState<"all" | ContentTopicSource>("all");
   const [topicBatchFilter, setTopicBatchFilter] = useState<string | null>(null);
   const [workspaceMenus, setWorkspaceMenus] = useState<WorkspaceMenuNode[]>([]);
+  const [currentWorkspacePath, setCurrentWorkspacePath] = useState(() =>
+    typeof window === "undefined" ? "/" : normalizeWorkspacePath(window.location.pathname),
+  );
   const [selectedMenuKey, setSelectedMenuKey] = useState(defaultMenuKey);
   const [selectedMaterialSubMenuKey, setSelectedMaterialSubMenuKey] = useState(materialLibraryMenuKey);
   const [selectedScriptSubMenuKey, setSelectedScriptSubMenuKey] = useState(scriptGeneratorMenuKey);
@@ -404,6 +415,40 @@ export default function Home() {
             ? selectedProductionSubMenuKey
         : null;
 
+  const applyWorkspaceRouteState = useCallback((menuKey: string, subMenuKey: string | null) => {
+    setSelectedMenuKey(menuKey);
+    if (menuKey === contentStrategyMenuKey) {
+      setContentStrategyView(
+        subMenuKey === accountStrategyMenuKey
+          ? "account"
+          : subMenuKey === topicHistoryMenuKey
+            ? "history"
+            : "pool",
+      );
+    }
+    if (menuKey === scriptCreationMenuKey) {
+      setSelectedScriptSubMenuKey(subMenuKey || scriptGeneratorMenuKey);
+    }
+    if (menuKey === materialManagementMenuKey) {
+      setSelectedMaterialSubMenuKey(subMenuKey || materialLibraryMenuKey);
+    }
+    if (menuKey === productionMenuKey) {
+      setSelectedProductionSubMenuKey(subMenuKey || workGenerationMenuKey);
+    }
+  }, []);
+
+  const navigateWorkspacePath = useCallback((routePath: string, replace = false) => {
+    const normalizedPath = normalizeWorkspacePath(routePath);
+    if (normalizeWorkspacePath(window.location.pathname) !== normalizedPath) {
+      window.history[replace ? "replaceState" : "pushState"](
+        window.history.state,
+        "",
+        normalizedPath,
+      );
+    }
+    setCurrentWorkspacePath(normalizedPath);
+  }, []);
+
   const refreshModelOptions = useCallback(async () => {
     async function refreshTextModels() {
       setLoadingTextModels(true);
@@ -445,6 +490,14 @@ export default function Home() {
   }, [refreshModelOptions]);
 
   useEffect(() => {
+    const handlePopState = () => {
+      setCurrentWorkspacePath(normalizeWorkspacePath(window.location.pathname));
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
     let active = true;
 
     async function loadWorkspaceMenus() {
@@ -457,10 +510,6 @@ export default function Home() {
           return;
         }
         setWorkspaceMenus(response.menus);
-        if (!response.menus.some((menu) => menu.menu_key === defaultMenuKey && menu.is_enabled)) {
-          const firstEnabled = response.menus.find((menu) => menu.is_enabled);
-          setSelectedMenuKey(firstEnabled?.menu_key || defaultMenuKey);
-        }
       } catch (error) {
         if (active) {
           setWorkspaceMenus([]);
@@ -479,6 +528,29 @@ export default function Home() {
       active = false;
     };
   }, [client]);
+
+  useEffect(() => {
+    if (loadingMenus || workspaceMenus.length === 0) {
+      return;
+    }
+    const matchedRoute = findWorkspaceRoute(workspaceMenus, currentWorkspacePath);
+    if (matchedRoute) {
+      applyWorkspaceRouteState(matchedRoute.menuKey, matchedRoute.subMenuKey);
+      return;
+    }
+    const fallbackRoute = defaultWorkspaceRoute(workspaceMenus);
+    if (!fallbackRoute) {
+      return;
+    }
+    applyWorkspaceRouteState(fallbackRoute.menuKey, fallbackRoute.subMenuKey);
+    navigateWorkspacePath(fallbackRoute.routePath, true);
+  }, [
+    applyWorkspaceRouteState,
+    currentWorkspacePath,
+    loadingMenus,
+    navigateWorkspacePath,
+    workspaceMenus,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -1084,7 +1156,6 @@ export default function Home() {
     setTopicScriptError("");
     setTopicBatchFilter(null);
     setTopicBatchViewMode("latest");
-    setContentStrategyView("pool");
     setHistoryTopicBatchId(null);
     setTopicBatches([]);
     setTopicBatchesLoaded(false);
@@ -1159,54 +1230,22 @@ export default function Home() {
     );
   }
 
+  function navigateToWorkspaceMenu(menuKey: string, replace = false) {
+    const route = findWorkspaceRouteByMenuKey(workspaceMenus, menuKey);
+    if (!route) {
+      return false;
+    }
+    applyWorkspaceRouteState(route.menuKey, route.subMenuKey);
+    navigateWorkspacePath(route.routePath, replace);
+    return true;
+  }
+
   function handleSelectWorkspaceMenu(menuKey: string) {
-    setSelectedMenuKey(menuKey);
-    if (menuKey === contentStrategyMenuKey) {
-      setContentStrategyView("pool");
-    }
-    if (menuKey === scriptCreationMenuKey) {
-      setSelectedScriptSubMenuKey(scriptGeneratorMenuKey);
-    }
-    if (menuKey === productionMenuKey) {
-      setSelectedProductionSubMenuKey(workGenerationMenuKey);
-    }
+    navigateToWorkspaceMenu(menuKey);
   }
 
   function handleSelectWorkspaceSubMenu(menuKey: string) {
-    if (menuKey === accountStrategyMenuKey) {
-      setSelectedMenuKey(contentStrategyMenuKey);
-      setContentStrategyView("account");
-      return;
-    }
-    if (menuKey === topicHistoryMenuKey) {
-      setSelectedMenuKey(contentStrategyMenuKey);
-      setContentStrategyView("history");
-      return;
-    }
-    if (menuKey === topicGeneratorMenuKey) {
-      setSelectedMenuKey(contentStrategyMenuKey);
-      setContentStrategyView("pool");
-      return;
-    }
-    if (menuKey === scriptGeneratorMenuKey) {
-      setSelectedMenuKey(scriptCreationMenuKey);
-      setSelectedScriptSubMenuKey(scriptGeneratorMenuKey);
-      return;
-    }
-    if (menuKey === materialLibraryMenuKey) {
-      setSelectedMenuKey(materialManagementMenuKey);
-      setSelectedMaterialSubMenuKey(materialLibraryMenuKey);
-      return;
-    }
-    if (menuKey === assetGenerationMenuKey) {
-      setSelectedMenuKey(materialManagementMenuKey);
-      setSelectedMaterialSubMenuKey(assetGenerationMenuKey);
-      return;
-    }
-    if (menuKey === workGenerationMenuKey) {
-      setSelectedMenuKey(productionMenuKey);
-      setSelectedProductionSubMenuKey(workGenerationMenuKey);
-    }
+    navigateToWorkspaceMenu(menuKey);
   }
 
   function handleSelectHistoryTopicBatch(batchId: string) {
@@ -1601,8 +1640,7 @@ export default function Home() {
           input_version: validatedManifest.input_version,
         }),
       );
-      setSelectedMenuKey(productionMenuKey);
-      setSelectedProductionSubMenuKey(workGenerationMenuKey);
+      navigateToWorkspaceMenu(workGenerationMenuKey);
     } catch (error) {
       await refreshAssetManifest(scriptId);
       setAssetError(errorToMessage(error));
@@ -2084,7 +2122,7 @@ export default function Home() {
       setSelectedScriptId(script.script_id);
       setSelectedScript(script);
       setStatusFilter("all");
-      setSelectedMenuKey(scriptCreationMenuKey);
+      navigateToWorkspaceMenu(scriptGeneratorMenuKey);
       setScriptPreparation(null);
     } catch (error) {
       if (isModelDisabledError(error)) {
@@ -2261,7 +2299,7 @@ export default function Home() {
           }
           saving={savingAccountStrategy}
           writesDisabled={writesDisabled}
-          onBackToTopicPool={() => setContentStrategyView("pool")}
+          onBackToTopicPool={() => navigateToWorkspaceMenu(topicGeneratorMenuKey)}
           onCancel={handleCancelAccountStrategyEdit}
           onDraftNotesChange={setAccountStrategyDraftNotes}
           onFormChange={handleAccountStrategyFormChange}
@@ -2439,6 +2477,13 @@ export default function Home() {
           selectedScriptId={selectedScriptId}
           writesDisabled={writesDisabled}
           onOpenScript={handleOpenScript}
+        />
+      ) : selectedMenuKey === materialManagementMenuKey && selectedMaterialSubMenuKey === soundSubtitleMenuKey ? (
+        <SoundSubtitlePage
+          client={client}
+          projectId={selectedProject?.project_id ?? ""}
+          projectName={selectedProject?.name ?? ""}
+          writesDisabled={writesDisabled || !selectedProject}
         />
       ) : selectedMenuKey === materialManagementMenuKey ? (
         <MaterialLibraryPage

@@ -178,6 +178,99 @@ async fn local_scripted_openai_base_url(requests: Arc<Mutex<Vec<Value>>>) -> Str
     format!("http://{address}/v1")
 }
 
+async fn local_sound_openai_base_url(requests: Arc<Mutex<Vec<Value>>>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |Json(payload): Json<Value>| {
+            let requests = requests.clone();
+            async move {
+                requests.lock().unwrap().push(payload);
+                chat_response(json!({
+                    "reply": "已按沉稳知识解说推荐测试音色；请试听并确认后再生成。",
+                    "recommended_voice_type": "zh_female_fixture_mars_bigtts",
+                    "language": "zh-cn",
+                    "tts_text": "你好世界",
+                    "subtitle_segments": ["你好", "世界"],
+                    "parameters": {"speed_ratio": 1.0}
+                }))
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{address}/v1")
+}
+
+async fn insert_tts_model_with_voice(pool: &PgPool) -> Uuid {
+    let model_id: Uuid = sqlx::query_scalar(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, protocol_version,
+            auth_scheme, request_base_url, upstream_model, api_key,
+            catalog_access_key, catalog_secret_key, timeout_seconds, settings, status
+        )
+        VALUES (
+            'Doubao TTS', 'speech', '火山引擎', 'volcengine_tts_v3', 'v3',
+            'api_key', 'https://openspeech.bytedance.com/api/v3',
+            'doubao-seed-tts-2.0', 'runtime-secret', 'catalog-ak', 'catalog-sk', 120,
+            $1, 'enabled'
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(json!({
+        "resource_id": "seed-tts-2.0",
+        "supported_audio_formats": ["mp3"],
+        "default_audio_format": "mp3",
+        "supported_sample_rates": [24000],
+        "default_sample_rate": 24000,
+        "max_input_characters": 3000,
+        "max_audio_duration_seconds": null,
+        "supports_word_timestamps": true,
+        "word_timestamp_languages": ["zh-cn"],
+        "catalog_sync_interval_minutes": 1440,
+        "parameters": {"speed_ratio": {"type": "number", "minimum": 0.5, "maximum": 2.0}}
+    }))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let sync_id: Uuid = sqlx::query_scalar(
+        r#"
+        INSERT INTO voice_catalog_syncs (
+            model_id, trigger_source, status, page_count, speaker_count, completed_at
+        )
+        VALUES ($1, 'admin', 'succeeded', 1, 1, NOW())
+        RETURNING id
+        "#,
+    )
+    .bind(model_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO voice_catalog_entries (
+            model_id, voice_type, resource_id, name, languages, emotions,
+            description, is_available, first_seen_sync_id, last_seen_sync_id
+        )
+        VALUES (
+            $1, 'zh_female_fixture_mars_bigtts', 'seed-tts-2.0', '测试音色',
+            '[{"Language":"zh-cn"}]', '[{"Value":"","Label":"","Icon":""}]',
+            '沉稳知识解说', TRUE, $2, $2
+        )
+        "#,
+    )
+    .bind(model_id)
+    .bind(sync_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    model_id
+}
+
 fn app_state(test_url: String, pool: PgPool, openai_base_url: String) -> AppState {
     let llm_client = OpenAIClient::new(OpenAIConfig {
         api_protocol: ApiProtocol::OpenAiChatCompletions,
@@ -544,6 +637,106 @@ async fn conversation_routes_return_stable_errors() {
     assert_eq!(empty_message_response.status(), StatusCode::BAD_REQUEST);
     let empty_message_body = response_json(empty_message_response).await;
     assert_eq!(empty_message_body["error"], "消息不能为空");
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn sound_agent_recommends_only_catalog_voice_and_never_executes_speech_tools() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = insert_project(&test_pool).await;
+    let text_model_id = insert_enabled_text_model(&test_pool).await;
+    let speech_model_id = insert_tts_model_with_voice(&test_pool).await;
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let openai_base_url = local_sound_openai_base_url(requests.clone()).await;
+    let app = build_app_with_state(app_state(test_url, test_pool.clone(), openai_base_url));
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agent/conversations")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "agent_type": "sound",
+                        "project_id": project_id,
+                        "title": "声音建议",
+                        "metadata": {"speech_model_id": speech_model_id}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+    let conversation = response_json(create_response).await;
+    let conversation_id = conversation["conversation_id"].as_str().unwrap();
+
+    let send_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/agent/conversations/{conversation_id}/messages"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "content": "给这段知识旁白推荐沉稳声音",
+                        "model_id": text_model_id
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = send_response.status();
+    let turn = response_json(send_response).await;
+    assert_eq!(status, StatusCode::OK, "{turn}");
+    assert_eq!(
+        turn["assistant_message"]["metadata"]["recommended_voice_type"],
+        "zh_female_fixture_mars_bigtts"
+    );
+    assert_eq!(
+        turn["assistant_message"]["metadata"]["requires_confirmation"],
+        true
+    );
+    assert!(turn["assistant_message"]["metadata"]
+        .get("emotion")
+        .is_none());
+    assert_eq!(
+        turn["assistant_message"]["metadata"]["tool_execution"],
+        false
+    );
+
+    let step_types = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT step.step_type
+        FROM agent_steps step
+        JOIN agent_runs run ON run.id = step.agent_run_id
+        WHERE run.agent_type = 'sound'
+        ORDER BY step.step_order
+        "#,
+    )
+    .fetch_all(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(step_types, vec!["read_voice_catalog", "recommend_sound"]);
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sound_subtitle_tasks")
+        .fetch_one(&test_pool)
+        .await
+        .unwrap();
+    assert_eq!(task_count, 0);
+    let prompt = requests.lock().unwrap()[0].to_string();
+    assert!(prompt.contains("zh_female_fixture_mars_bigtts"));
+    assert!(!prompt.contains("runtime-secret"));
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

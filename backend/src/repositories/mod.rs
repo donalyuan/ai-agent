@@ -4,7 +4,10 @@ pub mod conversation_repository;
 pub mod material_repository;
 pub mod project_repository;
 pub mod script_repository;
+pub mod sound_subtitle_repository;
 pub mod topic_repository;
+pub mod tos_staging_tool_repository;
+pub mod voice_catalog_repository;
 pub mod workspace_menu_repository;
 
 pub use ai_model_repository::{
@@ -33,10 +36,22 @@ pub use project_repository::{
     ProjectRepository, ProjectRepositoryError, UpdateProjectStrategyProfileInput,
 };
 pub use script_repository::{PostgresScriptRepository, ScriptRepository, ScriptRepositoryError};
+pub use sound_subtitle_repository::{
+    AudioMaterialInspection, CreateSoundSubtitleTaskInput, PostgresSoundSubtitleRepository,
+    SoundSubtitleRepositoryError, SoundSubtitleTask, MAX_IN_FLIGHT_SOUND_TASKS_PER_PROJECT,
+};
 pub use topic_repository::{
     CreateContentTopicInput, CreateTopicGenerationBatchInput, CreateTopicQualityEvaluationInput,
     CreateTopicReviewSnapshotInput, PostgresTopicRepository, TopicRepository, TopicRepositoryError,
     UpdateContentTopicInput, UpdateTopicGenerationBatchInput,
+};
+pub use tos_staging_tool_repository::{
+    PostgresTosStagingToolRepository, SaveTosStagingToolConfigInput, TosStagingToolConfig,
+    TosStagingToolRepositoryError,
+};
+pub use voice_catalog_repository::{
+    PostgresVoiceCatalogRepository, VoiceCatalogEntry, VoiceCatalogRepositoryError,
+    VoiceCatalogSnapshot, VoiceCatalogSync,
 };
 pub use workspace_menu_repository::{
     PostgresWorkspaceMenuRepository, WorkspaceMenu, WorkspaceMenuRepositoryError,

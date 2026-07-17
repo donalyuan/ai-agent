@@ -63,12 +63,19 @@ services:
       - "18181:8081"
     volumes:
       - ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/services/video-worker:/app
+      - ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/backend/migrations:/app/backend-migrations:ro
       - ai-agent-generated-assets:/app/storage/assets
     environment:
       AI_AGENT_ENV: development
       DATABASE_URL: postgres://postgres:postgres@biga-postgres:5432/video_agent
       REDIS_URL: redis://bs-redis:6379/2
       ASSET_GENERATION_WORKER_ENABLED: "${ASSET_GENERATION_WORKER_ENABLED:-false}"
+      VOICE_CATALOG_WORKER_ENABLED: "${VOICE_CATALOG_WORKER_ENABLED:-false}"
+      SPEECH_GENERATION_WORKER_ENABLED: "${SPEECH_GENERATION_WORKER_ENABLED:-false}"
+      TOS_TOOL_WORKER_ENABLED: "${TOS_TOOL_WORKER_ENABLED:-false}"
+      VOICE_CATALOG_POLL_SECONDS: "${VOICE_CATALOG_POLL_SECONDS:-5}"
+      SPEECH_GENERATION_POLL_SECONDS: "${SPEECH_GENERATION_POLL_SECONDS:-5}"
+      SPEECH_WORKER_LEASE_SECONDS: "${SPEECH_WORKER_LEASE_SECONDS:-600}"
       ASSET_STORAGE_ROOT: /app/storage/assets
       ASSET_PUBLIC_PREFIX: /assets
     depends_on:

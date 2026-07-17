@@ -9,7 +9,9 @@ use crate::application::health::HealthService;
 use crate::application::materials::MaterialService;
 use crate::application::projects::ProjectService;
 use crate::application::scripts::ScriptService;
+use crate::application::sound_subtitle::SoundSubtitleService;
 use crate::application::topics::TopicService;
+use crate::application::voice_catalog::VoiceCatalogService;
 use crate::application::workspace::WorkspaceService;
 use crate::model_routing::{
     ModelClientResolver, PostgresModelClientResolver, StaticModelClientResolver,
@@ -17,7 +19,8 @@ use crate::model_routing::{
 use crate::repositories::{
     PostgresAiModelRepository, PostgresAssetGenerationRepository, PostgresConversationRepository,
     PostgresMaterialRepository, PostgresProjectRepository, PostgresScriptRepository,
-    PostgresTopicRepository, PostgresWorkspaceMenuRepository,
+    PostgresSoundSubtitleRepository, PostgresTopicRepository, PostgresTosStagingToolRepository,
+    PostgresVoiceCatalogRepository, PostgresWorkspaceMenuRepository,
 };
 use sqlx::PgPool;
 use std::{fmt, sync::Arc};
@@ -91,6 +94,8 @@ impl AppState {
             PostgresScriptRepository::new(pool.clone()),
             PostgresProjectRepository::new(pool.clone()),
             PostgresTopicRepository::new(pool.clone()),
+            PostgresAiModelRepository::new(pool.clone()),
+            PostgresVoiceCatalogRepository::new(pool.clone()),
             self.text_model_resolver(pool),
         ))
     }
@@ -146,6 +151,30 @@ impl AppState {
 
     pub(crate) fn ai_model_service(&self) -> Result<AiModelService, AppStateError> {
         Ok(AiModelService::new(self.ai_model_repository()?))
+    }
+
+    pub(crate) fn voice_catalog_service(&self) -> Result<VoiceCatalogService, AppStateError> {
+        Ok(VoiceCatalogService::new(
+            PostgresVoiceCatalogRepository::new(self.database_pool()?),
+        ))
+    }
+
+    pub(crate) fn tos_staging_tool_repository(
+        &self,
+    ) -> Result<PostgresTosStagingToolRepository, AppStateError> {
+        Ok(PostgresTosStagingToolRepository::new(self.database_pool()?))
+    }
+
+    pub(crate) fn sound_subtitle_service(&self) -> Result<SoundSubtitleService, AppStateError> {
+        let pool = self.database_pool()?;
+        Ok(SoundSubtitleService::new(
+            PostgresAiModelRepository::new(pool.clone()),
+            PostgresMaterialRepository::new(pool.clone()),
+            PostgresVoiceCatalogRepository::new(pool.clone()),
+            PostgresTosStagingToolRepository::new(pool.clone()),
+            PostgresScriptRepository::new(pool.clone()),
+            PostgresSoundSubtitleRepository::new(pool),
+        ))
     }
 
     fn text_model_resolver(&self, pool: PgPool) -> Arc<dyn ModelClientResolver> {

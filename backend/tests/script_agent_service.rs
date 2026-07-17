@@ -171,6 +171,7 @@ impl ScriptRepository for MemoryScriptRepository {
                 scene_count: script.scenes.len() as i64,
                 parent_id: script.parent_id,
                 created_at: script.created_at,
+                updated_at: script.updated_at,
             })
             .collect())
     }

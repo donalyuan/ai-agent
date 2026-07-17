@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 const navItems = [
   ["用户与权限", "/#用户与权限"],
   ["模型与路由", "/models"],
-  ["工具与 MCP", "/#工具与 MCP"],
+  ["工具与 MCP", "/tools"],
   ["任务与日志", "/#任务与日志"],
   ["成本与限额", "/#成本与限额"],
   ["环境健康", "/#环境健康"],

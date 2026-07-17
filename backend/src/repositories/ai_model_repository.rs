@@ -55,6 +55,10 @@ pub struct AiModel {
     pub upstream_model: String,
     pub api_key: String,
     pub api_secret: Option<String>,
+    pub catalog_access_key: Option<String>,
+    pub catalog_secret_key: Option<String>,
+    pub voice_catalog_source_model_id: Option<Uuid>,
+    pub voice_catalog_source_display_name: Option<String>,
     pub timeout_seconds: i32,
     pub reasoning_effort: Option<String>,
     pub max_output_tokens: Option<i32>,
@@ -95,6 +99,9 @@ pub struct CreateAiModelInput {
     pub upstream_model: String,
     pub api_key: String,
     pub api_secret: Option<String>,
+    pub catalog_access_key: Option<String>,
+    pub catalog_secret_key: Option<String>,
+    pub voice_catalog_source_model_id: Option<Uuid>,
     pub timeout_seconds: i32,
     pub reasoning_effort: Option<String>,
     pub max_output_tokens: Option<i32>,
@@ -121,6 +128,12 @@ pub struct UpdateAiModelInput {
     pub api_key: Option<String>,
     /// `None` means preserve the current optional plaintext credential.
     pub api_secret: Option<String>,
+    /// `None` means preserve the current TTS catalog Access Key.
+    pub catalog_access_key: Option<String>,
+    /// `None` means preserve the current TTS catalog Secret Key.
+    pub catalog_secret_key: Option<String>,
+    /// `None` preserves the current binding; `Some(None)` selects official sync.
+    pub voice_catalog_source_model_id: Option<Option<Uuid>>,
     pub timeout_seconds: i32,
     pub reasoning_effort: Option<String>,
     pub max_output_tokens: Option<i32>,
@@ -206,6 +219,15 @@ impl AiModelRepository for PostgresAiModelRepository {
         } else {
             None
         };
+        let (catalog_access_key, catalog_secret_key) =
+            if input.api_protocol == ApiProtocol::VolcengineTtsV3 {
+                (
+                    normalize_optional(input.catalog_access_key.clone()),
+                    normalize_optional(input.catalog_secret_key.clone()),
+                )
+            } else {
+                (None, None)
+            };
         validate_configuration(ModelConfiguration {
             model_type: input.model_type,
             api_protocol: input.api_protocol,
@@ -216,6 +238,9 @@ impl AiModelRepository for PostgresAiModelRepository {
             upstream_model: &input.upstream_model,
             api_key: &input.api_key,
             api_secret: api_secret.as_deref(),
+            catalog_access_key: catalog_access_key.as_deref(),
+            catalog_secret_key: catalog_secret_key.as_deref(),
+            voice_catalog_source_model_id: input.voice_catalog_source_model_id,
             timeout_seconds: input.timeout_seconds,
             reasoning_effort: input.reasoning_effort.as_deref(),
             max_output_tokens: input.max_output_tokens,
@@ -233,11 +258,22 @@ impl AiModelRepository for PostgresAiModelRepository {
         }
 
         let mut transaction = self.pool.begin().await?;
-        lock_model_type(&mut transaction, input.model_type).await?;
+        lock_model_scope(&mut transaction, input.model_type, input.api_protocol).await?;
+        validate_voice_catalog_source(
+            &mut transaction,
+            None,
+            input.model_type,
+            input.api_protocol,
+            &input.upstream_model,
+            &input.settings,
+            input.voice_catalog_source_model_id,
+        )
+        .await?;
         let enabled_count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM ai_models WHERE model_type = $1 AND status = 'enabled' AND deleted_at IS NULL",
+            "SELECT COUNT(*) FROM ai_models WHERE model_type = $1 AND ($1 <> 'speech' OR api_protocol = $2) AND status = 'enabled' AND deleted_at IS NULL",
         )
         .bind(input.model_type.as_str())
+        .bind(input.api_protocol.as_str())
         .fetch_one(&mut *transaction)
         .await?;
         let is_default = input.status == AiModelStatus::Enabled && enabled_count == 0;
@@ -247,12 +283,14 @@ impl AiModelRepository for PostgresAiModelRepository {
             INSERT INTO ai_models (
                 display_name, model_type, provider_name, api_protocol, protocol_version,
                 auth_scheme, request_base_url, upstream_model, api_key, api_secret,
+                catalog_access_key, catalog_secret_key, voice_catalog_source_model_id,
                 timeout_seconds, reasoning_effort, max_output_tokens, settings, sort_order,
                 remark, status, is_default, source, source_key
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                $21, $22, $23
             )
             RETURNING {MODEL_COLUMNS}
             "#
@@ -267,6 +305,9 @@ impl AiModelRepository for PostgresAiModelRepository {
         .bind(input.upstream_model.trim())
         .bind(input.api_key)
         .bind(api_secret)
+        .bind(catalog_access_key)
+        .bind(catalog_secret_key)
+        .bind(input.voice_catalog_source_model_id)
         .bind(input.timeout_seconds)
         .bind(normalize_optional(input.reasoning_effort))
         .bind(input.max_output_tokens)
@@ -279,14 +320,14 @@ impl AiModelRepository for PostgresAiModelRepository {
         .bind(normalize_optional(input.source_key))
         .fetch_one(&mut *transaction)
         .await?;
-        let model = model_from_row(row)?;
+        let model_id = model_from_row(row)?.id;
         transaction.commit().await?;
-        Ok(model)
+        self.get(model_id).await
     }
 
     async fn get(&self, id: Uuid) -> Result<AiModel, AiModelRepositoryError> {
         let row = sqlx::query(&format!(
-            "SELECT {MODEL_COLUMNS} FROM ai_models WHERE id = $1"
+            "SELECT {MODEL_COLUMNS}, {MODEL_SOURCE_DISPLAY_COLUMN} FROM ai_models WHERE id = $1"
         ))
         .bind(id)
         .fetch_optional(&self.pool)
@@ -300,7 +341,7 @@ impl AiModelRepository for PostgresAiModelRepository {
         filter: AiModelListFilter,
     ) -> Result<Vec<AiModel>, AiModelRepositoryError> {
         let mut query = QueryBuilder::<Postgres>::new(format!(
-            "SELECT {MODEL_COLUMNS} FROM ai_models WHERE 1 = 1"
+            "SELECT {MODEL_COLUMNS}, {MODEL_SOURCE_DISPLAY_COLUMN} FROM ai_models WHERE 1 = 1"
         ));
         if let Some(status) = filter.status {
             query.push(" AND status = ").push_bind(status.as_str());
@@ -373,7 +414,63 @@ impl AiModelRepository for PostgresAiModelRepository {
         } else {
             None
         };
-        lock_model_types(&mut transaction, current.model_type, input.model_type).await?;
+        let catalog_access_key = if input.api_protocol == ApiProtocol::VolcengineTtsV3 {
+            input
+                .catalog_access_key
+                .as_ref()
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .or_else(|| {
+                    (current.api_protocol == ApiProtocol::VolcengineTtsV3)
+                        .then(|| current.catalog_access_key.clone())
+                        .flatten()
+                })
+        } else {
+            None
+        };
+        let catalog_secret_key = if input.api_protocol == ApiProtocol::VolcengineTtsV3 {
+            input
+                .catalog_secret_key
+                .as_ref()
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .or_else(|| {
+                    (current.api_protocol == ApiProtocol::VolcengineTtsV3)
+                        .then(|| current.catalog_secret_key.clone())
+                        .flatten()
+                })
+        } else {
+            None
+        };
+        if !is_tts_protocol(input.api_protocol)
+            && input
+                .voice_catalog_source_model_id
+                .is_some_and(|source| source.is_some())
+        {
+            return Err(AiModelRepositoryError::InvalidConfig(
+                "voice catalog sources are only valid for Volcengine TTS".to_string(),
+            ));
+        }
+        let voice_catalog_source_model_id = if is_tts_protocol(input.api_protocol) {
+            input
+                .voice_catalog_source_model_id
+                .unwrap_or(current.voice_catalog_source_model_id)
+        } else {
+            None
+        };
+        let (catalog_access_key, catalog_secret_key) = if voice_catalog_source_model_id.is_some() {
+            (None, None)
+        } else {
+            (catalog_access_key, catalog_secret_key)
+        };
+        lock_model_scopes(
+            &mut transaction,
+            current.model_type,
+            current.api_protocol,
+            input.model_type,
+            input.api_protocol,
+        )
+        .await?;
         validate_configuration(ModelConfiguration {
             model_type: input.model_type,
             api_protocol: input.api_protocol,
@@ -384,13 +481,41 @@ impl AiModelRepository for PostgresAiModelRepository {
             upstream_model: &input.upstream_model,
             api_key: &api_key,
             api_secret: api_secret.as_deref(),
+            catalog_access_key: catalog_access_key.as_deref(),
+            catalog_secret_key: catalog_secret_key.as_deref(),
+            voice_catalog_source_model_id,
             timeout_seconds: input.timeout_seconds,
             reasoning_effort: input.reasoning_effort.as_deref(),
             max_output_tokens: input.max_output_tokens,
             settings: &input.settings,
         })?;
+        if catalog_identity_changed(
+            &current,
+            input.model_type,
+            input.api_protocol,
+            &input.upstream_model,
+            &input.settings,
+            voice_catalog_source_model_id,
+        ) {
+            ensure_voice_catalog_source_not_in_use(&mut transaction, current.id).await?;
+        }
+        validate_voice_catalog_source(
+            &mut transaction,
+            Some(id),
+            input.model_type,
+            input.api_protocol,
+            &input.upstream_model,
+            &input.settings,
+            voice_catalog_source_model_id,
+        )
+        .await?;
 
-        let is_default = if input.model_type == current.model_type {
+        let is_default = if same_default_scope(
+            current.model_type,
+            current.api_protocol,
+            input.model_type,
+            input.api_protocol,
+        ) {
             current.is_default
         } else {
             if current.is_default {
@@ -403,9 +528,10 @@ impl AiModelRepository for PostgresAiModelRepository {
                 .await?;
             }
             let enabled_in_new_type = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM ai_models WHERE model_type = $1 AND status = 'enabled' AND deleted_at IS NULL AND id <> $2",
+                "SELECT COUNT(*) FROM ai_models WHERE model_type = $1 AND ($1 <> 'speech' OR api_protocol = $2) AND status = 'enabled' AND deleted_at IS NULL AND id <> $3",
             )
             .bind(input.model_type.as_str())
+            .bind(input.api_protocol.as_str())
             .bind(id)
             .fetch_one(&mut *transaction)
             .await?;
@@ -418,10 +544,12 @@ impl AiModelRepository for PostgresAiModelRepository {
             SET model_type = $2, display_name = $3, provider_name = $4, api_protocol = $5,
                 protocol_version = $6, auth_scheme = $7, request_base_url = $8,
                 upstream_model = $9, api_key = $10, api_secret = $11,
-                timeout_seconds = $12, reasoning_effort = $13, max_output_tokens = $14,
-                settings = $15, sort_order = $16, remark = $17, is_default = $18,
+                catalog_access_key = $12, catalog_secret_key = $13,
+                voice_catalog_source_model_id = $14, timeout_seconds = $15,
+                reasoning_effort = $16, max_output_tokens = $17,
+                settings = $18, sort_order = $19, remark = $20, is_default = $21,
                 version = version + 1
-            WHERE id = $1 AND version = $19
+            WHERE id = $1 AND version = $22
             RETURNING {MODEL_COLUMNS}
             "#
         ))
@@ -436,6 +564,9 @@ impl AiModelRepository for PostgresAiModelRepository {
         .bind(input.upstream_model.trim())
         .bind(api_key)
         .bind(api_secret)
+        .bind(catalog_access_key)
+        .bind(catalog_secret_key)
+        .bind(voice_catalog_source_model_id)
         .bind(input.timeout_seconds)
         .bind(normalize_optional(input.reasoning_effort))
         .bind(input.max_output_tokens)
@@ -447,9 +578,9 @@ impl AiModelRepository for PostgresAiModelRepository {
         .fetch_optional(&mut *transaction)
         .await?
         .ok_or(AiModelRepositoryError::VersionConflict(id))?;
-        let model = model_from_row(row)?;
+        let model_id = model_from_row(row)?.id;
         transaction.commit().await?;
-        Ok(model)
+        self.get(model_id).await
     }
 
     async fn set_default(&self, id: Uuid, version: i64) -> Result<AiModel, AiModelRepositoryError> {
@@ -457,9 +588,15 @@ impl AiModelRepository for PostgresAiModelRepository {
         let current = get_for_update(&mut transaction, id).await?;
         ensure_version(&current, version)?;
         ensure_enabled(&current)?;
-        lock_model_type(&mut transaction, current.model_type).await?;
+        lock_model_scope(&mut transaction, current.model_type, current.api_protocol).await?;
         if !current.is_default {
-            clear_other_defaults(&mut transaction, current.model_type, id).await?;
+            clear_other_defaults(
+                &mut transaction,
+                current.model_type,
+                current.api_protocol,
+                id,
+            )
+            .await?;
         }
         let row = sqlx::query(&format!(
             r#"
@@ -474,9 +611,9 @@ impl AiModelRepository for PostgresAiModelRepository {
         .fetch_optional(&mut *transaction)
         .await?
         .ok_or(AiModelRepositoryError::VersionConflict(id))?;
-        let model = model_from_row(row)?;
+        let model_id = model_from_row(row)?.id;
         transaction.commit().await?;
-        Ok(model)
+        self.get(model_id).await
     }
 
     async fn change_status(
@@ -494,13 +631,17 @@ impl AiModelRepository for PostgresAiModelRepository {
         if current.status == AiModelStatus::Deleted {
             return Err(AiModelRepositoryError::Disabled(input.id));
         }
-        lock_model_type(&mut transaction, current.model_type).await?;
+        lock_model_scope(&mut transaction, current.model_type, current.api_protocol).await?;
+        if input.status == AiModelStatus::Disabled {
+            ensure_voice_catalog_source_not_in_use(&mut transaction, current.id).await?;
+        }
 
         let make_default = if input.status == AiModelStatus::Enabled {
             sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM ai_models WHERE model_type = $1 AND status = 'enabled' AND deleted_at IS NULL AND id <> $2",
+                "SELECT COUNT(*) FROM ai_models WHERE model_type = $1 AND ($1 <> 'speech' OR api_protocol = $2) AND status = 'enabled' AND deleted_at IS NULL AND id <> $3",
             )
             .bind(current.model_type.as_str())
+            .bind(current.api_protocol.as_str())
             .bind(current.id)
             .fetch_one(&mut *transaction)
             .await?
@@ -533,9 +674,9 @@ impl AiModelRepository for PostgresAiModelRepository {
         .fetch_optional(&mut *transaction)
         .await?
         .ok_or(AiModelRepositoryError::VersionConflict(input.id))?;
-        let model = model_from_row(row)?;
+        let model_id = model_from_row(row)?.id;
         transaction.commit().await?;
-        Ok(model)
+        self.get(model_id).await
     }
 
     async fn delete(
@@ -548,7 +689,8 @@ impl AiModelRepository for PostgresAiModelRepository {
         if current.status == AiModelStatus::Deleted {
             return Ok(DeleteAiModelOutcome::Logical(Box::new(current)));
         }
-        lock_model_type(&mut transaction, current.model_type).await?;
+        lock_model_scope(&mut transaction, current.model_type, current.api_protocol).await?;
+        ensure_voice_catalog_source_not_in_use(&mut transaction, current.id).await?;
         if current.is_default {
             replace_or_clear_default(
                 &mut transaction,
@@ -562,7 +704,10 @@ impl AiModelRepository for PostgresAiModelRepository {
             r#"
             SELECT
                 (SELECT COUNT(*) FROM agent_runs WHERE model_id = $1) +
-                (SELECT COUNT(*) FROM asset_generation_tasks WHERE model_id = $1)
+                (SELECT COUNT(*) FROM asset_generation_tasks WHERE model_id = $1) +
+                (SELECT COUNT(*) FROM voice_catalog_syncs WHERE model_id = $1) +
+                (SELECT COUNT(*) FROM sound_subtitle_tasks WHERE model_id = $1) +
+                (SELECT COUNT(*) FROM ai_models WHERE voice_catalog_source_model_id = $1)
             "#,
         )
         .bind(input.id)
@@ -624,6 +769,9 @@ impl AiModelRepository for PostgresAiModelRepository {
             upstream_model: &model.upstream_model,
             api_key: &model.api_key,
             api_secret: model.api_secret.as_deref(),
+            catalog_access_key: model.catalog_access_key.as_deref(),
+            catalog_secret_key: model.catalog_secret_key.as_deref(),
+            voice_catalog_source_model_id: model.voice_catalog_source_model_id,
             timeout_seconds: model.timeout_seconds,
             reasoning_effort: model.reasoning_effort.as_deref(),
             max_output_tokens: model.max_output_tokens,
@@ -672,9 +820,17 @@ impl AiModelRepository for PostgresAiModelRepository {
 const MODEL_COLUMNS: &str = r#"
     id, display_name, model_type, provider_name, api_protocol, protocol_version,
     auth_scheme, request_base_url, upstream_model, api_key, api_secret,
-    timeout_seconds, reasoning_effort, max_output_tokens, settings, sort_order,
-    remark, status, is_default, last_call_status, last_call_at, last_error_summary,
-    source, source_key, version, deleted_at, created_at, updated_at
+    catalog_access_key, catalog_secret_key, voice_catalog_source_model_id,
+    timeout_seconds, reasoning_effort, max_output_tokens, settings, sort_order, remark, status, is_default,
+    last_call_status, last_call_at, last_error_summary, source, source_key,
+    version, deleted_at, created_at, updated_at
+"#;
+
+const MODEL_SOURCE_DISPLAY_COLUMN: &str = r#"
+    (SELECT catalog_source.display_name
+     FROM ai_models catalog_source
+     WHERE catalog_source.id = ai_models.voice_catalog_source_model_id)
+    AS voice_catalog_source_display_name
 "#;
 
 struct ModelConfiguration<'a> {
@@ -687,6 +843,9 @@ struct ModelConfiguration<'a> {
     upstream_model: &'a str,
     api_key: &'a str,
     api_secret: Option<&'a str>,
+    catalog_access_key: Option<&'a str>,
+    catalog_secret_key: Option<&'a str>,
+    voice_catalog_source_model_id: Option<Uuid>,
     timeout_seconds: i32,
     reasoning_effort: Option<&'a str>,
     max_output_tokens: Option<i32>,
@@ -730,6 +889,43 @@ fn validate_configuration(config: ModelConfiguration<'_>) -> Result<(), AiModelR
             "API Secret is required for access_key_secret".to_string(),
         ));
     }
+    let catalog_credentials = (
+        config.catalog_access_key.unwrap_or_default().trim(),
+        config.catalog_secret_key.unwrap_or_default().trim(),
+    );
+    if config.api_protocol == ApiProtocol::VolcengineTtsV3 {
+        match config.voice_catalog_source_model_id {
+            None if catalog_credentials.0.is_empty() || catalog_credentials.1.is_empty() => {
+                return Err(AiModelRepositoryError::InvalidConfig(
+                    "TTS catalog Access Key and Secret Key are required".to_string(),
+                ));
+            }
+            Some(_) if !catalog_credentials.0.is_empty() || !catalog_credentials.1.is_empty() => {
+                return Err(AiModelRepositoryError::InvalidConfig(
+                    "shared TTS catalog models must not store catalog credentials".to_string(),
+                ));
+            }
+            _ => {}
+        }
+    } else if config.api_protocol == ApiProtocol::OpenAiAudioSpeech {
+        if config.voice_catalog_source_model_id.is_none() {
+            return Err(AiModelRepositoryError::InvalidConfig(
+                "OpenAI Audio Speech models require an official voice catalog source".to_string(),
+            ));
+        }
+        if !catalog_credentials.0.is_empty() || !catalog_credentials.1.is_empty() {
+            return Err(AiModelRepositoryError::InvalidConfig(
+                "OpenAI Audio Speech models must not store catalog credentials".to_string(),
+            ));
+        }
+    } else if config.voice_catalog_source_model_id.is_some()
+        || !catalog_credentials.0.is_empty()
+        || !catalog_credentials.1.is_empty()
+    {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "catalog credentials and sources are only valid for Volcengine TTS".to_string(),
+        ));
+    }
     if !(1..=3600).contains(&config.timeout_seconds) {
         return Err(AiModelRepositoryError::InvalidConfig(
             "timeout_seconds must be between 1 and 3600".to_string(),
@@ -750,7 +946,7 @@ fn validate_configuration(config: ModelConfiguration<'_>) -> Result<(), AiModelR
     let settings = ModelSettings::parse(config.model_type, config.settings.clone())
         .map_err(|error| AiModelRepositoryError::InvalidConfig(error.to_string()))?;
     if config.api_protocol == ApiProtocol::VolcengineArkImages {
-        let ModelSettings::Image(settings) = settings else {
+        let ModelSettings::Image(settings) = &settings else {
             return Err(AiModelRepositoryError::InvalidConfig(
                 "Ark Images protocol requires image settings".to_string(),
             ));
@@ -761,35 +957,112 @@ fn validate_configuration(config: ModelConfiguration<'_>) -> Result<(), AiModelR
             ));
         }
     }
+    if matches!(
+        config.api_protocol,
+        ApiProtocol::VolcengineTtsV3
+            | ApiProtocol::OpenAiAudioSpeech
+            | ApiProtocol::VolcengineAsrV3
+    ) {
+        let ModelSettings::Speech(settings) = &settings else {
+            return Err(AiModelRepositoryError::InvalidConfig(
+                "Volcengine speech protocols require speech settings".to_string(),
+            ));
+        };
+        match config.api_protocol {
+            ApiProtocol::VolcengineTtsV3 => {
+                if settings.resource_id != "seed-tts-2.0"
+                    || settings.max_input_characters.is_none()
+                    || settings.max_audio_duration_seconds.is_some()
+                    || settings.catalog_sync_interval_minutes.is_none()
+                    || !settings.supports_word_timestamps
+                {
+                    return Err(AiModelRepositoryError::InvalidConfig(
+                        "Volcengine TTS settings are incompatible with seed-tts-2.0".to_string(),
+                    ));
+                }
+            }
+            ApiProtocol::OpenAiAudioSpeech => {
+                if settings.resource_id != "seed-tts-2.0"
+                    || settings.max_input_characters.is_none()
+                    || settings.max_audio_duration_seconds.is_some()
+                    || settings.catalog_sync_interval_minutes.is_some()
+                    || settings.supports_word_timestamps
+                    || !settings.word_timestamp_languages.is_empty()
+                {
+                    return Err(AiModelRepositoryError::InvalidConfig(
+                        "OpenAI Audio Speech settings are incompatible with audio-only TTS"
+                            .to_string(),
+                    ));
+                }
+            }
+            ApiProtocol::VolcengineAsrV3 => {
+                if settings.resource_id != "volc.seedasr.auc"
+                    || settings.max_audio_duration_seconds.is_none()
+                    || settings.max_input_characters.is_some()
+                    || settings.catalog_sync_interval_minutes.is_some()
+                    || !settings.supports_word_timestamps
+                {
+                    return Err(AiModelRepositoryError::InvalidConfig(
+                        "Volcengine ASR settings are incompatible with volc.seedasr.auc"
+                            .to_string(),
+                    ));
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
     Ok(())
 }
 
-async fn lock_model_type(
+fn default_scope_key(model_type: ModelType, api_protocol: ApiProtocol) -> String {
+    if model_type == ModelType::Speech {
+        format!("{}:{}", model_type.as_str(), api_protocol.as_str())
+    } else {
+        model_type.as_str().to_string()
+    }
+}
+
+fn same_default_scope(
+    first_type: ModelType,
+    first_protocol: ApiProtocol,
+    second_type: ModelType,
+    second_protocol: ApiProtocol,
+) -> bool {
+    first_type == second_type
+        && (first_type != ModelType::Speech || first_protocol == second_protocol)
+}
+
+async fn lock_model_scope(
     transaction: &mut Transaction<'_, Postgres>,
     model_type: ModelType,
+    api_protocol: ApiProtocol,
 ) -> Result<(), AiModelRepositoryError> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ai_models:' || $1))")
-        .bind(model_type.as_str())
+        .bind(default_scope_key(model_type, api_protocol))
         .execute(&mut **transaction)
         .await?;
     Ok(())
 }
 
-async fn lock_model_types(
+async fn lock_model_scopes(
     transaction: &mut Transaction<'_, Postgres>,
-    first: ModelType,
-    second: ModelType,
+    first_type: ModelType,
+    first_protocol: ApiProtocol,
+    second_type: ModelType,
+    second_protocol: ApiProtocol,
 ) -> Result<(), AiModelRepositoryError> {
-    if first == second {
-        return lock_model_type(transaction, first).await;
+    if same_default_scope(first_type, first_protocol, second_type, second_protocol) {
+        return lock_model_scope(transaction, first_type, first_protocol).await;
     }
-    let (first, second) = if first.as_str() < second.as_str() {
-        (first, second)
+    let first_key = default_scope_key(first_type, first_protocol);
+    let second_key = default_scope_key(second_type, second_protocol);
+    if first_key < second_key {
+        lock_model_scope(transaction, first_type, first_protocol).await?;
+        lock_model_scope(transaction, second_type, second_protocol).await
     } else {
-        (second, first)
-    };
-    lock_model_type(transaction, first).await?;
-    lock_model_type(transaction, second).await
+        lock_model_scope(transaction, second_type, second_protocol).await?;
+        lock_model_scope(transaction, first_type, first_protocol).await
+    }
 }
 
 async fn get_for_update(
@@ -825,16 +1098,20 @@ fn ensure_enabled(model: &AiModel) -> Result<(), AiModelRepositoryError> {
 async fn clear_other_defaults(
     transaction: &mut Transaction<'_, Postgres>,
     model_type: ModelType,
+    api_protocol: ApiProtocol,
     target_id: Uuid,
 ) -> Result<(), AiModelRepositoryError> {
     sqlx::query(
         r#"
         UPDATE ai_models
         SET is_default = FALSE, version = version + 1
-        WHERE model_type = $1 AND is_default = TRUE AND id <> $2 AND deleted_at IS NULL
+        WHERE model_type = $1
+          AND ($1 <> 'speech' OR api_protocol = $2)
+          AND is_default = TRUE AND id <> $3 AND deleted_at IS NULL
         "#,
     )
     .bind(model_type.as_str())
+    .bind(api_protocol.as_str())
     .bind(target_id)
     .execute(&mut **transaction)
     .await?;
@@ -850,10 +1127,13 @@ async fn replace_or_clear_default(
     let other_enabled_count = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*) FROM ai_models
-        WHERE model_type = $1 AND status = 'enabled' AND deleted_at IS NULL AND id <> $2
+        WHERE model_type = $1
+          AND ($1 <> 'speech' OR api_protocol = $2)
+          AND status = 'enabled' AND deleted_at IS NULL AND id <> $3
         "#,
     )
     .bind(current.model_type.as_str())
+    .bind(current.api_protocol.as_str())
     .bind(current.id)
     .fetch_one(&mut **transaction)
     .await?;
@@ -869,6 +1149,8 @@ async fn replace_or_clear_default(
     let replacement = get_for_update(transaction, replacement_id).await?;
     if replacement.id == current.id
         || replacement.model_type != current.model_type
+        || (current.model_type == ModelType::Speech
+            && replacement.api_protocol != current.api_protocol)
         || replacement.status != AiModelStatus::Enabled
         || replacement.deleted_at.is_some()
     {
@@ -878,10 +1160,13 @@ async fn replace_or_clear_default(
         r#"
         UPDATE ai_models
         SET is_default = FALSE
-        WHERE model_type = $1 AND is_default = TRUE AND id <> $2 AND deleted_at IS NULL
+        WHERE model_type = $1
+          AND ($1 <> 'speech' OR api_protocol = $2)
+          AND is_default = TRUE AND id <> $3 AND deleted_at IS NULL
         "#,
     )
     .bind(current.model_type.as_str())
+    .bind(current.api_protocol.as_str())
     .bind(replacement.id)
     .execute(&mut **transaction)
     .await?;
@@ -889,6 +1174,120 @@ async fn replace_or_clear_default(
         .bind(replacement.id)
         .execute(&mut **transaction)
         .await?;
+    Ok(())
+}
+
+fn catalog_resource_id(settings: &Value) -> Option<&str> {
+    settings
+        .get("resource_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn catalog_identity_changed(
+    current: &AiModel,
+    model_type: ModelType,
+    api_protocol: ApiProtocol,
+    upstream_model: &str,
+    settings: &Value,
+    voice_catalog_source_model_id: Option<Uuid>,
+) -> bool {
+    current.model_type != model_type
+        || current.api_protocol != api_protocol
+        || current.upstream_model.trim() != upstream_model.trim()
+        || catalog_resource_id(&current.settings) != catalog_resource_id(settings)
+        || current.voice_catalog_source_model_id != voice_catalog_source_model_id
+}
+
+async fn validate_voice_catalog_source(
+    transaction: &mut Transaction<'_, Postgres>,
+    model_id: Option<Uuid>,
+    model_type: ModelType,
+    api_protocol: ApiProtocol,
+    upstream_model: &str,
+    settings: &Value,
+    source_model_id: Option<Uuid>,
+) -> Result<(), AiModelRepositoryError> {
+    let Some(source_model_id) = source_model_id else {
+        return Ok(());
+    };
+    if model_id == Some(source_model_id) {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "voice catalog source cannot reference the model itself".to_string(),
+        ));
+    }
+    if model_type != ModelType::Speech || !is_tts_protocol(api_protocol) {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "voice catalog sources are only valid for TTS protocols".to_string(),
+        ));
+    }
+    let row = sqlx::query(
+        r#"
+        SELECT model_type, api_protocol, upstream_model, settings, status, deleted_at,
+               catalog_access_key, catalog_secret_key, voice_catalog_source_model_id
+        FROM ai_models
+        WHERE id = $1
+        FOR KEY SHARE
+        "#,
+    )
+    .bind(source_model_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or_else(|| {
+        AiModelRepositoryError::InvalidConfig("voice catalog source does not exist".to_string())
+    })?;
+    let source_settings = row.get::<Value, _>("settings");
+    let valid_source = row.get::<String, _>("model_type") == "speech"
+        && row.get::<String, _>("api_protocol") == ApiProtocol::VolcengineTtsV3.as_str()
+        && row.get::<String, _>("status") == AiModelStatus::Enabled.as_str()
+        && row.get::<Option<DateTime<Utc>>, _>("deleted_at").is_none()
+        && row
+            .get::<Option<Uuid>, _>("voice_catalog_source_model_id")
+            .is_none()
+        && row
+            .get::<Option<String>, _>("catalog_access_key")
+            .is_some_and(|value| !value.trim().is_empty())
+        && row
+            .get::<Option<String>, _>("catalog_secret_key")
+            .is_some_and(|value| !value.trim().is_empty());
+    if !valid_source {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "voice catalog source must be an enabled official TTS catalog model".to_string(),
+        ));
+    }
+    if row.get::<String, _>("upstream_model").trim() != upstream_model.trim()
+        || catalog_resource_id(&source_settings) != catalog_resource_id(settings)
+    {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "voice catalog source must match upstream model and resource ID".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn ensure_voice_catalog_source_not_in_use(
+    transaction: &mut Transaction<'_, Postgres>,
+    source_model_id: Uuid,
+) -> Result<(), AiModelRepositoryError> {
+    let is_referenced = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM ai_models
+            WHERE voice_catalog_source_model_id = $1
+              AND deleted_at IS NULL
+        )
+        "#,
+    )
+    .bind(source_model_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if is_referenced {
+        return Err(AiModelRepositoryError::VoiceCatalogSourceInUse(
+            source_model_id,
+        ));
+    }
     Ok(())
 }
 
@@ -912,6 +1311,12 @@ fn model_from_row(row: sqlx::postgres::PgRow) -> Result<AiModel, AiModelReposito
         upstream_model: row.get("upstream_model"),
         api_key: row.get("api_key"),
         api_secret: row.get("api_secret"),
+        catalog_access_key: row.get("catalog_access_key"),
+        catalog_secret_key: row.get("catalog_secret_key"),
+        voice_catalog_source_model_id: row.get("voice_catalog_source_model_id"),
+        voice_catalog_source_display_name: row
+            .try_get("voice_catalog_source_display_name")
+            .unwrap_or(None),
         timeout_seconds: row.get("timeout_seconds"),
         reasoning_effort: row.get("reasoning_effort"),
         max_output_tokens: row.get("max_output_tokens"),
@@ -941,6 +1346,15 @@ fn normalize_request_base_url(
     protocol: ApiProtocol,
     value: &str,
 ) -> Result<String, AiModelRepositoryError> {
+    if protocol == ApiProtocol::OpenAiAudioSpeech {
+        return normalize_openai_audio_speech_base_url(value);
+    }
+    if matches!(
+        protocol,
+        ApiProtocol::VolcengineTtsV3 | ApiProtocol::VolcengineAsrV3
+    ) {
+        return normalize_speech_request_base_url(protocol, value);
+    }
     if protocol != ApiProtocol::VolcengineArkImages {
         return Ok(normalize_base_url(value));
     }
@@ -971,6 +1385,77 @@ fn normalize_request_base_url(
     Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
+/// OpenAI-compatible TTS stores the `/v1` root; the Worker appends `/audio/speech`.
+fn normalize_openai_audio_speech_base_url(value: &str) -> Result<String, AiModelRepositoryError> {
+    let mut url = Url::parse(value.trim()).map_err(|error| {
+        AiModelRepositoryError::InvalidConfig(format!(
+            "invalid OpenAI Audio Speech request URL: {error}"
+        ))
+    })?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "OpenAI Audio Speech request URL must be HTTP(S) without query or fragment".to_string(),
+        ));
+    }
+    let path = url.path().trim_end_matches('/').to_string();
+    let root_path = path.strip_suffix("/audio/speech").unwrap_or(path.as_str());
+    if !root_path.ends_with("/v1") {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "OpenAI Audio Speech request URL path must end with /v1 or /v1/audio/speech"
+                .to_string(),
+        ));
+    }
+    url.set_path(root_path);
+    Ok(url.to_string().trim_end_matches('/').to_string())
+}
+
+fn is_tts_protocol(protocol: ApiProtocol) -> bool {
+    matches!(
+        protocol,
+        ApiProtocol::VolcengineTtsV3 | ApiProtocol::OpenAiAudioSpeech
+    )
+}
+
+/// Speech 配置保存 `/api/v3` 根地址，稳定 TTS/ASR 路径由 Worker 追加。
+fn normalize_speech_request_base_url(
+    protocol: ApiProtocol,
+    value: &str,
+) -> Result<String, AiModelRepositoryError> {
+    let mut url = Url::parse(value.trim()).map_err(|error| {
+        AiModelRepositoryError::InvalidConfig(format!("invalid speech request URL: {error}"))
+    })?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "speech request URL must be HTTP(S) without query or fragment".to_string(),
+        ));
+    }
+    let path = url.path().trim_end_matches('/').to_string();
+    let suffixes: &[&str] = match protocol {
+        ApiProtocol::VolcengineTtsV3 => &["/tts/unidirectional"],
+        ApiProtocol::VolcengineAsrV3 => &["/auc/bigmodel/submit", "/auc/bigmodel/query"],
+        _ => &[],
+    };
+    let root_path = suffixes
+        .iter()
+        .find_map(|suffix| path.strip_suffix(suffix))
+        .unwrap_or(path.as_str());
+    if !root_path.ends_with("/api/v3") {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "speech request URL path must end with /api/v3 or a supported V3 endpoint".to_string(),
+        ));
+    }
+    url.set_path(root_path);
+    Ok(url.to_string().trim_end_matches('/').to_string())
+}
+
 fn normalize_optional(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let value = value.trim().to_string();
@@ -995,6 +1480,7 @@ pub enum AiModelRepositoryError {
     ReplacementRequired(Uuid),
     InvalidReplacement(Uuid),
     NoDefaultConfirmation(Uuid),
+    VoiceCatalogSourceInUse(Uuid),
     InvalidConfig(String),
     Storage(String),
 }
@@ -1028,6 +1514,9 @@ impl fmt::Display for AiModelRepositoryError {
                     formatter,
                     "explicit no-default confirmation is required for {id}"
                 )
+            }
+            Self::VoiceCatalogSourceInUse(id) => {
+                write!(formatter, "voice catalog source is still referenced: {id}")
             }
             Self::InvalidConfig(message) => write!(formatter, "invalid model config: {message}"),
             Self::Storage(message) => write!(formatter, "model storage error: {message}"),

@@ -6,7 +6,8 @@ pub mod registry;
 pub use llm::{LLMClient, LLMError, LLMJsonSchema, LLMPrompt, OpenAIClient, OpenAIConfig};
 pub use registry::{
     ApiProtocol, AuthScheme, ImageModelSettings, ModelExecutionSnapshot, ModelRuntimeConfig,
-    ModelSettings, ModelSettingsError, ModelType, TextModelSettings, VideoModelSettings,
+    ModelSettings, ModelSettingsError, ModelType, SpeechModelSettings, TextModelSettings,
+    VideoModelSettings,
 };
 
 pub const CRATE_PURPOSE: &str = "novex-model";

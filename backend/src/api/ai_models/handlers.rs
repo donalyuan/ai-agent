@@ -31,7 +31,7 @@ pub(super) async fn create_ai_model(
     State(state): State<AppState>,
     Json(request): Json<CreateAiModelRequest>,
 ) -> Result<(StatusCode, Json<AiModelAdminResponse>), ModelApiError> {
-    let (input, requested_default) = request.into_input();
+    let (input, requested_default) = request.into_input()?;
     let model = state
         .ai_model_service()?
         .create(input, requested_default)
@@ -44,7 +44,7 @@ pub(super) async fn update_ai_model(
     Path(model_id): Path<Uuid>,
     Json(request): Json<UpdateAiModelRequest>,
 ) -> Result<Json<AiModelAdminResponse>, ModelApiError> {
-    let (input, requested_default) = request.into_input();
+    let (input, requested_default) = request.into_input()?;
     let model = state
         .ai_model_service()?
         .update(model_id, input, requested_default)
@@ -112,4 +112,51 @@ pub(super) async fn list_model_options(
         .map(ModelOptionResponse::from)
         .collect();
     Ok(Json(ModelOptionListResponse { models }))
+}
+
+pub(super) async fn request_admin_voice_catalog_sync(
+    State(state): State<AppState>,
+    Path(model_id): Path<Uuid>,
+) -> Result<(StatusCode, Json<VoiceCatalogSyncResponse>), ModelApiError> {
+    request_voice_catalog_sync(state, model_id, "admin").await
+}
+
+pub(super) async fn request_workspace_voice_catalog_sync(
+    State(state): State<AppState>,
+    Path(model_id): Path<Uuid>,
+) -> Result<(StatusCode, Json<VoiceCatalogSyncResponse>), ModelApiError> {
+    request_voice_catalog_sync(state, model_id, "workspace").await
+}
+
+async fn request_voice_catalog_sync(
+    state: AppState,
+    model_id: Uuid,
+    trigger_source: &str,
+) -> Result<(StatusCode, Json<VoiceCatalogSyncResponse>), ModelApiError> {
+    let (sync, created) = state
+        .voice_catalog_service()?
+        .request_sync(model_id, trigger_source)
+        .await?;
+    Ok((
+        if created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(sync.into()),
+    ))
+}
+
+pub(super) async fn get_voice_catalog(
+    State(state): State<AppState>,
+    Path(model_id): Path<Uuid>,
+    Query(query): Query<VoiceCatalogQuery>,
+) -> Result<Json<VoiceCatalogResponse>, ModelApiError> {
+    Ok(Json(
+        state
+            .voice_catalog_service()?
+            .catalog(model_id, query.include_unavailable)
+            .await?
+            .into(),
+    ))
 }

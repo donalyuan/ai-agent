@@ -12,6 +12,18 @@ from video_worker.asset_generation import (
     run_next_image_task,
 )
 from video_worker.model_registry import PostgresModelRegistry
+from video_worker.speech_generation import (
+    LocalSpeechStorage,
+    PostgresSpeechStore,
+    run_next_audio_inspection,
+    run_next_speech_task,
+    run_next_tos_cleanup,
+)
+from video_worker.tos_tool_check import (
+    PostgresTosCheckStore,
+    run_next_tos_connection_check,
+)
+from video_worker.voice_catalog import PostgresVoiceCatalogStore, run_next_voice_catalog_sync
 
 
 def default_process_next_image_task() -> bool:
@@ -33,16 +45,82 @@ def default_process_next_image_task() -> bool:
     )
 
 
+def default_process_next_voice_catalog_sync() -> bool:
+    database_url = os.getenv(
+        "DATABASE_URL",
+        "postgres://postgres:postgres@biga-postgres:5432/video_agent",
+    )
+    return run_next_voice_catalog_sync(PostgresVoiceCatalogStore(database_url))
+
+
+def default_process_next_speech_work() -> bool:
+    database_url = os.getenv(
+        "DATABASE_URL",
+        "postgres://postgres:postgres@biga-postgres:5432/video_agent",
+    )
+    store = PostgresSpeechStore(database_url)
+    registry = PostgresModelRegistry(database_url)
+    storage = LocalSpeechStorage(
+        Path(os.getenv("ASSET_STORAGE_ROOT", "/app/storage/assets")),
+        public_prefix=os.getenv("ASSET_PUBLIC_PREFIX", "/assets"),
+    )
+    store.recover_stale_work(
+        int(os.getenv("SPEECH_WORKER_LEASE_SECONDS", "600"))
+    )
+    processed = run_next_tos_cleanup(store, registry)
+    processed = run_next_audio_inspection(store, storage) or processed
+    processed = run_next_speech_task(store, registry, storage) or processed
+    return processed
+
+
+def default_process_next_tos_tool_work() -> bool:
+    database_url = os.getenv(
+        "DATABASE_URL",
+        "postgres://postgres:postgres@biga-postgres:5432/video_agent",
+    )
+    store = PostgresTosCheckStore(database_url)
+    store.recover_stale_checks(
+        int(os.getenv("TOS_TOOL_WORKER_LEASE_SECONDS", "600"))
+    )
+    return run_next_tos_connection_check(store)
+
+
 def create_app(
     process_next_image_task: Callable[[], bool] | None = None,
+    process_next_voice_catalog: Callable[[], bool] | None = None,
+    process_next_speech_work: Callable[[], bool] | None = None,
+    process_next_tos_tool_work: Callable[[], bool] | None = None,
     enable_background_worker: bool | None = None,
+    enable_voice_catalog_worker: bool | None = None,
+    enable_speech_worker: bool | None = None,
+    enable_tos_tool_worker: bool | None = None,
 ) -> FastAPI:
     app = FastAPI(title="novex-video-worker")
     processor = process_next_image_task or default_process_next_image_task
+    voice_catalog_processor = (
+        process_next_voice_catalog or default_process_next_voice_catalog_sync
+    )
+    speech_processor = process_next_speech_work or default_process_next_speech_work
+    tos_tool_processor = process_next_tos_tool_work or default_process_next_tos_tool_work
     background_enabled = (
         enable_background_worker
         if enable_background_worker is not None
         else os.getenv("ASSET_GENERATION_WORKER_ENABLED", "false").lower() == "true"
+    )
+    voice_catalog_background_enabled = (
+        enable_voice_catalog_worker
+        if enable_voice_catalog_worker is not None
+        else os.getenv("VOICE_CATALOG_WORKER_ENABLED", "false").lower() == "true"
+    )
+    speech_background_enabled = (
+        enable_speech_worker
+        if enable_speech_worker is not None
+        else os.getenv("SPEECH_GENERATION_WORKER_ENABLED", "false").lower() == "true"
+    )
+    tos_tool_background_enabled = (
+        enable_tos_tool_worker
+        if enable_tos_tool_worker is not None
+        else os.getenv("TOS_TOOL_WORKER_ENABLED", "false").lower() == "true"
     )
 
     @app.get("/health")
@@ -51,11 +129,30 @@ def create_app(
             "service": "novex-video-worker",
             "status": "ok",
             "asset_generation_worker": "enabled" if background_enabled else "disabled",
+            "voice_catalog_worker": (
+                "enabled" if voice_catalog_background_enabled else "disabled"
+            ),
+            "speech_generation_worker": (
+                "enabled" if speech_background_enabled else "disabled"
+            ),
+            "tos_tool_worker": "enabled" if tos_tool_background_enabled else "disabled",
         }
 
     @app.post("/asset-generation/process-next")
     def process_next() -> dict[str, bool]:
         return {"processed": bool(processor())}
+
+    @app.post("/speech/voice-catalog/process-next")
+    def process_next_voice_catalog_sync() -> dict[str, bool]:
+        return {"processed": bool(voice_catalog_processor())}
+
+    @app.post("/speech/process-next")
+    def process_next_speech() -> dict[str, bool]:
+        return {"processed": bool(speech_processor())}
+
+    @app.post("/tools/tos-staging/process-next")
+    def process_next_tos_tool() -> dict[str, bool]:
+        return {"processed": bool(tos_tool_processor())}
 
     if background_enabled:
         interval_seconds = float(os.getenv("ASSET_GENERATION_POLL_SECONDS", "5"))
@@ -75,6 +172,74 @@ def create_app(
         @app.on_event("shutdown")
         async def stop_asset_generation_worker() -> None:
             task = getattr(app.state, "asset_generation_worker_task", None)
+            if task is not None:
+                task.cancel()
+
+    if voice_catalog_background_enabled:
+        voice_catalog_interval_seconds = float(
+            os.getenv("VOICE_CATALOG_POLL_SECONDS", "5")
+        )
+
+        @app.on_event("startup")
+        async def start_voice_catalog_worker() -> None:
+            async def loop() -> None:
+                while True:
+                    try:
+                        await asyncio.to_thread(voice_catalog_processor)
+                    except Exception as error:  # pragma: no cover - logged in runtime.
+                        print(
+                            "voice catalog worker error: "
+                            f"{error.__class__.__name__}"
+                        )
+                    await asyncio.sleep(voice_catalog_interval_seconds)
+
+            app.state.voice_catalog_worker_task = asyncio.create_task(loop())
+
+        @app.on_event("shutdown")
+        async def stop_voice_catalog_worker() -> None:
+            task = getattr(app.state, "voice_catalog_worker_task", None)
+            if task is not None:
+                task.cancel()
+
+    if speech_background_enabled:
+        speech_interval_seconds = float(os.getenv("SPEECH_GENERATION_POLL_SECONDS", "5"))
+
+        @app.on_event("startup")
+        async def start_speech_generation_worker() -> None:
+            async def loop() -> None:
+                while True:
+                    try:
+                        await asyncio.to_thread(speech_processor)
+                    except Exception as error:  # pragma: no cover - logged in runtime.
+                        print(f"speech generation worker error: {error}")
+                    await asyncio.sleep(speech_interval_seconds)
+
+            app.state.speech_generation_worker_task = asyncio.create_task(loop())
+
+        @app.on_event("shutdown")
+        async def stop_speech_generation_worker() -> None:
+            task = getattr(app.state, "speech_generation_worker_task", None)
+            if task is not None:
+                task.cancel()
+
+    if tos_tool_background_enabled:
+        tos_tool_interval_seconds = float(os.getenv("TOS_TOOL_WORKER_POLL_SECONDS", "5"))
+
+        @app.on_event("startup")
+        async def start_tos_tool_worker() -> None:
+            async def loop() -> None:
+                while True:
+                    try:
+                        await asyncio.to_thread(tos_tool_processor)
+                    except Exception as error:  # pragma: no cover - logged in runtime.
+                        print(f"TOS tool worker error: {error}")
+                    await asyncio.sleep(tos_tool_interval_seconds)
+
+            app.state.tos_tool_worker_task = asyncio.create_task(loop())
+
+        @app.on_event("shutdown")
+        async def stop_tos_tool_worker() -> None:
+            task = getattr(app.state, "tos_tool_worker_task", None)
             if task is not None:
                 task.cancel()
 

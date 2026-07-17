@@ -29,6 +29,7 @@ export function upsertSummary(scripts: ScriptSummary[], script: ScriptDetail): S
     scene_count: script.scenes.length,
     parent_id: script.parent_id,
     created_at: script.created_at,
+    updated_at: script.updated_at,
   };
   const nextScripts = scripts.filter((item) => item.script_id !== script.script_id);
   return [summary, ...nextScripts];

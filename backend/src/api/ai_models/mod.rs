@@ -31,4 +31,16 @@ pub(crate) fn router() -> Router<AppState> {
             put(handlers::change_ai_model_status),
         )
         .route("/api/model-options", get(handlers::list_model_options))
+        .route(
+            "/api/admin/models/:model_id/voice-catalog/sync",
+            post(handlers::request_admin_voice_catalog_sync),
+        )
+        .route(
+            "/api/speech/models/:model_id/voice-catalog/check",
+            post(handlers::request_workspace_voice_catalog_sync),
+        )
+        .route(
+            "/api/speech/models/:model_id/voice-catalog",
+            get(handlers::get_voice_catalog),
+        )
 }

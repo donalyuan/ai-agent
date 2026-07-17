@@ -1,9 +1,12 @@
+FROM mwader/static-ffmpeg:7.1 AS ffmpeg
+
 FROM python:3.12-slim
 
 WORKDIR /app
 
 COPY pyproject.toml ./
 COPY src ./src
+COPY --from=ffmpeg /ffprobe /usr/local/bin/ffprobe
 RUN pip install --no-cache-dir -e ".[dev]"
 
 EXPOSE 8081

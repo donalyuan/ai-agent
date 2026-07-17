@@ -237,10 +237,13 @@ async fn workspace_menu_route_returns_visible_sorted_tree() {
     );
     assert_eq!(material_menu["children"][1]["is_enabled"], true);
     assert_eq!(material_menu["children"][1]["status"], "active");
-    assert_eq!(material_menu["children"][2]["menu_key"], "sound-subtitle-generation");
+    assert_eq!(
+        material_menu["children"][2]["menu_key"],
+        "sound-subtitle-generation"
+    );
     assert_eq!(material_menu["children"][2]["label"], "声音与字幕生成");
-    assert_eq!(material_menu["children"][2]["is_enabled"], false);
-    assert_eq!(material_menu["children"][2]["status"], "planned");
+    assert_eq!(material_menu["children"][2]["is_enabled"], true);
+    assert_eq!(material_menu["children"][2]["status"], "active");
     assert_eq!(
         material_menu["children"][2]["module_key"],
         "materials.sound-subtitle-generation"

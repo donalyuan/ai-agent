@@ -4050,3 +4050,2691 @@ button.topicReviewDuplicateTitle:hover {
   cursor: not-allowed;
   opacity: 0.45;
 }
+
+.soundSubtitlePage {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 18px 20px 28px;
+}
+
+.soundSubtitleHeader {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.soundSubtitleHeader h2,
+.soundTaskSection h3,
+.soundConfirmDialog h3 {
+  margin: 0;
+  color: var(--color-text);
+  letter-spacing: 0;
+}
+
+.soundSubtitleHeader h2 {
+  font-size: 24px;
+}
+
+.soundSubtitleHeader > div > p:last-child {
+  margin: 5px 0 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.soundHeaderStatus,
+.catalogMetaBar,
+.soundPrimaryActions,
+.soundTaskActions,
+.soundConfirmDialog footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.soundHeaderStatus span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.soundSubtitlePage button,
+.soundSubtitlePage input,
+.soundSubtitlePage select,
+.soundSubtitlePage textarea {
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--color-text);
+}
+
+.soundSubtitlePage button {
+  min-height: 34px;
+  padding: 0 11px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.soundSubtitlePage button:hover:not(:disabled) {
+  border-color: var(--color-primary-border);
+  color: var(--color-primary);
+}
+
+.soundSubtitlePage .primaryAction {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.soundSubtitlePage .primaryAction:hover:not(:disabled) {
+  border-color: var(--color-primary-hover);
+  background: var(--color-primary-hover);
+  color: #fff;
+}
+
+.soundTabs {
+  min-height: 42px;
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.soundTabs button {
+  min-width: 86px;
+  min-height: 42px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 0 4px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
+
+.soundTabs button.active {
+  border-bottom-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.soundWorkspaceGrid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(720px, 1fr) 320px;
+  align-items: start;
+  gap: 14px;
+}
+
+.soundEditorPanel,
+.soundAgentPanel,
+.soundTaskSection {
+  min-width: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.soundEditorPanel {
+  display: grid;
+  gap: 15px;
+  padding: 16px;
+}
+
+.subtitleSourceSwitch {
+  width: fit-content;
+  display: grid;
+  grid-template-columns: 150px 150px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface-muted);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+.subtitleSourceSwitch button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+.subtitleSourceSwitch button.active {
+  border-color: var(--color-border);
+  background: #fff;
+  color: var(--color-text);
+  box-shadow: 0 1px 2px rgb(23 32 51 / 8%);
+}
+
+.soundFormGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.soundVoiceField {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 17px 54px;
+  align-content: start;
+  gap: 6px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.soundFormGrid > label {
+  grid-template-rows: 17px 54px;
+}
+
+.soundFormGrid > label > select {
+  height: 54px;
+}
+
+.soundFieldLabel {
+  min-height: 17px;
+}
+
+.voiceCatalogSelect {
+  position: relative;
+  min-width: 0;
+  height: 54px;
+}
+
+.soundSubtitlePage .voiceCatalogTrigger {
+  width: 100%;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.soundSubtitlePage .voiceCatalogTrigger.invalid {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-soft);
+}
+
+.voiceCatalogTriggerCopy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.voiceCatalogTriggerCopy strong,
+.voiceCatalogTriggerCopy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voiceCatalogTriggerCopy strong {
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.voiceCatalogTriggerCopy small {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.voiceCatalogChevron {
+  width: 8px;
+  height: 8px;
+  justify-self: center;
+  border-right: 2px solid var(--color-text-muted);
+  border-bottom: 2px solid var(--color-text-muted);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.voiceCatalogChevron.open {
+  transform: translateY(2px) rotate(225deg);
+}
+
+.voiceCatalogPopover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(520px, calc(100vw - 72px));
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  padding: 12px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgb(23 32 51 / 18%);
+}
+
+.voiceCatalogPopoverHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.voiceCatalogPopoverHeader strong {
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.voiceCatalogPopoverHeader span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.voiceCatalogPopover input[type="search"] {
+  min-height: 38px;
+}
+
+.voiceCatalogFilters {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+}
+
+.voiceCatalogFilterGroup {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.voiceCatalogFilterGroup > span {
+  width: 32px;
+  flex: none;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.voiceCatalogFilterTags {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.soundSubtitlePage .voiceCatalogFilterTags button {
+  min-width: 54px;
+  min-height: 28px;
+  height: 28px;
+  border-color: var(--color-border);
+  border-radius: 6px;
+  padding: 0 12px;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundSubtitlePage .voiceCatalogFilterTags button.active {
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.voiceCatalogList {
+  max-height: 330px;
+  overflow: auto;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.soundSubtitlePage .voiceCatalogOption {
+  width: 100%;
+  min-height: 68px;
+  display: grid;
+  gap: 3px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 0;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--color-text);
+  text-align: left;
+}
+
+.soundSubtitlePage .voiceCatalogOption:last-of-type {
+  border-bottom: 0;
+}
+
+.soundSubtitlePage .voiceCatalogOption:hover:not([aria-disabled="true"]),
+.soundSubtitlePage .voiceCatalogOption.active:not([aria-disabled="true"]) {
+  border-color: var(--color-border);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.soundSubtitlePage .voiceCatalogOption.selected {
+  background: var(--color-primary-soft);
+}
+
+.soundSubtitlePage .voiceCatalogOption.invalid {
+  cursor: not-allowed;
+  background: var(--color-danger-soft);
+}
+
+.voiceCatalogOption strong {
+  font-size: 13px;
+}
+
+.voiceCatalogOptionDescription {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.voiceCatalogOptionTags {
+  overflow: hidden;
+  color: var(--color-info-text, #2f6f8f);
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voiceCatalogEmpty {
+  min-height: 72px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.soundSubtitlePage label {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.soundSubtitlePage input,
+.soundSubtitlePage select,
+.soundSubtitlePage textarea {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 9px;
+  outline: none;
+}
+
+.soundSubtitlePage textarea {
+  min-height: 90px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.soundSubtitlePage input:focus,
+.soundSubtitlePage select:focus,
+.soundSubtitlePage textarea:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+
+.catalogMetaBar {
+  min-height: 36px;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: 6px 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.catalogMetaBar span:nth-child(2) {
+  margin-left: auto;
+}
+
+.catalogMetaBar button {
+  min-height: 28px;
+}
+
+.soundInlineError,
+.soundInlineSuccess {
+  margin: 0;
+  border: 1px solid var(--color-danger-border);
+  border-radius: 6px;
+  padding: 9px 11px;
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.soundInlineSuccess {
+  border-color: var(--color-success-border);
+  background: var(--color-success-soft);
+  color: var(--color-success-text);
+}
+
+.soundTextField {
+  position: relative;
+}
+
+.soundTextField small {
+  justify-self: end;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.speechParameterGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.speechParameterGrid label {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.speechParameterGrid output {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.speechParameterGrid input[type="range"] {
+  grid-column: 1 / -1;
+  min-height: 24px;
+  border: 0;
+  padding: 0;
+  box-shadow: none;
+}
+
+.soundPrimaryActions {
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+.soundPrimaryActions button {
+  min-width: 100px;
+}
+
+.audioInspectionPanel {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: 10px 0;
+}
+
+.audioInspectionPanel > div {
+  display: grid;
+  gap: 4px;
+}
+
+.audioInspectionPanel strong {
+  font-size: 13px;
+}
+
+.audioInspectionPanel span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.inspectionFacts,
+.soundConfirmDialog dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.inspectionFacts > div,
+.soundConfirmDialog dl > div {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  background: var(--color-surface-muted);
+}
+
+.inspectionFacts dt,
+.soundConfirmDialog dt {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.inspectionFacts dd,
+.soundConfirmDialog dd {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.soundAgentPanel {
+  position: sticky;
+  top: 14px;
+  display: grid;
+  grid-template-rows: auto minmax(180px, 1fr) auto auto auto;
+  gap: 12px;
+  padding: 14px;
+}
+
+.soundAgentPanel > header {
+  display: grid;
+  grid-template-columns: 1fr 130px;
+  align-items: center;
+  gap: 8px;
+}
+
+.soundAgentPanel > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.soundAgentPanel > header strong {
+  font-size: 16px;
+}
+
+.soundAgentPanel > header span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundAgentPanel > header select {
+  min-height: 32px;
+  padding: 5px 7px;
+  font-size: 11px;
+}
+
+.soundAgentMessages {
+  max-height: 340px;
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  overflow: auto;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: 10px 0;
+}
+
+.soundAgentEmpty {
+  align-self: center;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.soundAgentMessage {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  background: var(--color-surface-muted);
+  font-size: 12px;
+}
+
+.soundAgentMessage.user {
+  border-left: 2px solid var(--color-primary);
+}
+
+.soundAgentMessage.assistant {
+  border-left: 2px solid #c78a1c;
+  background: #fffaf0;
+}
+
+.soundAgentMessage small {
+  color: var(--color-text-muted);
+}
+
+.soundAgentMessage p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.applySuggestionButton {
+  border-color: #d8b66d !important;
+  background: #fff8e7 !important;
+  color: #705522 !important;
+}
+
+.soundTaskSection {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+}
+
+.soundTaskSection > header {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.soundTaskSection > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.soundTaskSection h3 {
+  font-size: 15px;
+}
+
+.soundTaskSection > header span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundTaskEmpty {
+  min-height: 94px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.soundTaskTableWrap {
+  min-width: 0;
+  overflow: auto;
+}
+
+.soundTaskTable {
+  width: 100%;
+  min-width: 1000px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.soundTaskTable th,
+.soundTaskTable td {
+  border-bottom: 1px solid var(--color-border);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.soundTaskTable th {
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundTaskTable th:nth-child(1) { width: 150px; }
+.soundTaskTable th:nth-child(2) { width: 190px; }
+.soundTaskTable th:nth-child(3) { width: 100px; }
+.soundTaskTable th:nth-child(4) { width: 100px; }
+.soundTaskTable th:nth-child(5) { width: 300px; }
+.soundTaskTable th:nth-child(6) { width: 110px; }
+
+.soundTaskTable td strong,
+.soundTaskTable td small {
+  display: block;
+}
+
+.soundTaskTable td small {
+  margin-top: 3px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundTaskStatus {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0 8px;
+  background: var(--color-surface-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.soundTaskStatus.queued,
+.soundTaskStatus.running {
+  border-color: #d8b66d;
+  background: #fff8e7;
+  color: #705522;
+}
+
+.soundTaskStatus.succeeded {
+  border-color: var(--color-success-border);
+  background: var(--color-success-soft);
+  color: var(--color-success-text);
+}
+
+.soundTaskStatus.failed {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+}
+
+.soundTaskResult {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.soundTaskResult audio {
+  width: 220px;
+  height: 30px;
+}
+
+.soundTaskResult a {
+  color: var(--color-primary);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.soundModalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: rgb(23 32 51 / 46%);
+}
+
+.soundConfirmDialog {
+  width: min(620px, calc(100vw - 80px));
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  padding: 18px;
+  background: #fff;
+  box-shadow: 0 20px 60px rgb(23 32 51 / 24%);
+}
+
+.soundConfirmDialog > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.soundConfirmDialog h3 {
+  font-size: 18px;
+}
+
+.soundConfirmDialog footer {
+  justify-content: flex-end;
+}
+
+.soundScriptImportDialog {
+  width: min(900px, calc(100vw - 64px));
+  height: min(620px, calc(100vh - 64px));
+  display: grid;
+  grid-template-rows: 62px minmax(0, 1fr) 72px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 20px 60px rgb(23 32 51 / 24%);
+}
+
+.soundScriptImportDialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--color-border);
+  padding: 10px 16px 9px 18px;
+}
+
+.soundScriptImportDialog > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.soundScriptImportDialog > header .sectionKicker {
+  margin: 0;
+  font-size: 11px;
+}
+
+.soundScriptImportDialog > header h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 16px;
+  line-height: 20px;
+  letter-spacing: 0;
+}
+
+.soundSubtitlePage .soundScriptImportDialog > header > button {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 22px;
+  font-weight: 400;
+}
+
+.soundScriptImportBody {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 318px minmax(0, 1fr);
+}
+
+.soundScriptImportList {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 48px 38px minmax(0, 1fr);
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+}
+
+.soundScriptImportSearch {
+  padding: 10px 12px 6px;
+}
+
+.soundSubtitlePage .soundScriptImportSearch input {
+  width: 100%;
+  height: 32px;
+  min-height: 32px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 5px;
+  padding: 0 10px;
+  background: #fff;
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.soundScriptImportFilters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px 6px;
+}
+
+.soundSubtitlePage .soundScriptImportFilters button {
+  min-width: 0;
+  min-height: 26px;
+  height: 26px;
+  flex: 1;
+  border-color: transparent;
+  padding: 0 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundSubtitlePage .soundScriptImportFilters button.active {
+  border-color: var(--color-primary-border);
+  background: #fff;
+  color: var(--color-primary);
+}
+
+.soundScriptImportItems,
+.soundScriptSceneItems {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.soundScriptImportItems {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 6px 12px 12px;
+}
+
+.soundScriptImportItems > p,
+.soundScriptSceneItems > p {
+  margin: 18px 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.soundSubtitlePage .soundScriptImportItems > button {
+  min-width: 0;
+  min-height: 76px;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 9px 11px;
+  background: #fff;
+  text-align: left;
+}
+
+.soundSubtitlePage .soundScriptImportItems > button.active {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+
+.soundScriptImportItems strong,
+.soundScriptImportItems span,
+.soundScriptImportItems small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundScriptImportItems strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.soundScriptImportItems span,
+.soundScriptImportItems small {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundScriptScenePicker {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 58px minmax(0, 1fr);
+  background: #fff;
+}
+
+.soundScriptScenePicker > header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--color-border);
+  padding: 10px 16px;
+}
+
+.soundScriptScenePicker > header > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.soundScriptScenePicker > header strong,
+.soundScriptScenePicker > header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundScriptScenePicker > header strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.soundScriptScenePicker > header span,
+.soundScriptScenePicker > header small {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundScriptScenePicker > header small {
+  flex: none;
+}
+
+.soundScriptSceneItems {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 12px 16px 16px;
+}
+
+.soundScriptSceneItems label {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-rows: 18px auto;
+  gap: 3px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.soundScriptSceneItems label.selected {
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-soft);
+}
+
+.soundScriptSceneItems input {
+  width: 15px;
+  height: 15px;
+  min-height: 0;
+  margin: 1px 0 0;
+  accent-color: var(--color-primary);
+}
+
+.soundScriptSceneItems span {
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.soundScriptSceneItems p {
+  grid-column: 2;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.soundScriptImportDialog > footer {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--color-border);
+  padding: 10px 16px 10px 18px;
+  background: #fff;
+}
+
+.soundScriptImportSummary {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.soundScriptImportSummary span,
+.soundScriptImportSummary strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundScriptImportSummary span {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.soundScriptImportSummary strong {
+  color: var(--color-danger-text);
+}
+
+.soundScriptImportFooterActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.soundSubtitlePage .soundScriptImportFooterActions button {
+  min-width: 90px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .soundScriptImportDialog {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+    grid-template-rows: 58px minmax(0, 1fr) auto;
+  }
+
+  .soundScriptImportBody {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 42%) minmax(0, 1fr);
+  }
+
+  .soundScriptImportList {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .soundScriptImportDialog > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .soundScriptImportSummary span,
+  .soundScriptImportSummary strong {
+    white-space: normal;
+  }
+
+  .soundScriptImportFooterActions > button {
+    flex: 1;
+  }
+}
+
+/* 已确认的声音工作区采用固定桌面信息架构，避免内容状态改变三栏尺寸。 */
+.soundSubtitlePage {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 20px;
+  padding: 8px 24px 64px;
+}
+
+.soundSubtitleHeader,
+.soundWorkspaceGrid {
+  width: min(1598px, calc(100% - 2px));
+  margin-right: auto;
+}
+
+.soundSubtitleHeader {
+  height: 88px;
+  min-height: 88px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 14px 22px;
+  background: var(--color-surface);
+}
+
+.soundHeaderCopy {
+  min-width: 0;
+}
+
+.soundHeaderCopy .sectionKicker {
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.soundHeaderTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.soundHeaderTitleRow h2 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 24px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.soundSubtitlePage .soundTabs {
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+}
+
+.soundSubtitlePage .soundTabs button {
+  min-width: 74px;
+  min-height: 26px;
+  height: 26px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0 14px;
+  background: #fff;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.soundSubtitlePage .soundTabs button.active {
+  border-color: var(--color-success-border);
+  background: var(--color-success-soft);
+  color: var(--color-success-text);
+}
+
+.soundSubtitlePage .soundNewTaskButton {
+  min-width: 138px;
+  height: 36px;
+}
+
+.soundWorkspaceGrid {
+  height: 712px;
+  display: grid;
+  grid-template-columns: 250px minmax(520px, 1fr) 276px;
+  align-items: start;
+  gap: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 19px;
+  background: var(--color-surface-muted);
+  overflow: visible;
+}
+
+.soundTaskPanel,
+.soundEditorPanel,
+.soundAgentPanel {
+  width: 100%;
+  height: 672px;
+  min-width: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--color-surface);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+.soundTaskPanel {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px 18px;
+  overflow: hidden;
+}
+
+.soundTaskPanelHeader {
+  height: 40px;
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.soundTaskPanelHeader h3,
+.soundEditorHeader h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 16px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.soundTaskPanelHeader p,
+.soundEditorHeader p {
+  margin: 5px 0 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundTaskPanelHeader button {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.soundTaskFilters {
+  width: 218px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  grid-template-columns: 64px 84px 66px;
+  gap: 2px;
+  margin: 14px auto 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 2px;
+  background: #eef2f6;
+}
+
+.soundSubtitlePage .soundTaskFilters button {
+  min-width: 0;
+  min-height: 28px;
+  height: 28px;
+  border: 0;
+  padding: 0 4px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.soundSubtitlePage .soundTaskFilters button.active {
+  background: #fff;
+  color: var(--color-text);
+  box-shadow: 0 1px 2px rgb(23 32 51 / 10%);
+}
+
+.soundTaskCards {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 10px;
+  margin-top: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.soundTaskCard {
+  position: relative;
+  width: 100%;
+  height: max-content;
+  min-height: 82px;
+  min-width: 0;
+  max-width: 100%;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  border: 1px solid #e7ecf2;
+  border-radius: 8px;
+  padding: 11px 13px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.soundTaskCard.queued,
+.soundTaskCard.running {
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-soft);
+}
+
+.soundTaskCard > strong,
+.soundTaskCard > p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.soundTaskCard > strong {
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.soundTaskCard > p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.soundTaskCardFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.soundTaskCardFooter small {
+  color: #7d8796;
+  font-size: 11px;
+}
+
+.soundSubtitlePage .soundTaskStatus {
+  min-height: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.soundTaskCleanup,
+.soundTaskFailure {
+  color: var(--color-danger-text);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.soundTaskActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+.soundSubtitlePage .soundTaskActions button {
+  min-height: 24px;
+  height: 24px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.soundTaskResultLinks {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.soundTaskResultLinks a {
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.soundTaskEmpty {
+  min-height: 90px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  border: 1px dashed var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundConcurrencyStatus {
+  width: 226px;
+  height: 66px;
+  flex: none;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  margin-top: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 9px 11px;
+  background: var(--color-surface-muted);
+}
+
+.soundConcurrencyStatus strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.soundConcurrencyStatus span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundConcurrencyStatus > div {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+
+.soundConcurrencyStatus i {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: var(--color-primary);
+}
+
+.soundEditorPanel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 16px 18px 18px;
+  container-name: sound-editor;
+  container-type: inline-size;
+}
+
+.soundEditorPanel.subtitleMode {
+  overflow-y: auto;
+  overflow-x: visible;
+}
+
+.soundEditorPanel:has(.soundInlineError) {
+  overflow-y: auto;
+}
+
+.soundEditorHeader {
+  height: 40px;
+  flex: none;
+}
+
+.soundTtsLayout {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.soundFeedbackStack {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.soundFeedbackStack:empty {
+  display: none;
+}
+
+.soundModelCatalogRow {
+  height: 54px;
+  flex: none;
+  display: grid;
+  grid-template-columns: 230px 242px;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.soundCompactField,
+.soundVoiceField {
+  position: relative;
+  min-width: 0;
+  height: 56px;
+  display: block;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.soundModelCatalogRow .soundCompactField {
+  height: 54px;
+}
+
+.soundModelSelect {
+  position: relative;
+  min-width: 0;
+  height: 54px;
+}
+
+.soundSubtitlePage .soundModelTrigger {
+  width: 100%;
+  height: 54px;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  padding: 6px 10px 5px 11px;
+  background: #fff;
+  text-align: left;
+}
+
+.soundSubtitlePage .soundModelTrigger:focus-visible,
+.soundSubtitlePage .soundModelTrigger[aria-expanded="true"] {
+  border-color: var(--color-primary);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+
+.soundModelTriggerCopy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.soundModelTriggerCopy span {
+  color: #7d8796;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.soundModelTriggerCopy strong {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundModelList {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  max-height: 260px;
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  padding: 5px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgb(23 32 51 / 18%);
+}
+
+.soundSubtitlePage .soundModelOption {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 4px;
+  border: 0;
+  border-radius: 4px;
+  padding: 6px 9px;
+  background: transparent;
+  text-align: left;
+}
+
+.soundSubtitlePage .soundModelOption:hover,
+.soundSubtitlePage .soundModelOption.active {
+  background: var(--color-surface-muted);
+}
+
+.soundSubtitlePage .soundModelOption.selected {
+  background: var(--color-primary-soft);
+}
+
+.soundModelOption strong,
+.soundModelOption span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundModelOption strong {
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 15px;
+}
+
+.soundModelOption span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.soundSubtitlePage .soundCompactField > span {
+  position: absolute;
+  z-index: 1;
+  top: 6px;
+  left: 11px;
+  color: #7d8796;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.soundSubtitlePage .soundCompactField > select {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  padding: 19px 30px 4px 10px;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 800;
+  outline: none;
+}
+
+.soundSubtitlePage .soundCompactField:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+
+.soundCatalogStatus {
+  min-width: 0;
+  height: 54px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--color-success-border);
+  border-radius: 6px;
+  padding: 6px 10px 6px 11px;
+  background: var(--color-success-soft);
+}
+
+.soundCatalogStatus.failed {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-soft);
+}
+
+.soundCatalogStatus > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.soundCatalogStatus strong,
+.soundCatalogStatus span {
+  overflow: hidden;
+  color: var(--color-success-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundCatalogStatus strong {
+  font-size: 12px;
+}
+
+.soundCatalogStatus span {
+  font-size: 11px;
+}
+
+.soundCatalogStatus.failed strong,
+.soundCatalogStatus.failed span {
+  color: var(--color-danger-text);
+}
+
+.soundSubtitlePage .soundCatalogStatus button {
+  min-height: 26px;
+  height: 26px;
+  padding: 0 7px;
+  background: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.soundFormGrid {
+  height: 56px;
+  flex: none;
+  display: grid;
+  grid-template-columns: 322px 150px;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.soundVoiceField {
+  border: 0;
+}
+
+.voiceCatalogSelect,
+.soundSubtitlePage .voiceCatalogTrigger {
+  height: 56px;
+}
+
+.soundSubtitlePage .voiceCatalogTrigger {
+  min-height: 56px;
+  padding: 5px 9px 5px 11px;
+}
+
+.voiceCatalogTriggerCopy {
+  grid-template-rows: 12px 16px 13px;
+  gap: 1px;
+}
+
+.voiceCatalogTriggerLabel {
+  color: #7d8796;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.voiceCatalogTriggerCopy strong {
+  font-size: 13px;
+  line-height: 16px;
+}
+
+.voiceCatalogTriggerCopy small {
+  font-size: 11px;
+  line-height: 13px;
+}
+
+.voiceCatalogPopover {
+  width: 484px;
+}
+
+.languageCatalogSelect {
+  position: relative;
+  min-width: 0;
+  height: 56px;
+}
+
+.soundSubtitlePage .languageCatalogTrigger {
+  width: 100%;
+  height: 56px;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  padding: 6px 11px;
+  background: #fff;
+  text-align: left;
+}
+
+.soundSubtitlePage .languageCatalogTrigger:focus-visible,
+.soundSubtitlePage .languageCatalogTrigger[aria-expanded="true"] {
+  border-color: var(--color-primary);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+
+.soundSubtitlePage .languageCatalogTrigger.invalid {
+  border-color: var(--color-danger-border);
+}
+
+.languageCatalogTriggerCopy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.languageCatalogTriggerCopy span {
+  color: #7d8796;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.languageCatalogTriggerCopy strong {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.languageCatalogList {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  max-height: 260px;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  padding: 5px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgb(23 32 51 / 18%);
+}
+
+.soundSubtitlePage .languageCatalogOption {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 9px;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.soundSubtitlePage .languageCatalogOption:hover,
+.soundSubtitlePage .languageCatalogOption.active {
+  background: var(--color-surface-muted);
+}
+
+.soundSubtitlePage .languageCatalogOption.selected {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.soundA11yStatus {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.soundFeedbackStack .soundInlineError {
+  flex: none;
+  margin-top: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.soundNarrationField {
+  height: 154px;
+  flex: none;
+  display: grid;
+  grid-template-rows: 30px minmax(0, 1fr);
+  margin-top: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface-muted);
+  overflow: hidden;
+}
+
+.soundNarrationField > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 13px;
+}
+
+.soundNarrationHeader {
+  min-width: 0;
+}
+
+.soundNarrationTitle,
+.soundNarrationActions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.soundNarrationTitle small {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundNarrationActions {
+  flex: none;
+}
+
+.soundSubtitlePage .soundNarrationActions button {
+  min-height: 24px;
+  height: 24px;
+  border-color: var(--color-primary-border);
+  padding: 0 8px;
+  background: #fff;
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.soundNarrationField strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.soundNarrationField span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundSubtitlePage .soundNarrationField textarea {
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 5px 13px 11px;
+  background: transparent;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: none;
+}
+
+.soundSubtitleSegmentsField {
+  flex: none;
+  margin-top: 10px;
+}
+
+.soundParameterSection {
+  height: 76px;
+  flex: none;
+  display: grid;
+  grid-template-rows: 18px 50px;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.soundParameterSection h4 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: 0;
+}
+
+.speechParameterGrid {
+  height: 50px;
+  display: grid;
+  grid-template-columns: 154px 150px 156px;
+  gap: 12px;
+}
+
+.speechParameterGrid label {
+  height: 50px;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: 16px 18px;
+  gap: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 6px 11px;
+  background: #fff;
+  color: #7d8796;
+  font-size: 12px;
+  line-height: 14px;
+}
+
+.speechParameterGrid output {
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 16px;
+}
+
+.speechParameterGrid input[type="range"] {
+  min-height: 18px;
+  height: 18px;
+}
+
+.speechParameterGrid > p {
+  grid-column: 1 / -1;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  border: 1px dashed var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.soundPreviewPlayer {
+  height: 58px;
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  border: 1px solid var(--color-primary-border);
+  border-radius: 6px;
+  padding: 8px 11px;
+  background: #f7faff;
+}
+
+.soundPreviewPlayer > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.soundPreviewPlayer strong,
+.soundPreviewPlayer span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundPreviewPlayer strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.soundPreviewPlayer span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundPreviewPlayer audio {
+  width: 278px;
+  height: 34px;
+}
+
+.soundSubtitlePage .soundPreviewPlayer button {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  border: 0;
+  padding: 0 0 0 2px;
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.soundPrimaryActions {
+  height: 38px;
+  flex: none;
+  display: grid;
+  grid-template-columns: 126px 216px;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding: 0;
+}
+
+.soundPrimaryActions button {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+}
+
+.soundPrimaryActions .primaryAction {
+  font-size: 13px;
+}
+
+.soundCurrentTask {
+  height: 56px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  border: 1px solid var(--color-primary-border);
+  border-radius: 6px;
+  padding: 8px 13px;
+  background: #e8f0ff;
+}
+
+.soundCurrentTask > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.soundCurrentTask strong,
+.soundCurrentTask span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundCurrentTask strong {
+  color: #1d4ed8;
+  font-size: 12px;
+}
+
+.soundCurrentTask span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundCurrentTask > b {
+  color: #1d4ed8;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.soundCurrentTask.succeeded {
+  border-color: var(--color-success-border);
+  background: var(--color-success-soft);
+}
+
+.soundCurrentTask.succeeded strong,
+.soundCurrentTask.succeeded > b {
+  color: var(--color-success-text);
+}
+
+.soundCurrentTask.failed {
+  height: 70px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 14px 12px minmax(0, 1fr);
+  align-items: start;
+  gap: 2px;
+  margin-top: 2px;
+  border-color: var(--color-danger-border);
+  padding: 5px 10px;
+  background: var(--color-danger-soft);
+}
+
+.soundCurrentTask.failed strong,
+.soundCurrentTask.failed b {
+  color: var(--color-danger-text);
+}
+
+.soundFailureHeader {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.soundFailureHeader strong,
+.soundFailureHeader b {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.soundFailureMessage {
+  min-width: 0;
+  margin: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  color: var(--color-danger-text);
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.soundFailureFacts {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-content: start;
+  gap: 1px 7px;
+  margin: 0;
+  overflow: hidden;
+}
+
+.soundFailureFacts > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.soundFailureFacts .soundFailureTrace {
+  grid-column: span 2;
+}
+
+.soundFailureFacts dt,
+.soundFailureFacts dd {
+  margin: 0;
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.soundFailureFacts dt {
+  flex: none;
+  color: #8f4b53;
+}
+
+.soundFailureFacts dd {
+  min-width: 0;
+  overflow: visible;
+  color: var(--color-text);
+}
+
+.subtitleMode .subtitleSourceSwitch {
+  width: 100%;
+  height: 38px;
+  flex: none;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 8px;
+}
+
+.subtitleMode .soundModelCatalogRow {
+  margin-top: 10px;
+}
+
+.soundAsrForm {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.soundAgentPanel {
+  position: relative;
+  top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 12px 12px 18px;
+  overflow: hidden;
+}
+
+.soundAgentPanel > .soundAgentHeader {
+  height: 46px;
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 22px 20px;
+  gap: 4px;
+  margin: 0 4px;
+}
+
+.soundAgentPanel > .soundAgentHeader > .soundAgentTitleRow,
+.soundAgentPanel > .soundAgentHeader > .soundAgentSessionRow {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.soundAgentTitleRow strong {
+  color: var(--color-text);
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.soundAgentPanel .soundAgentTitleRow > span {
+  flex: 0 0 56px;
+  min-width: 56px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  background: var(--color-success-soft);
+  color: var(--color-success-text);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.soundAgentPanel .soundAgentSessionRow > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundAgentPanel .soundAgentSessionRow select {
+  flex: 0 0 105px;
+  width: 105px;
+  min-height: 20px;
+  height: 20px;
+  border: 0;
+  padding: 0 18px 0 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundAgentMessages {
+  width: 252px;
+  height: 420px;
+  max-height: 420px;
+  flex: none;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  margin-top: 12px;
+  border: 1px solid #e7ecf2;
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--color-surface-muted);
+  overflow: auto;
+}
+
+.soundAgentEmpty {
+  align-self: center;
+}
+
+.soundAgentMessage {
+  border: 1px solid var(--color-border);
+  border-left-width: 1px;
+  border-radius: 6px;
+  padding: 9px 10px;
+  background: #fff;
+  font-size: 12px;
+}
+
+.soundAgentMessage.user {
+  margin-left: 34px;
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-soft);
+}
+
+.soundAgentMessage.assistant {
+  border-color: var(--color-border);
+  background: #fff;
+}
+
+.soundAgentMessage p {
+  font-size: 12px;
+}
+
+.soundAgentMessage small {
+  font-size: 11px;
+}
+
+.soundAgentToolStep {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #efd27a;
+  border-radius: 6px;
+  padding: 9px 10px;
+  background: #fffdf5;
+}
+
+.soundAgentToolStep strong {
+  color: #7a5100;
+  font-size: 12px;
+}
+
+.soundAgentToolStep span {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.soundAgentToolStep b {
+  width: fit-content;
+  border-radius: 4px;
+  padding: 3px 9px;
+  background: var(--color-success-soft);
+  color: var(--color-success-text);
+  font-size: 11px;
+}
+
+.soundSubtitlePage .applySuggestionButton {
+  min-height: 28px;
+  height: 28px;
+}
+
+.soundAgentComposer {
+  position: relative;
+  width: 252px;
+  height: 80px;
+  flex: none;
+  margin-top: 14px;
+}
+
+.soundSubtitlePage .soundAgentComposer textarea {
+  height: 80px;
+  min-height: 80px;
+  padding: 9px 50px 30px 11px;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: none;
+}
+
+.soundSubtitlePage .soundAgentComposer button {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  min-width: 42px;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 13px;
+}
+
+.soundAgentRunStatus {
+  width: 252px;
+  height: 56px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 14px;
+  border: 1px solid var(--color-primary-border);
+  border-radius: 6px;
+  padding: 8px 11px;
+  background: #f7faff;
+}
+
+.soundAgentRunStatus > div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.soundAgentRunStatus strong,
+.soundAgentRunStatus span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundAgentRunStatus strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.soundAgentRunStatus span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.soundAgentRunStatus > b {
+  color: var(--color-success-text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 中栏一旦能容纳双区结构就连续利用可用宽度，避免在 1440/1920 基准之间退回 484px 单列。 */
+@container sound-editor (min-width: 700px) {
+  .soundTtsLayout {
+    display: grid;
+    grid-template-columns: 154px 12px 200px 12px 106px 18px minmax(0, 1fr);
+    grid-template-rows: auto;
+    align-content: start;
+    margin-top: 16px;
+  }
+
+  .soundTtsLayout .soundModelCatalogRow {
+    grid-column: 1 / 6;
+    grid-row: 1;
+    margin-top: 0;
+  }
+
+  .soundTtsLayout .soundPreviewPlayer {
+    height: 54px;
+    grid-column: 7 / 8;
+    grid-row: 1;
+    margin-top: 0;
+  }
+
+  .soundTtsLayout .soundFormGrid {
+    grid-column: 1 / 8;
+    grid-row: 2;
+    grid-template-columns: minmax(322px, 1fr) minmax(150px, 302px);
+    margin-top: 14px;
+  }
+
+  .soundTtsLayout .voiceCatalogPopover {
+    width: 100%;
+  }
+
+  .soundTtsLayout .soundFeedbackStack {
+    grid-column: 1 / 8;
+    grid-row: 3;
+  }
+
+  .soundTtsLayout .soundNarrationField {
+    height: 180px;
+    grid-column: 1 / 8;
+    grid-row: 4;
+    margin-top: 14px;
+  }
+
+  .soundTtsLayout .soundSubtitleSegmentsField {
+    grid-column: 1 / 8;
+    grid-row: 5;
+  }
+
+  .soundTtsLayout .soundParameterSection {
+    width: 154px;
+    height: 50px;
+    display: block;
+    grid-column: 1 / 2;
+    grid-row: 6;
+    margin-top: 16px;
+  }
+
+  .soundTtsLayout .soundParameterSection h4 {
+    display: none;
+  }
+
+  .soundTtsLayout .speechParameterGrid {
+    width: 154px;
+    height: 50px;
+    grid-template-columns: 154px;
+    gap: 0;
+    overflow: auto;
+  }
+
+  .soundTtsLayout .soundPrimaryActions {
+    height: 50px;
+    grid-column: 3 / 8;
+    grid-row: 6;
+    grid-template-columns: 200px minmax(0, 1fr);
+    gap: 12px;
+    margin-top: 16px;
+  }
+
+  .soundTtsLayout .soundPrimaryActions:has(> button:only-child) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .soundTtsLayout .soundPrimaryActions button {
+    height: 50px;
+  }
+
+  .soundTtsLayout .soundCurrentTask {
+    height: 70px;
+    grid-column: 1 / 8;
+    grid-row: 7;
+    margin-top: 16px;
+  }
+
+  .soundTtsLayout .soundCurrentTask.failed {
+    height: 140px;
+    grid-template-rows: 18px minmax(20px, auto) minmax(0, 1fr);
+    gap: 5px;
+    padding: 10px 13px;
+  }
+
+  .soundTtsLayout .soundFailureHeader strong,
+  .soundTtsLayout .soundFailureHeader b {
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  .soundTtsLayout .soundFailureMessage {
+    max-height: 34px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    font-size: 12px;
+    line-height: 16px;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .soundTtsLayout .soundFailureFacts {
+    gap: 4px 12px;
+  }
+
+  .soundTtsLayout .soundFailureFacts dt,
+  .soundTtsLayout .soundFailureFacts dd {
+    font-size: 11px;
+    line-height: 14px;
+  }
+}
+
+@container sound-editor (min-width: 964px) {
+  .soundTtsLayout {
+    grid-template-columns: 154px 12px 200px 12px 106px 18px 148px 12px 302px;
+  }
+
+  .soundTtsLayout .soundPreviewPlayer {
+    grid-column: 7 / 10;
+  }
+
+  .soundTtsLayout .soundFormGrid,
+  .soundTtsLayout .soundFeedbackStack,
+  .soundTtsLayout .soundNarrationField,
+  .soundTtsLayout .soundSubtitleSegmentsField,
+  .soundTtsLayout .soundCurrentTask {
+    grid-column-end: 10;
+  }
+
+  .soundTtsLayout .soundFormGrid {
+    grid-template-columns: 650px 302px;
+  }
+
+  .soundTtsLayout .voiceCatalogPopover {
+    width: 650px;
+  }
+
+  .soundTtsLayout .soundPrimaryActions {
+    grid-column-end: 10;
+  }
+}

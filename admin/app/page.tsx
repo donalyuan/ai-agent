@@ -6,10 +6,12 @@ const managementAreas = [
   {
     title: "模型与路由",
     description: "配置模型供应商、模型路由、API Key 和健康状态。",
+    status: "已接入",
   },
   {
     title: "工具与 MCP",
-    description: "维护 Agent 工具、MCP 连接、Prompt 模板和执行权限。",
+    description: "维护私有 TOS、Agent 工具、MCP 连接和执行权限。",
+    status: "已接入",
   },
   {
     title: "任务与日志",
@@ -45,7 +47,7 @@ export default function Home() {
             <article className="managementCard" id={area.title} key={area.title}>
               <h2>{area.title}</h2>
               <p>{area.description}</p>
-              <span>待接入</span>
+              <span>{area.status ?? "待接入"}</span>
             </article>
           ))}
         </section>

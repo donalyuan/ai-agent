@@ -221,7 +221,8 @@ textarea:focus-visible {
 }
 
 .inlineError,
-.inlineWarning {
+.inlineWarning,
+.inlineSuccess {
   margin: 0 24px 12px;
   border: 1px solid #f4b9b5;
   border-radius: 6px;
@@ -229,6 +230,13 @@ textarea:focus-visible {
   background: #fdecec;
   color: #8e2d29;
   font-size: 13px;
+}
+
+.inlineSuccess {
+  margin: 0 24px 12px;
+  border-color: #9fd3b4;
+  background: #e8f6ee;
+  color: #17633a;
 }
 
 .inlineWarning {
@@ -248,7 +256,7 @@ textarea:focus-visible {
 
 .modelTable {
   width: 100%;
-  min-width: 1260px;
+  min-width: 1420px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 13px;
@@ -276,12 +284,18 @@ textarea:focus-visible {
 .modelTable th:nth-child(5) { width: 65px; }
 .modelTable th:nth-child(6) { width: 80px; }
 .modelTable th:nth-child(7) { width: 85px; }
-.modelTable th:nth-child(8) { width: 155px; }
-.modelTable th:nth-child(9) { width: 220px; }
+.modelTable th:nth-child(8) { width: 85px; }
+.modelTable th:nth-child(9) { width: 155px; }
+.modelTable th:nth-child(10) { width: 300px; }
 
 .modelTable td strong,
 .modelTable td small {
   display: block;
+}
+
+.catalogStatus {
+  display: grid;
+  gap: 2px;
 }
 
 .modelTable td small {
@@ -338,6 +352,135 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
+.systemToolReference {
+  grid-template-columns: 1fr !important;
+}
+
+.systemToolStatus,
+.toolHeaderStatus {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.inlineLink {
+  width: fit-content;
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.toolManagementPage {
+  min-height: 100vh;
+}
+
+.toolWarning {
+  margin: 0 24px 12px;
+}
+
+.toolStatusBand {
+  display: grid;
+  grid-template-columns: 160px minmax(180px, 1fr) minmax(180px, 1fr) 130px auto;
+  align-items: end;
+  gap: 20px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.toolStatusBand > div {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.toolStatusBand > div > span:first-child {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.toolStatusBand strong:not(.statusTag) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.toolCheckError {
+  margin: 12px 24px 0;
+  color: #8e2d29;
+  font-size: 13px;
+}
+
+.toolConfigForm {
+  padding: 22px 24px 32px;
+}
+
+.toolConfigForm fieldset {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  padding: 0 0 24px;
+}
+
+.toolConfigForm fieldset + fieldset {
+  padding-top: 24px;
+}
+
+.toolConfigForm legend {
+  grid-column: 1 / -1;
+  padding: 0;
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.toolConfigForm label {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.toolConfigForm label small {
+  font-weight: 400;
+}
+
+.toolConfigForm input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: #fff;
+  color: var(--color-text);
+}
+
+.toolConfigForm .checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.toolConfigForm .checkboxLabel input {
+  width: 16px;
+  min-height: 16px;
+}
+
+.toolConfigForm footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 18px;
+}
+
 .tableState {
   min-height: 220px;
   display: grid;
@@ -364,7 +507,9 @@ textarea:focus-visible {
   position: absolute;
   inset: 0 0 0 auto;
   width: min(620px, 72vw);
-  overflow: auto;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
   background: var(--color-surface);
   box-shadow: -12px 0 30px rgb(23 32 51 / 16%);
 }
@@ -382,9 +527,19 @@ textarea:focus-visible {
 }
 
 .modelDrawer form {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.modelDrawerFormScroll {
+  min-height: 0;
   display: grid;
   gap: 18px;
   padding: 20px 22px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .modelDrawer fieldset {
@@ -403,6 +558,77 @@ textarea:focus-visible {
   padding: 0;
   font-size: 14px;
   font-weight: 800;
+}
+
+.modelFieldsetHelp {
+  grid-column: 1 / -1;
+  margin: -2px 0 2px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.voiceCatalogModeControl {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  padding: 2px;
+  background: var(--color-surface-muted);
+}
+
+.modelDrawer .voiceCatalogModeControl label {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.modelDrawer .voiceCatalogModeControl label.active {
+  background: #fff;
+  color: var(--color-primary);
+  box-shadow: 0 1px 3px rgb(23 32 51 / 14%);
+}
+
+.voiceCatalogModeControl input {
+  position: absolute;
+  width: 1px;
+  min-height: 1px;
+  opacity: 0;
+}
+
+.voiceCatalogSourceField,
+.voiceCatalogSourceWarning {
+  grid-column: 1 / -1;
+}
+
+.voiceCatalogSourceStatus {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+div.voiceCatalogSourceStatus {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  align-items: center;
+}
+
+div.voiceCatalogSourceStatus strong,
+div.voiceCatalogSourceStatus span {
+  grid-column: 1;
+}
+
+div.voiceCatalogSourceStatus button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
 }
 
 .modelDrawer label,
@@ -432,6 +658,134 @@ textarea:focus-visible {
   min-height: 16px;
 }
 
+.speechTimestampLanguages {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.speechFieldLabel {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.speechTimestampLanguageTrigger,
+.speechReadOnlyValue {
+  min-height: 38px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.speechTimestampLanguageTrigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.speechTimestampLanguageTrigger.isOpen {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+.speechTimestampLanguageChevron {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-right: 2px solid var(--color-text-muted);
+  border-bottom: 2px solid var(--color-text-muted);
+  transform: rotate(45deg) translateY(-2px);
+}
+
+.speechTimestampLanguageTrigger.isOpen .speechTimestampLanguageChevron {
+  transform: rotate(225deg) translate(-1px, -1px);
+}
+
+.speechTimestampLanguageMenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 4;
+  width: 100%;
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  padding: 8px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgb(23 32 51 / 18%);
+}
+
+.speechTimestampLanguageSearch {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 0 9px;
+  background: var(--color-page);
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.speechTimestampLanguageOptions {
+  display: grid;
+  gap: 2px;
+}
+
+.modelDrawer .speechTimestampLanguageOption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border-radius: 4px;
+  padding: 0 5px;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.modelDrawer .speechTimestampLanguageOption:hover {
+  background: var(--color-surface-muted);
+}
+
+.modelDrawer .speechTimestampLanguageOption.isLocked {
+  cursor: not-allowed;
+}
+
+.modelDrawer .speechTimestampLanguageOption input {
+  width: 16px;
+  min-height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--color-primary);
+}
+
+.speechReadOnlyValue {
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-muted);
+  font-size: 13px;
+}
+
+.speechTimestampLanguageEmpty {
+  margin: 0;
+  padding: 7px 5px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
 .fieldRow {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -443,6 +797,15 @@ textarea:focus-visible {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.modelDrawer footer {
+  position: relative;
+  z-index: 1;
+  border-top: 1px solid var(--color-border);
+  padding: 14px 22px;
+  background: var(--color-surface);
+  box-shadow: 0 -4px 12px rgb(23 32 51 / 6%);
 }
 
 .modalBackdrop {

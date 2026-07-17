@@ -76,7 +76,7 @@ fn model_input(base_url: String, model_type: ModelType) -> CreateAiModelInput {
             None,
             None,
         ),
-        ModelType::Video => unreachable!(),
+        ModelType::Video | ModelType::Speech => unreachable!(),
     };
     CreateAiModelInput {
         display_name: "Resolved Model".to_string(),
@@ -89,6 +89,9 @@ fn model_input(base_url: String, model_type: ModelType) -> CreateAiModelInput {
         upstream_model: "fake-upstream".to_string(),
         api_key: "resolver-secret-key".to_string(),
         api_secret: None,
+        catalog_access_key: None,
+        catalog_secret_key: None,
+        voice_catalog_source_model_id: None,
         timeout_seconds: 5,
         reasoning_effort,
         max_output_tokens,

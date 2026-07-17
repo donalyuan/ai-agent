@@ -1,8 +1,8 @@
 //! 组合各业务 Router、跨域策略和静态素材服务，不承载具体业务 handler。
 
 use crate::api::{
-    ai_models, asset_generation, conversations, health, materials, projects, scripts, topics,
-    workspace,
+    ai_models, asset_generation, conversations, health, materials, projects, scripts,
+    sound_subtitle, topics, tos_staging_tool, workspace,
 };
 use crate::bootstrap::AppState;
 use axum::{
@@ -41,6 +41,8 @@ pub fn build_app_with_state(state: AppState) -> Router {
         .merge(conversations::router())
         .merge(scripts::router())
         .merge(asset_generation::router())
+        .merge(sound_subtitle::router())
+        .merge(tos_staging_tool::router())
         .nest_service(
             "/assets",
             ServeDir::new(state.config.asset_storage_root.clone()),

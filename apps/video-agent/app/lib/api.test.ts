@@ -32,6 +32,16 @@ import {
   prepareScriptFromTopic,
   sendAgentMessage,
   createMaterial,
+  createSoundTask,
+  cancelSoundTask,
+  getAudioInspection,
+  getSoundTask,
+  getVoiceCatalog,
+  listSoundTasks,
+  preflightSoundTask,
+  requestAudioInspection,
+  requestWorkspaceVoiceCatalogCheck,
+  retrySoundTask,
   rejectAssetCandidate,
   selectAssetCandidate,
   updateContentTopic,
@@ -607,6 +617,88 @@ describe("video-agent api client", () => {
       headers: { accept: "application/json" },
     });
     expect(result.models[0].is_default).toBe(true);
+  });
+
+  it("读取语音目录并发起工作台目录检查", async () => {
+    const speechModelId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ model_id: speechModelId, voices: [], last_sync: null }))
+      .mockResolvedValueOnce(jsonResponse({ model_id: speechModelId, status: "queued" }, { status: 201 }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await getVoiceCatalog(client, speechModelId, true);
+    await requestWorkspaceVoiceCatalogCheck(client, speechModelId);
+
+    expect(fetchMock.mock.calls).toEqual([
+      [
+        `http://api.test/api/speech/models/${speechModelId}/voice-catalog?include_unavailable=true`,
+        { headers: { accept: "application/json" } },
+      ],
+      [
+        `http://api.test/api/speech/models/${speechModelId}/voice-catalog/check`,
+        { method: "POST", headers: { accept: "application/json" } },
+      ],
+    ]);
+  });
+
+  it("完成音频检查、声音任务确认、创建、重试和取消请求契约", async () => {
+    const speechModelId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const materialId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const inspectionId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const taskId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    const intent = {
+      task_type: "asr" as const,
+      model_id: speechModelId,
+      text_content: "",
+      voice_type: null,
+      language: null,
+      emotion: null,
+      parameters: {},
+      generate_subtitle: true,
+      subtitle_segments: [],
+      source_audio_material_id: materialId,
+      audio_inspection_id: inspectionId,
+    };
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse({ task_id: taskId, tasks: [] })));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await requestAudioInspection(client, project.project_id, materialId, "inspect-key");
+    await getAudioInspection(client, project.project_id, materialId);
+    await preflightSoundTask(client, project.project_id, intent);
+    await createSoundTask(client, project.project_id, {
+      ...intent,
+      confirmation_token: "confirmation-token",
+    }, "create-key");
+    await listSoundTasks(client, project.project_id);
+    await getSoundTask(client, project.project_id, taskId);
+    await retrySoundTask(client, project.project_id, taskId, {
+      ...intent,
+      confirmation_token: "confirmation-token",
+    }, "retry-key");
+    await cancelSoundTask(client, project.project_id, taskId);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `http://api.test/api/projects/${project.project_id}/audio-materials/${materialId}/inspection`,
+      `http://api.test/api/projects/${project.project_id}/audio-materials/${materialId}/inspection`,
+      `http://api.test/api/projects/${project.project_id}/sound-subtitle/tasks/preflight`,
+      `http://api.test/api/projects/${project.project_id}/sound-subtitle/tasks`,
+      `http://api.test/api/projects/${project.project_id}/sound-subtitle/tasks`,
+      `http://api.test/api/projects/${project.project_id}/sound-subtitle/tasks/${taskId}`,
+      `http://api.test/api/projects/${project.project_id}/sound-subtitle/tasks/${taskId}/retry`,
+      `http://api.test/api/projects/${project.project_id}/sound-subtitle/tasks/${taskId}/cancel`,
+    ]);
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "POST",
+      headers: expect.objectContaining({ "Idempotency-Key": "inspect-key" }),
+    });
+    expect(fetchMock.mock.calls[3][1]).toMatchObject({
+      method: "POST",
+      headers: expect.objectContaining({ "Idempotency-Key": "create-key" }),
+    });
+    expect(fetchMock.mock.calls[6][1]).toMatchObject({
+      method: "POST",
+      headers: expect.objectContaining({ "Idempotency-Key": "retry-key" }),
+    });
   });
 
   it("更新账号策略资料并生成策略草稿", async () => {

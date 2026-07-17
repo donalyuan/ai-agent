@@ -11,16 +11,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目记忆
 
-1. Novex 项目记忆采用"总索引 + 分文件"结构：`/server/video-agent/MEMORY.md` 作为项目级总索引和全局稳定约束，`/server/video-agent/docs/memory/README.md` 作为文档区索引，`/server/video-agent/docs/memory/*.md` 作为具体主题记忆。
-2. 每次新会话开始前、每次上下文压缩后恢复继续执行前，必须先读取 `/server/video-agent/MEMORY.md`；涉及具体主题、长期决策或历史背景时，再读取 `/server/video-agent/docs/memory/` 或 `/server/video-agent/docs/requirements/` 下对应文件。
-3. 写入 memory 时，优先更新对应主题文件；当新增主题、调整索引、变更全局约束或跨文件稳定规则时，再同步更新 `/server/video-agent/MEMORY.md`，必要时更新 `/server/video-agent/docs/memory/README.md`。
+1. Novex 项目记忆采用"总索引 + 分文件"结构：`/server/ai-agent/MEMORY.md` 作为项目级总索引和全局稳定约束，`/server/ai-agent/docs/memory/README.md` 作为文档区索引，`/server/ai-agent/docs/memory/*.md` 作为具体主题记忆。
+2. 每次新会话开始前、每次上下文压缩后恢复继续执行前，必须先读取 `/server/ai-agent/MEMORY.md`；涉及具体主题、长期决策或历史背景时，再读取 `/server/ai-agent/docs/memory/` 或 `/server/ai-agent/docs/requirements/` 下对应文件。
+3. 写入 memory 时，优先更新对应主题文件；当新增主题、调整索引、变更全局约束或跨文件稳定规则时，再同步更新 `/server/ai-agent/MEMORY.md`，必要时更新 `/server/ai-agent/docs/memory/README.md`。
 4. 只保存已确认并在后续仍可能复用的关键信息，包括长期偏好、稳定规则、历史决策，以及跨轮或压缩恢复后继续执行仍必需的上下文。
 5. 禁止写入临时探索、一次性报错、未确认猜测、仅当前局部步骤短暂有效的信息，以及口令、密钥、令牌、隐私数据等敏感信息。
-6. 需求明确或架构决策一旦确认，必须在当轮同步写入对应的主题 memory 文件；若影响总索引或全局约束，再同步更新 `/server/video-agent/MEMORY.md`。
+6. 需求明确或架构决策一旦确认，必须在当轮同步写入对应的主题 memory 文件；若影响总索引或全局约束，再同步更新 `/server/ai-agent/MEMORY.md`。
 
 ## 当前仓库状态
 
-1. 项目正在从根级 video-agent MVP 结构迁移为 Novex AI Agent Foundation monorepo；`apps/video-agent` 是首个业务应用。
+1. 项目正在从根级 ai-agent MVP 结构迁移为 Novex AI Agent Foundation monorepo；`apps/video-agent` 是首个业务应用。
 2. 技术栈已确定：Rust + Axum + SQLx + PostgreSQL + Milvus + Redis + Python Worker + Next.js。
 3. 后续实例在进入实现前，必须先重新检查仓库实际内容，以真实文件为准，不能从历史对话或其他项目推断当前实现状态。
 
@@ -28,7 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 1. 当前项目默认运行与验证环境为 Docker Compose 统一编排。
 2. 涉及本项目的 `cargo`、`pytest`、`npm` 及其他依赖项目运行时的命令，默认必须优先在容器内执行。
-3. 本项目服务容器内项目路径为 `/app`；宿主机项目路径为 `/server/video-agent`。
+3. 本项目服务容器内项目路径为 `/app`；宿主机项目路径为 `/server/ai-agent`。
 4. 未经明确确认，不得为本项目在宿主机临时安装或依赖与项目运行环境不一致的替代运行时。
 
 ## 常用命令

@@ -50,7 +50,10 @@ impl AiModelService {
         requested_default: bool,
     ) -> Result<AiModel, AiModelApplicationError> {
         let current = self.repository.get(model_id).await?;
-        if current.model_type == input.model_type && current.is_default && !requested_default {
+        let same_default_scope = current.model_type == input.model_type
+            && (current.model_type != ModelType::Speech
+                || current.api_protocol == input.api_protocol);
+        if same_default_scope && current.is_default && !requested_default {
             return Err(AiModelApplicationError::InvalidConfig(
                 "默认模型只能通过选择替代模型、停用或删除流程取消".to_string(),
             ));

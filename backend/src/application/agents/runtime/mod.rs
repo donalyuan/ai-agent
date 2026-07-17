@@ -3,6 +3,7 @@
 mod error;
 mod prompt;
 mod script;
+mod sound;
 mod topic_generation;
 mod topic_quality;
 mod topic_review;
@@ -18,7 +19,8 @@ use crate::domain::conversation::{
     AgentMessageRole, CreateAgentMessageInput, CreateAgentRunInput, FinishAgentRunInput,
 };
 use crate::repositories::{
-    ConversationRepository, ProjectRepository, ScriptRepository, TopicRepository,
+    ConversationRepository, PostgresVoiceCatalogRepository, ProjectRepository, ScriptRepository,
+    TopicRepository,
 };
 use novex_model::{LLMClient, ModelExecutionSnapshot};
 use serde_json::json;
@@ -31,6 +33,7 @@ pub struct AgentRuntime {
     script_repository: Arc<dyn ScriptRepository>,
     project_repository: Arc<dyn ProjectRepository>,
     topic_repository: Option<Arc<dyn TopicRepository>>,
+    voice_catalog_repository: Option<Arc<PostgresVoiceCatalogRepository>>,
     llm_client: Arc<dyn LLMClient>,
     model_execution: Option<ModelExecutionSnapshot>,
 }
@@ -47,6 +50,7 @@ impl AgentRuntime {
             script_repository,
             project_repository,
             topic_repository: None,
+            voice_catalog_repository: None,
             llm_client,
             model_execution: None,
         }
@@ -59,6 +63,14 @@ impl AgentRuntime {
 
     pub fn with_model_execution(mut self, snapshot: ModelExecutionSnapshot) -> Self {
         self.model_execution = Some(snapshot);
+        self
+    }
+
+    pub fn with_voice_catalog_repository(
+        mut self,
+        repository: Arc<PostgresVoiceCatalogRepository>,
+    ) -> Self {
+        self.voice_catalog_repository = Some(repository);
         self
     }
 
@@ -115,6 +127,10 @@ impl AgentRuntime {
                     request.supplement_of_batch_id,
                 )
                 .await
+            }
+            "sound" => {
+                self.handle_sound_turn(&conversation, &user_message, &run)
+                    .await
             }
             agent_type => Err(AgentRuntimeError::UnsupportedAgent(agent_type.to_string())),
         };

@@ -6,11 +6,14 @@ use crate::application::agents::runtime::{
 };
 use crate::domain::conversation::{AgentConversation, AgentMessage, CreateAgentConversationInput};
 use crate::model_routing::{ModelClientResolver, ModelResolveError};
+use crate::repositories::AiModelRepository;
 use crate::repositories::{
-    ConversationRepository, ConversationRepositoryError, PostgresConversationRepository,
-    PostgresProjectRepository, PostgresScriptRepository, PostgresTopicRepository,
-    ProjectRepository, ProjectRepositoryError, ScriptRepository,
+    ConversationRepository, ConversationRepositoryError, PostgresAiModelRepository,
+    PostgresConversationRepository, PostgresProjectRepository, PostgresScriptRepository,
+    PostgresTopicRepository, PostgresVoiceCatalogRepository, ProjectRepository,
+    ProjectRepositoryError, ScriptRepository,
 };
+use novex_model::{ApiProtocol, ModelType};
 use serde_json::Value;
 use std::{fmt, sync::Arc};
 use uuid::Uuid;
@@ -22,6 +25,8 @@ pub struct ConversationService {
     script_repository: PostgresScriptRepository,
     project_repository: PostgresProjectRepository,
     topic_repository: PostgresTopicRepository,
+    ai_model_repository: PostgresAiModelRepository,
+    voice_catalog_repository: PostgresVoiceCatalogRepository,
     model_resolver: Arc<dyn ModelClientResolver>,
 }
 
@@ -31,6 +36,8 @@ impl ConversationService {
         script_repository: PostgresScriptRepository,
         project_repository: PostgresProjectRepository,
         topic_repository: PostgresTopicRepository,
+        ai_model_repository: PostgresAiModelRepository,
+        voice_catalog_repository: PostgresVoiceCatalogRepository,
         model_resolver: Arc<dyn ModelClientResolver>,
     ) -> Self {
         Self {
@@ -38,6 +45,8 @@ impl ConversationService {
             script_repository,
             project_repository,
             topic_repository,
+            ai_model_repository,
+            voice_catalog_repository,
             model_resolver,
         }
     }
@@ -46,7 +55,7 @@ impl ConversationService {
         &self,
         command: CreateConversationCommand,
     ) -> Result<AgentConversation, ConversationApplicationError> {
-        if matches!(command.agent_type.as_str(), "script" | "topic") {
+        if matches!(command.agent_type.as_str(), "script" | "topic" | "sound") {
             let project_id = command.project_id.ok_or_else(|| {
                 ConversationApplicationError::Validation("Agent 会话必须绑定项目".to_string())
             })?;
@@ -65,8 +74,42 @@ impl ConversationService {
                 } else {
                     self.ensure_project_exists(project_id).await?;
                 }
+            } else if command.agent_type == "topic" {
+                self.ensure_project_exists(project_id).await?;
             } else {
                 self.ensure_project_exists(project_id).await?;
+                let model_id = command
+                    .metadata
+                    .get("speech_model_id")
+                    .and_then(Value::as_str)
+                    .and_then(|value| Uuid::parse_str(value).ok())
+                    .ok_or_else(|| {
+                        ConversationApplicationError::Validation(
+                            "声音会话必须绑定有效 speech_model_id".to_string(),
+                        )
+                    })?;
+                let runtime = self
+                    .ai_model_repository
+                    .resolve_enabled(model_id, ModelType::Speech)
+                    .await
+                    .map_err(|error| ConversationApplicationError::Validation(error.to_string()))?;
+                if !matches!(
+                    runtime.snapshot.api_protocol,
+                    ApiProtocol::VolcengineTtsV3 | ApiProtocol::OpenAiAudioSpeech
+                ) {
+                    return Err(ConversationApplicationError::Validation(
+                        "声音会话只能绑定启用的 TTS 模型".to_string(),
+                    ));
+                }
+                let catalog = self
+                    .voice_catalog_repository
+                    .catalog(model_id, false)
+                    .await?;
+                if catalog.voices.is_empty() {
+                    return Err(ConversationApplicationError::Validation(
+                        "声音会话绑定模型没有可用音色，请先同步目录".to_string(),
+                    ));
+                }
             }
         }
 
@@ -138,6 +181,7 @@ impl ConversationService {
         )
         .with_model_execution(model_execution)
         .with_topic_repository(Arc::new(self.topic_repository.clone()))
+        .with_voice_catalog_repository(Arc::new(self.voice_catalog_repository.clone()))
     }
 }
 
@@ -155,6 +199,7 @@ pub struct CreateConversationCommand {
 pub enum ConversationApplicationError {
     ConversationRepository(ConversationRepositoryError),
     ProjectRepository(ProjectRepositoryError),
+    VoiceCatalog(crate::repositories::VoiceCatalogRepositoryError),
     Agent(ScriptAgentError),
     Runtime(AgentRuntimeError),
     ModelResolve(ModelResolveError),
@@ -170,6 +215,12 @@ impl From<ConversationRepositoryError> for ConversationApplicationError {
 impl From<ProjectRepositoryError> for ConversationApplicationError {
     fn from(error: ProjectRepositoryError) -> Self {
         Self::ProjectRepository(error)
+    }
+}
+
+impl From<crate::repositories::VoiceCatalogRepositoryError> for ConversationApplicationError {
+    fn from(error: crate::repositories::VoiceCatalogRepositoryError) -> Self {
+        Self::VoiceCatalog(error)
     }
 }
 
@@ -196,6 +247,7 @@ impl fmt::Display for ConversationApplicationError {
         match self {
             Self::ConversationRepository(error) => write!(formatter, "{error}"),
             Self::ProjectRepository(error) => write!(formatter, "{error}"),
+            Self::VoiceCatalog(error) => write!(formatter, "{error}"),
             Self::Agent(error) => write!(formatter, "{error}"),
             Self::Runtime(error) => write!(formatter, "{error}"),
             Self::ModelResolve(error) => write!(formatter, "{error}"),

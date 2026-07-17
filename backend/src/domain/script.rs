@@ -149,6 +149,7 @@ pub struct ScriptSummary {
     pub scene_count: i64,
     pub parent_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 impl Script {

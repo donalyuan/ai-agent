@@ -20,6 +20,7 @@ import type {
   SceneVisualManifest,
   ScriptDetail,
   ScriptListResponse,
+  SoundTask,
   TopicQualityEvaluation,
   TopicGenerationBatchListResponse,
   TopicGroupListResponse,
@@ -95,6 +96,16 @@ vi.mock("./lib/api", async (importOriginal) => {
     dismissAssetGenerationTask: vi.fn(),
     listContentTopics: vi.fn(),
     listMaterials: vi.fn(),
+    getVoiceCatalog: vi.fn(),
+    requestWorkspaceVoiceCatalogCheck: vi.fn(),
+    requestAudioInspection: vi.fn(),
+    getAudioInspection: vi.fn(),
+    preflightSoundTask: vi.fn(),
+    createSoundTask: vi.fn(),
+    listSoundTasks: vi.fn(),
+    getSoundTask: vi.fn(),
+    retrySoundTask: vi.fn(),
+    cancelSoundTask: vi.fn(),
     listTopicGenerationBatches: vi.fn(),
     listTopicGroups: vi.fn(),
     createTopicGroupReview: vi.fn(),
@@ -184,6 +195,7 @@ const scriptSummary = {
   scene_count: 2,
   parent_id: null,
   created_at: "2026-07-02T00:05:00Z",
+  updated_at: "2026-07-02T00:05:00Z",
 };
 
 const scriptDetail: ScriptDetail = {
@@ -221,6 +233,7 @@ const secondScriptSummary = {
   scene_count: 1,
   parent_id: null,
   created_at: "2026-07-02T00:10:00Z",
+  updated_at: "2026-07-02T00:10:00Z",
 };
 
 const secondScriptDetail: ScriptDetail = {
@@ -390,7 +403,7 @@ const materialWorkspaceMenus: WorkspaceMenuListResponse = {
 
 function soundSubtitleMenuNode() {
   return {
-    ...menuNode("sound-subtitle-generation", "声音与字幕生成", false, "planned", 30),
+    ...menuNode("sound-subtitle-generation", "声音与字幕生成", true, "active", 30),
     agent_key: "sound-generation-agent",
     menu_type: "page" as const,
     module_key: "materials.sound-subtitle-generation",
@@ -445,6 +458,7 @@ const scriptedTopicScriptSummary = {
   topic_id: scriptedTopic.topic_id,
   source_topic_title: scriptedTopic.title,
   created_at: "2026-07-06T10:25:45.998632Z",
+  updated_at: "2026-07-06T10:25:45.998632Z",
 };
 
 const archivedTopic: ContentTopic = {
@@ -971,6 +985,7 @@ const generatedScriptSummary = {
   scene_count: 3,
   parent_id: null,
   created_at: "2026-07-02T00:12:00Z",
+  updated_at: "2026-07-02T00:12:00Z",
 };
 
 const generatedScriptDetail: ScriptDetail = {
@@ -1096,7 +1111,7 @@ function menuNode(
     menu_key: menuKey,
     label,
     description: `${label}说明`,
-    route_path: `/${menuKey}`,
+    route_path: workspaceRoutePath(menuKey),
     icon: "circle",
     menu_type: "section" as const,
     module_key: menuKey,
@@ -1107,6 +1122,25 @@ function menuNode(
     metadata: { phase: status === "active" ? 1 : 2 },
     children: [],
   };
+}
+
+function workspaceRoutePath(menuKey: string) {
+  return {
+    "content-strategy": "/strategy",
+    "account-strategy": "/strategy/account",
+    "topic-history": "/strategy/topic-history",
+    "topic-generator": "/strategy/topics",
+    "script-creation": "/scripts",
+    "script-generator": "/scripts/generator",
+    "material-management": "/materials",
+    "material-library": "/materials/library",
+    "asset-generation": "/materials/generation",
+    "sound-subtitle-generation": "/materials/sound-subtitle-generation",
+    production: "/production",
+    publishing: "/publishing",
+    analytics: "/analytics",
+    "workflow-tasks": "/workflow-tasks",
+  }[menuKey] ?? `/${menuKey}`;
 }
 
 function mockProjects(response: ProjectListResponse) {
@@ -1159,6 +1193,7 @@ async function flushAsyncWork() {
 describe("video-agent 视频工作台页面", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, "", "/");
     window.sessionStorage.clear();
     vi.mocked(api.listWorkspaceMenus).mockResolvedValue(workspaceMenus);
     vi.mocked(api.listModelOptions).mockImplementation(async (_client, modelType) => ({
@@ -1244,6 +1279,7 @@ describe("video-agent 视频工作台页面", () => {
       draft_summary: "草稿偏向 AI 工具教程、避坑和真实案例。",
     });
     vi.mocked(api.updateProjectStrategyProfile).mockResolvedValue(project);
+    vi.mocked(api.listSoundTasks).mockResolvedValue({ tasks: [] });
     mockMaterials();
   });
 
@@ -1277,6 +1313,124 @@ describe("video-agent 视频工作台页面", () => {
     expect(within(menu).getByRole("button", { name: /素材管理/ })).toBeEnabled();
   });
 
+  it("根据数据库 route_path 直达并恢复声音与字幕页面", async () => {
+    window.history.replaceState({}, "", "/materials/sound-subtitle-generation");
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+
+    render(createElement(Home));
+
+    expect(await screen.findByRole("heading", { name: "声音与字幕生成" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /素材管理/ })).toHaveClass("active");
+    expect(screen.getByRole("button", { name: "声音与字幕生成" })).toHaveClass("active");
+    expect(window.location.pathname).toBe("/materials/sound-subtitle-generation");
+  });
+
+  it("失败声音任务展示完整脱敏诊断且保留多任务卡片内容", async () => {
+    window.history.replaceState({}, "", "/materials/sound-subtitle-generation");
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    const failedTask: SoundTask = {
+      task_id: "498ed8cd-601d-4664-b401-454f688c5ba7",
+      project_id: project.project_id,
+      parent_task_id: null,
+      task_type: "tts",
+      status: "failed",
+      model_id: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      audio_inspection_id: null,
+      source_audio_material_id: null,
+      source_script_id: null,
+      source_script_snapshot: null,
+      output_audio_material_id: null,
+      output_subtitle_material_id: null,
+      text_content: "项目旁白完整配音",
+      voice_type: "zh_female_cancan_mars_bigtts",
+      language: "zh-cn",
+      emotion: null,
+      parameters: { audio_format: "mp3", sample_rate: 24000 },
+      generate_subtitle: false,
+      subtitle_segments: [],
+      model_snapshot: {
+        display_name: "豆包语音合成 2.0",
+        upstream_model: "doubao-seed-tts-2.0",
+        api_protocol: "volcengine_tts_v3",
+      },
+      voice_snapshot: { name: "灿灿" },
+      resource_usage: { character_count: 8, task_count: 1 },
+      timeline: null,
+      result: null,
+      request_id: "f1f273d6-82da-4101-a284-6c4b54b89910",
+      upstream_log_id: "20260717150632A1B2C3D4E5F60789",
+      attempt_count: 1,
+      max_attempts: 2,
+      error_code: "tts_http_error",
+      error_summary: "语音供应商返回 HTTP 403",
+      error_details: {
+        http_status: 403,
+        provider_error_code: "45000020",
+        provider_error_message: "Permission denied",
+      },
+      staging_status: "none",
+      cleanup_attempt_count: 0,
+      cleanup_error_summary: null,
+      started_at: "2026-07-17T07:06:28Z",
+      completed_at: "2026-07-17T07:06:29Z",
+      created_at: "2026-07-17T07:06:28Z",
+      updated_at: "2026-07-17T07:06:29Z",
+    };
+    vi.mocked(api.listSoundTasks).mockResolvedValue({
+      tasks: Array.from({ length: 8 }, (_, index) => ({
+        ...failedTask,
+        task_id: `498ed8cd-601d-4664-b401-454f688c5ba${index}`,
+        text_content: `第 ${index + 1} 条项目旁白完整配音`,
+      })),
+    });
+
+    render(createElement(Home));
+
+    const detail = await screen.findByLabelText("当前失败任务详情");
+    expect(within(detail).getByText("HTTP 403")).toBeInTheDocument();
+    expect(within(detail).getByText(/Permission denied/)).toBeInTheDocument();
+    expect(within(detail).getByText(/45000020/)).toBeInTheDocument();
+    expect(within(detail).getByText(/f1f273d6-82da-4101-a284-6c4b54b89910/)).toBeInTheDocument();
+    expect(within(detail).getByText(/20260717150632A1B2C3D4E5F60789/)).toBeInTheDocument();
+    const taskPanel = screen.getByRole("complementary", { name: "配音任务列表" });
+    expect(within(taskPanel).getAllByRole("article")).toHaveLength(8);
+    expect(within(taskPanel).getByText("第 8 条项目旁白完整配音")).toBeInTheDocument();
+  });
+
+  it("菜单点击更新 URL 并响应浏览器前进后退事件", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    expect(window.location.pathname).toBe("/materials");
+
+    fireEvent.click(screen.getByRole("button", { name: "声音与字幕生成" }));
+    expect(window.location.pathname).toBe("/materials/sound-subtitle-generation");
+
+    act(() => {
+      window.history.replaceState({}, "", "/strategy/account");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(await screen.findByRole("heading", { name: "账号策略" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /内容策略/ })).toHaveClass("active");
+    expect(screen.getByRole("button", { name: "账号策略" })).toHaveClass("active");
+  });
+
+  it("未知路径使用 replace 回退首个可用菜单", async () => {
+    window.history.replaceState({}, "", "/unknown-workspace-route");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+
+    render(createElement(Home));
+
+    expect(await screen.findByRole("heading", { name: "内容策略" })).toBeInTheDocument();
+    await waitFor(() => expect(window.location.pathname).toBe("/strategy"));
+    expect(replaceState).toHaveBeenCalledWith(expect.anything(), "", "/strategy");
+    replaceState.mockRestore();
+  });
+
   it("从工作台菜单打开素材库画布空状态", async () => {
     vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
     mockProjects({ projects: [project] });
@@ -1300,6 +1454,21 @@ describe("video-agent 视频工作台页面", () => {
       work_id: "",
       work_version_id: "",
     });
+  });
+
+  it("从素材管理打开声音与字幕双标签工作区", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    mockMaterials([]);
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    fireEvent.click(screen.getByRole("button", { name: "声音与字幕生成" }));
+
+    expect(await screen.findByRole("heading", { name: "声音与字幕生成" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "TTS配音" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "字幕" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "声音与字幕生成" })).toHaveClass("active");
   });
 
   it("素材库按声音用途、生成来源、作品和版本组合筛选", async () => {

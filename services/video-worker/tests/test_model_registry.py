@@ -9,6 +9,7 @@ from video_worker.model_registry import (
 
 
 MODEL_ID = "00000000-0000-0000-0000-000000000101"
+TOS_CONFIG_ID = "00000000-0000-0000-0000-000000000201"
 
 
 class FakeConnection:
@@ -51,6 +52,82 @@ def image_model_row(**overrides: object) -> dict[str, object]:
         },
         "status": "enabled",
         "deleted_at": None,
+    }
+    row.update(overrides)
+    return row
+
+
+def speech_model_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "id": MODEL_ID,
+        "display_name": "Doubao ASR",
+        "model_type": "speech",
+        "provider_name": "火山引擎",
+        "api_protocol": "volcengine_asr_v3",
+        "protocol_version": "v3",
+        "auth_scheme": "api_key",
+        "request_base_url": "https://openspeech.bytedance.com/api/v3",
+        "upstream_model": "doubao-seed-asr-2.0",
+        "api_key": "speech-key",
+        "api_secret": None,
+        "timeout_seconds": 120,
+        "settings": {
+            "resource_id": "volc.seedasr.auc",
+            "supported_audio_formats": ["mp3", "wav"],
+            "supports_word_timestamps": True,
+            "word_timestamp_languages": ["*"],
+            "max_audio_duration_seconds": 3600,
+            "parameters": {},
+        },
+        "status": "enabled",
+        "deleted_at": None,
+        "version": 3,
+    }
+    row.update(overrides)
+    return row
+
+
+def openai_audio_speech_model_row(**overrides: object) -> dict[str, object]:
+    row = speech_model_row(
+        display_name="Doubao TTS Gateway",
+        provider_name="ZeekAI",
+        api_protocol="openai_audio_speech",
+        protocol_version="v1",
+        auth_scheme="bearer",
+        request_base_url="https://speech-gateway.example.com/v1",
+        upstream_model="doubao-seed-tts-2.0",
+        settings={
+            "resource_id": "seed-tts-2.0",
+            "supported_audio_formats": ["mp3", "wav"],
+            "supports_word_timestamps": False,
+            "word_timestamp_languages": [],
+            "parameters": {
+                "speed_ratio": {
+                    "type": "number",
+                    "minimum": 0.25,
+                    "maximum": 4.0,
+                }
+            },
+        },
+    )
+    row.update(overrides)
+    return row
+
+
+def tos_config_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "id": TOS_CONFIG_ID,
+        "version": 5,
+        "storage_provider": "volcengine_tos",
+        "endpoint": "https://tos-cn-beijing.volces.com",
+        "region": "cn-beijing",
+        "bucket": "private-bucket",
+        "object_prefix": "novex/asr",
+        "access_key": "tos-ak",
+        "secret_key": "tos-sk",
+        "signed_url_ttl_seconds": 600,
+        "max_file_bytes": 10485760,
+        "max_audio_duration_seconds": 3600,
     }
     row.update(overrides)
     return row
@@ -151,5 +228,108 @@ def test_loader_rejects_unavailable_or_invalid_models(row, code):
 
     with pytest.raises(ModelRegistryError) as captured:
         registry.resolve_enabled(MODEL_ID, "image")
+
+    assert captured.value.code == code
+
+
+def test_speech_loader_requires_locked_model_version_without_tos_fields():
+    registry, connection = registry_for(speech_model_row())
+
+    config = registry.resolve_speech(MODEL_ID, "volcengine_asr_v3", 3)
+
+    assert connection.params == (MODEL_ID,)
+    assert config.registry_version == 3
+    assert config.api_key == "speech-key"
+    snapshot = config.snapshot()
+    assert snapshot["registry_version"] == 3
+    serialized = str(snapshot)
+    assert "speech-key" not in serialized
+    assert "staging" not in serialized
+
+
+def test_speech_loader_accepts_openai_audio_speech_bearer_runtime():
+    registry, connection = registry_for(openai_audio_speech_model_row())
+
+    config = registry.resolve_speech(MODEL_ID, "openai_audio_speech", 3)
+
+    assert connection.params == (MODEL_ID,)
+    assert config.api_protocol == "openai_audio_speech"
+    assert config.auth_scheme == "bearer"
+    assert config.request_base_url == "https://speech-gateway.example.com/v1"
+    assert config.settings["supports_word_timestamps"] is False
+    assert config.settings["word_timestamp_languages"] == []
+    assert "speech-key" not in str(config.snapshot())
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        openai_audio_speech_model_row(auth_scheme="api_key"),
+        openai_audio_speech_model_row(
+            request_base_url="https://speech-gateway.example.com/v1/audio/speech"
+        ),
+        openai_audio_speech_model_row(
+            settings={
+                "resource_id": "seed-tts-2.0",
+                "supported_audio_formats": ["mp3"],
+                "supports_word_timestamps": True,
+                "word_timestamp_languages": ["zh-cn"],
+            }
+        ),
+    ],
+)
+def test_speech_loader_rejects_invalid_openai_audio_speech_runtime(row):
+    registry, _ = registry_for(row)
+
+    with pytest.raises(ModelRegistryError) as captured:
+        registry.resolve_speech(MODEL_ID, "openai_audio_speech", 3)
+
+    assert captured.value.code == "invalid_model_config"
+
+
+def test_tos_loader_resolves_locked_historical_version_independently():
+    registry, connection = registry_for(tos_config_row())
+
+    config = registry.resolve_tos_staging(TOS_CONFIG_ID, 5)
+
+    assert connection.params == (TOS_CONFIG_ID,)
+    assert config.config_id == TOS_CONFIG_ID
+    assert config.version == 5
+    assert config.bucket == "private-bucket"
+    assert config.access_key == "tos-ak"
+
+
+@pytest.mark.parametrize(
+    ("row", "protocol", "version", "code"),
+    [
+        (speech_model_row(version=4), "volcengine_asr_v3", 3, "model_version_changed"),
+        (speech_model_row(api_protocol="volcengine_tts_v3"), "volcengine_asr_v3", 3, "model_protocol_mismatch"),
+        (speech_model_row(api_key=None), "volcengine_asr_v3", 3, "invalid_model_config"),
+        (speech_model_row(status="disabled"), "volcengine_asr_v3", 3, "model_disabled"),
+    ],
+)
+def test_speech_loader_rejects_changed_or_invalid_runtime(row, protocol, version, code):
+    registry, _ = registry_for(row)
+
+    with pytest.raises(ModelRegistryError) as captured:
+        registry.resolve_speech(MODEL_ID, protocol, version)
+
+    assert captured.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("row", "version", "code"),
+    [
+        (None, 5, "tos_staging_config_not_found"),
+        (tos_config_row(), 4, "tos_staging_version_changed"),
+        (tos_config_row(endpoint="http://tos.invalid"), 5, "invalid_tos_staging_config"),
+        (tos_config_row(secret_key=""), 5, "invalid_tos_staging_config"),
+    ],
+)
+def test_tos_loader_rejects_missing_changed_or_invalid_locked_config(row, version, code):
+    registry, _ = registry_for(row)
+
+    with pytest.raises(ModelRegistryError) as captured:
+        registry.resolve_tos_staging(TOS_CONFIG_ID, version)
 
     assert captured.value.code == code
