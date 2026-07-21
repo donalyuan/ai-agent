@@ -84,6 +84,7 @@ export type AiModelProtocol =
   | "openai_chat_completions"
   | "openai_images"
   | "volcengine_ark_images"
+  | "volcengine_ark_video"
   | "runway_api"
   | "kling_api"
   | "volcengine_tts_v3"

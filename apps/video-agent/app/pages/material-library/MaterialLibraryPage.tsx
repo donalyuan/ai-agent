@@ -69,8 +69,10 @@ export function MaterialLibraryPage({
 }: MaterialLibraryPageProps) {
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const previewTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const videoPlayerRef = useRef<HTMLVideoElement | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 1, height: 1 });
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [videoPlaybackState, setVideoPlaybackState] = useState<"idle" | "playing" | "paused" | "error">("idle");
   const selectedMaterialId = selectedMaterial?.material_id || null;
   const detailOpen = creatingMaterial || selectedMaterial !== null;
   const detailPreview = selectedMaterial ? getMaterialPreview(selectedMaterial) : null;
@@ -119,11 +121,26 @@ export function MaterialLibraryPage({
 
   useEffect(() => {
     setPreviewOpen(false);
+    setVideoPlaybackState("idle");
   }, [selectedMaterialId]);
 
   const closePreview = () => {
     setPreviewOpen(false);
     window.requestAnimationFrame(() => previewTriggerRef.current?.focus());
+  };
+
+  const toggleVideoPlayback = async () => {
+    const player = videoPlayerRef.current;
+    if (!player) return;
+    try {
+      if (player.paused) {
+        await player.play();
+      } else {
+        player.pause();
+      }
+    } catch {
+      setVideoPlaybackState("error");
+    }
   };
 
   return (
@@ -366,6 +383,37 @@ export function MaterialLibraryPage({
                   <audio controls preload="none" src={selectedMaterial.file_url}>
                     浏览器不支持音频播放。
                   </audio>
+                </div>
+              ) : selectedMaterial.material_type === "video" ? (
+                <div className="materialVideoPlayerBlock">
+                  <div className="materialDetailPreview materialVideoPreview">
+                    <video
+                      ref={videoPlayerRef}
+                      aria-label={`${selectedMaterial.file_name} 视频播放器`}
+                      controls
+                      playsInline
+                      poster={selectedMaterial.thumbnail_url || undefined}
+                      preload="metadata"
+                      src={selectedMaterial.file_url}
+                      onError={() => setVideoPlaybackState("error")}
+                      onPause={() => setVideoPlaybackState("paused")}
+                      onPlay={() => setVideoPlaybackState("playing")}
+                    >
+                      浏览器不支持视频播放。
+                    </video>
+                  </div>
+                  <button
+                    aria-label={videoPlaybackState === "playing" ? "暂停视频" : "播放视频"}
+                    className="materialVideoPlayButton"
+                    type="button"
+                    onClick={() => void toggleVideoPlayback()}
+                  >
+                    <span aria-hidden="true">{videoPlaybackState === "playing" ? "❚❚" : "▶"}</span>
+                    {videoPlaybackState === "playing" ? "暂停" : "播放"}
+                  </button>
+                  <span className="materialVideoPlaybackState" role="status">
+                    {videoPlaybackState === "playing" ? "播放中" : videoPlaybackState === "paused" ? "已暂停" : videoPlaybackState === "error" ? "视频加载失败" : "点击播放"}
+                  </span>
                 </div>
               ) : imagePreviewAvailable ? (
                 <button

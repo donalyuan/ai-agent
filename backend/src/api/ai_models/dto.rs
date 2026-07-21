@@ -375,10 +375,16 @@ pub(super) struct ModelOptionResponse {
     api_protocol: ApiProtocol,
     upstream_model: String,
     is_default: bool,
+    capabilities: Value,
 }
 
 impl From<AiModel> for ModelOptionResponse {
     fn from(model: AiModel) -> Self {
+        let capabilities = if model.model_type == ModelType::Video {
+            model.settings.clone()
+        } else {
+            json!({})
+        };
         Self {
             model_id: model.id,
             display_name: model.display_name,
@@ -387,6 +393,7 @@ impl From<AiModel> for ModelOptionResponse {
             api_protocol: model.api_protocol,
             upstream_model: model.upstream_model,
             is_default: model.is_default,
+            capabilities,
         }
     }
 }

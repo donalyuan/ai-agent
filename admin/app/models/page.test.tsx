@@ -137,7 +137,7 @@ describe("AI 模型管理页面", () => {
     expect(within(dialog).getByLabelText("单次最大图片数")).toBeDisabled();
 
     fireEvent.change(modelType, { target: { value: "video" } });
-    expect(protocolNames()).toEqual(["Runway API", "可灵 API"]);
+    expect(protocolNames()).toEqual(["火山方舟 Seedance", "Runway API", "可灵 API"]);
 
     fireEvent.change(modelType, { target: { value: "speech" } });
     expect(protocolNames()).toEqual([

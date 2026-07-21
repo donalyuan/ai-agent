@@ -11,7 +11,9 @@ use crate::application::materials::MaterialApplicationError;
 use crate::application::projects::ProjectApplicationError;
 use crate::application::scripts::ScriptApplicationError;
 use crate::application::topics::TopicApplicationError;
+use crate::application::work_generation::WorkGenerationApplicationError;
 use crate::bootstrap::AppStateError;
+use crate::domain::work_generation::WorkGenerationError;
 use crate::model_routing::ModelResolveError;
 use crate::repositories::{
     AssetGenerationRepositoryError, ConversationRepositoryError, MaterialRepositoryError,
@@ -64,6 +66,7 @@ pub(crate) enum ScriptApiError {
     ProjectValidation(String),
     MaterialValidation(String),
     AssetValidation(String),
+    WorkGeneration(WorkGenerationApplicationError),
     SceneVisualManifestIncomplete {
         script_id: uuid::Uuid,
         blockers: Vec<SceneVisualManifestBlocker>,
@@ -259,6 +262,12 @@ impl From<AssetGenerationApplicationError> for ScriptApiError {
     }
 }
 
+impl From<WorkGenerationApplicationError> for ScriptApiError {
+    fn from(error: WorkGenerationApplicationError) -> Self {
+        Self::WorkGeneration(error)
+    }
+}
+
 impl IntoResponse for ScriptApiError {
     fn into_response(self) -> axum::response::Response {
         match self {
@@ -294,6 +303,7 @@ impl IntoResponse for ScriptApiError {
             Self::AssetValidation(message) => {
                 (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
             }
+            Self::WorkGeneration(error) => work_generation_error_response(error).into_response(),
             Self::SceneVisualManifestIncomplete {
                 script_id,
                 blockers,
@@ -341,6 +351,46 @@ impl IntoResponse for ScriptApiError {
             Self::AgentRuntime(error) => agent_runtime_error_response(error).into_response(),
             Self::ModelResolve(error) => model_resolve_error_response(error).into_response(),
         }
+    }
+}
+
+fn work_generation_error_response(
+    error: WorkGenerationApplicationError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match error {
+        WorkGenerationApplicationError::Domain(WorkGenerationError::StalePlan) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "作品计划已失效，请重新规划和确认", "code": "work_plan_stale"})),
+        ),
+        WorkGenerationApplicationError::Domain(WorkGenerationError::InvalidSegments(details)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(
+                json!({"error": "无法形成合法视频分段", "code": "work_segments_invalid", "details": details}),
+            ),
+        ),
+        WorkGenerationApplicationError::Repository(error) => (
+            StatusCode::CONFLICT,
+            Json(
+                json!({"error": "作品生成状态冲突", "code": "work_generation_conflict", "details": error.to_string()}),
+            ),
+        ),
+        WorkGenerationApplicationError::ManifestIncomplete {
+            script_id,
+            blockers,
+        } => (
+            StatusCode::CONFLICT,
+            Json(
+                json!({"error": "主画面清单不完整", "code": "work_manifest_incomplete", "script_id": script_id, "blockers": blockers}),
+            ),
+        ),
+        WorkGenerationApplicationError::Domain(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": error.to_string(), "code": "work_generation_invalid"})),
+        ),
+        WorkGenerationApplicationError::Validation(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": message, "code": "work_generation_validation"})),
+        ),
     }
 }
 

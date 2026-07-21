@@ -179,6 +179,36 @@ fn ark_image_payload(name: &str, request_base_url: &str) -> Value {
     })
 }
 
+fn ark_video_payload(name: &str) -> Value {
+    json!({
+        "display_name": name,
+        "model_type": "video",
+        "provider_name": "火山引擎",
+        "api_protocol": "volcengine_ark_video",
+        "protocol_version": "v1",
+        "auth_scheme": "bearer",
+        "request_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "upstream_model": "doubao-seedance-2-0-pro",
+        "api_key": "ark-video-secret-key-1234",
+        "api_secret": null,
+        "timeout_seconds": 120,
+        "reasoning_effort": null,
+        "max_output_tokens": null,
+        "settings": {
+            "resolutions": ["720p", "1080p"],
+            "aspect_ratios": ["16:9", "9:16"],
+            "min_duration_seconds": 4,
+            "max_duration_seconds": 15,
+            "max_reference_images": 9,
+            "max_prompt_chars": 500,
+            "generate_audio": true
+        },
+        "sort_order": 10,
+        "remark": "Seedance Ark",
+        "is_default": false
+    })
+}
+
 fn speech_payload(name: &str, protocol: &str) -> Value {
     let is_tts = protocol == "volcengine_tts_v3";
     json!({
@@ -341,6 +371,7 @@ async fn admin_crud_masks_credentials_and_options_omit_sensitive_configuration()
     let option = &options["models"][0];
     assert_eq!(option["model_id"], model_id);
     assert_eq!(option["is_default"], true);
+    assert_eq!(option["capabilities"], json!({}));
     for forbidden in [
         "request_base_url",
         "api_key",
@@ -354,6 +385,23 @@ async fn admin_crud_masks_credentials_and_options_omit_sensitive_configuration()
             "options leaked {forbidden}"
         );
     }
+
+    let (video_status, video) = send(
+        &app,
+        "POST",
+        "/api/admin/models",
+        Some(ark_video_payload("Seedance 2.0")),
+    )
+    .await;
+    assert_eq!(video_status, StatusCode::CREATED, "{video}");
+    let (options_status, options) =
+        send(&app, "GET", "/api/model-options?type=video", None).await;
+    assert_eq!(options_status, StatusCode::OK);
+    let capability = &options["models"][0]["capabilities"];
+    assert_eq!(capability["aspect_ratios"], json!(["16:9", "9:16"]));
+    assert_eq!(capability["resolutions"], json!(["720p", "1080p"]));
+    assert_eq!(capability["generate_audio"], true);
+    assert!(options["models"][0].get("settings").is_none());
 
     pool.close().await;
     drop_database(&admin_pool, &database_name).await;

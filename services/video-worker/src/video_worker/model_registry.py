@@ -60,6 +60,37 @@ class SpeechStagingRuntimeConfig:
 
 
 @dataclass(frozen=True)
+class VideoModelRuntimeConfig:
+    model_id: str
+    display_name: str
+    provider_name: str
+    api_protocol: str
+    protocol_version: str
+    auth_scheme: str
+    request_base_url: str
+    upstream_model: str
+    api_key: str
+    timeout_seconds: int
+    settings: dict[str, object]
+    registry_version: int
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "model_id": self.model_id,
+            "display_name": self.display_name,
+            "model_type": "video",
+            "provider_name": self.provider_name,
+            "api_protocol": self.api_protocol,
+            "protocol_version": self.protocol_version,
+            "request_base_url": self.request_base_url,
+            "upstream_model": self.upstream_model,
+            "timeout_seconds": self.timeout_seconds,
+            "settings": self.settings,
+            "registry_version": self.registry_version,
+        }
+
+
+@dataclass(frozen=True)
 class SpeechModelRuntimeConfig:
     model_id: str
     display_name: str
@@ -273,6 +304,95 @@ class PostgresModelRegistry:
             api_protocol=protocol,
             protocol_version=str(row["protocol_version"]),
             auth_scheme=str(row["auth_scheme"]),
+            request_base_url=request_base_url,
+            upstream_model=upstream_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+            settings=settings,
+            registry_version=registry_version,
+        )
+
+    def resolve_video(
+        self,
+        model_id: str,
+        expected_registry_version: int,
+    ) -> VideoModelRuntimeConfig:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, display_name, model_type, provider_name, api_protocol,
+                       protocol_version, auth_scheme, request_base_url, upstream_model,
+                       api_key, timeout_seconds, settings, status, deleted_at, version
+                FROM ai_models
+                WHERE id = %s
+                """,
+                (model_id,),
+            ).fetchone()
+        if row is None:
+            raise ModelRegistryError("model_not_found", "视频模型不存在")
+        if str(row["model_type"]) != "video":
+            raise ModelRegistryError("model_type_mismatch", "模型类型不匹配")
+        if str(row["status"]) != "enabled" or row["deleted_at"] is not None:
+            raise ModelRegistryError("model_disabled", "视频模型已停用或删除")
+        registry_version = int(row["version"])
+        if registry_version != expected_registry_version:
+            raise ModelRegistryError("model_version_changed", "视频模型配置已变化，请重新确认")
+
+        protocol = str(row["api_protocol"])
+        auth_scheme = str(row["auth_scheme"])
+        request_base_url = str(row["request_base_url"] or "").strip().rstrip("/")
+        parsed_url = urlsplit(request_base_url)
+        upstream_model = str(row["upstream_model"] or "").strip()
+        api_key = str(row["api_key"] or "").strip()
+        timeout_seconds = int(row["timeout_seconds"])
+        settings = row["settings"] or {}
+        required_settings = {
+            "min_duration_seconds": int,
+            "max_duration_seconds": int,
+            "max_reference_images": int,
+            "max_prompt_chars": int,
+            "aspect_ratios": list,
+            "resolutions": list,
+            "generate_audio": bool,
+        }
+        if (
+            protocol != "volcengine_ark_video"
+            or auth_scheme != "bearer"
+            or parsed_url.scheme != "https"
+            or not parsed_url.netloc
+            or parsed_url.query
+            or parsed_url.fragment
+            or not parsed_url.path.rstrip("/").endswith("/api/v3")
+            or not upstream_model
+            or not api_key
+            or timeout_seconds <= 0
+            or not isinstance(settings, dict)
+            or any(not isinstance(settings.get(name), expected) for name, expected in required_settings.items())
+            or not 1 <= int(settings.get("max_reference_images", 0)) <= 9
+            or not 4 <= int(settings.get("min_duration_seconds", 0)) <= int(settings.get("max_duration_seconds", 0)) <= 15
+            or not settings.get("aspect_ratios")
+            or not settings.get("resolutions")
+            or not 1 <= int(settings.get("max_prompt_chars", 0)) <= 500
+        ):
+            raise ModelRegistryError("invalid_model_config", "火山方舟视频模型配置无效")
+        settings = dict(settings)
+        if upstream_model.startswith("doubao-seedance-1-5-"):
+            settings["max_duration_seconds"] = min(
+                int(settings["max_duration_seconds"]), 12
+            )
+            settings["max_reference_images"] = min(
+                int(settings["max_reference_images"]), 2
+            )
+            settings["reference_image_mode"] = "first_last_frames"
+        elif upstream_model.startswith("doubao-seedance-2-0-"):
+            settings["reference_image_mode"] = "multi_reference"
+        return VideoModelRuntimeConfig(
+            model_id=str(row["id"]),
+            display_name=str(row["display_name"]),
+            provider_name=str(row["provider_name"]),
+            api_protocol=protocol,
+            protocol_version=str(row["protocol_version"]),
+            auth_scheme=auth_scheme,
             request_base_url=request_base_url,
             upstream_model=upstream_model,
             api_key=api_key,

@@ -1,3 +1,4 @@
+use crate::application::agents::runtime::SoundAgentContext;
 use crate::application::conversations::CreateConversationCommand;
 use crate::domain::conversation::{
     AgentConversation, AgentConversationStatus, AgentMessage, AgentMessageRole, AgentRunRecord,
@@ -29,7 +30,7 @@ impl CreateAgentConversationRequest {
             return Err("会话标题不能为空".to_string());
         }
         let agent_type = self.agent_type.trim();
-        if !matches!(agent_type, "script" | "topic" | "sound") {
+        if !matches!(agent_type, "script" | "topic" | "sound" | "work") {
             return Err("暂不支持该 Agent 类型".to_string());
         }
         if self.project_id.is_none() {
@@ -47,6 +48,11 @@ impl CreateAgentConversationRequest {
             && subject_type.is_some_and(|value| !value.is_empty())
         {
             return Err("未绑定脚本会话不能传 subject_type".to_string());
+        }
+        if agent_type == "work" {
+            if self.subject_type.as_deref() != Some("work") && self.subject_id.is_some() {
+                return Err("作品会话绑定 subject 时 subject_type 必须为 work".to_string());
+            }
         }
         if agent_type == "sound" {
             if self.subject_id.is_some() || subject_type.is_some() {
@@ -89,6 +95,8 @@ pub struct SendAgentMessageRequest {
     pub content: String,
     #[serde(default)]
     pub supplement_of_batch_id: Option<Uuid>,
+    #[serde(default)]
+    pub sound_context: Option<SoundAgentContext>,
 }
 
 impl SendAgentMessageRequest {
@@ -98,6 +106,9 @@ impl SendAgentMessageRequest {
         }
         if self.content.trim().is_empty() {
             return Err("消息不能为空".to_string());
+        }
+        if let Some(context) = &self.sound_context {
+            context.validate()?;
         }
         self.validate()
             .map_err(|error| format!("消息参数无效: {error}"))

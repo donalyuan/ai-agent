@@ -40,6 +40,7 @@ const protocolOptions: Record<AiModelType, { value: AiModelProtocol; label: stri
     { value: "volcengine_ark_images", label: "火山方舟图片生成" },
   ],
   video: [
+    { value: "volcengine_ark_video", label: "火山方舟 Seedance" },
     { value: "runway_api", label: "Runway API" },
     { value: "kling_api", label: "可灵 API" },
   ],
@@ -90,15 +91,16 @@ function getTtsTimestampLanguages(settings: Record<string, unknown>): string[] {
 function emptyForm(modelType: AiModelType): FormState {
   const protocol = protocolOptions[modelType][0].value;
   const isSpeech = modelType === "speech";
+  const isArkVideo = protocol === "volcengine_ark_video";
   return {
     display_name: "",
     model_type: modelType,
-    provider_name: isSpeech ? "火山引擎" : "",
+    provider_name: isSpeech || isArkVideo ? "火山引擎" : "",
     api_protocol: protocol,
     protocol_version: isSpeech ? "v3" : "v1",
     auth_scheme: isSpeech ? "api_key" : protocol === "kling_api" ? "access_key_secret" : "bearer",
-    request_base_url: isSpeech ? "https://openspeech.bytedance.com/api/v3" : "",
-    upstream_model: protocol === "volcengine_tts_v3" ? "doubao-seed-tts-2.0" : "",
+    request_base_url: isSpeech ? "https://openspeech.bytedance.com/api/v3" : isArkVideo ? "https://ark.cn-beijing.volces.com/api/v3" : "",
+    upstream_model: protocol === "volcengine_tts_v3" ? "doubao-seed-tts-2.0" : isArkVideo ? "doubao-seedance-2-0-260128" : "",
     api_key: "",
     api_secret: null,
     catalog_access_key: null,
@@ -110,6 +112,8 @@ function emptyForm(modelType: AiModelType): FormState {
     max_output_tokens: modelType === "text" ? 3000 : null,
     settings: modelType === "image"
       ? { supported_sizes: ["1024x1024"], default_size: "1024x1024", max_images_per_request: 4 }
+      : modelType === "video"
+        ? { resolutions: ["720p", "1080p"], aspect_ratios: ["16:9", "9:16", "1:1"], min_duration_seconds: 4, max_duration_seconds: 15, max_reference_images: 9, max_prompt_chars: 500, generate_audio: protocol === "volcengine_ark_video" }
       : isSpeech ? speechSettings(protocol) : {},
     sort_order: 0,
     remark: "",
@@ -443,6 +447,8 @@ export function ModelManagementPage({ client }: { client?: ApiClient }) {
           ? "doubao-seed-tts-2.0"
         : nextProtocol === "volcengine_asr_v3"
           ? "doubao-seed-asr-2.0"
+        : nextProtocol === "volcengine_ark_video"
+          ? "doubao-seedance-2-0-260128"
           : current.upstream_model,
       catalog_access_key: nextProtocol === "volcengine_tts_v3" ? current.catalog_access_key : null,
       catalog_secret_key: nextProtocol === "volcengine_tts_v3" ? current.catalog_secret_key : null,
@@ -451,8 +457,13 @@ export function ModelManagementPage({ client }: { client?: ApiClient }) {
         ? ttsCatalogSourceModels[0]?.model_id ?? null
         : null,
       protocol_version: nextProtocol === "openai_audio_speech" ? "v1" : "v3",
+      request_base_url: nextProtocol === "volcengine_ark_video"
+        ? "https://ark.cn-beijing.volces.com/api/v3"
+        : current.request_base_url,
       settings: current.model_type === "speech"
         ? speechSettings(nextProtocol)
+        : current.model_type === "video"
+          ? { ...current.settings, generate_audio: nextProtocol === "volcengine_ark_video" }
         : current.model_type !== "image"
           ? current.settings
         : nextProtocol === "volcengine_ark_images"

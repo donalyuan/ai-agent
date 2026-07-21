@@ -8,6 +8,7 @@ pub mod sound_subtitle_repository;
 pub mod topic_repository;
 pub mod tos_staging_tool_repository;
 pub mod voice_catalog_repository;
+pub mod work_generation_repository;
 pub mod workspace_menu_repository;
 
 pub use ai_model_repository::{
@@ -52,6 +53,12 @@ pub use tos_staging_tool_repository::{
 pub use voice_catalog_repository::{
     PostgresVoiceCatalogRepository, VoiceCatalogEntry, VoiceCatalogRepositoryError,
     VoiceCatalogSnapshot, VoiceCatalogSync,
+};
+pub use work_generation_repository::{
+    PostgresWorkGenerationRepository, WorkGenerationAttemptRecord, WorkGenerationRepository,
+    WorkGenerationRunRecord, WorkGenerationStepRecord, WorkGenerationTaskCounts,
+    WorkGenerationTaskDetails, WorkGenerationTaskFilter, WorkGenerationTaskRecord, WorkPlanRecord,
+    WorkRecord, WorkRepositoryError,
 };
 pub use workspace_menu_repository::{
     PostgresWorkspaceMenuRepository, WorkspaceMenu, WorkspaceMenuRepositoryError,

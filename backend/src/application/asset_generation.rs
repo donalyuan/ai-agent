@@ -263,6 +263,7 @@ impl AssetGenerationService {
         let input_version = manifest_input_version(&script, &scenes)?;
         Ok(SceneVisualManifest {
             script_id,
+            project_id: script.project_id,
             script_title: script.title,
             script_updated_at: script.updated_at,
             input_version,
@@ -543,6 +544,7 @@ pub struct SceneVisualManifestItem {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SceneVisualManifest {
     pub script_id: Uuid,
+    pub project_id: Uuid,
     pub script_title: String,
     pub script_updated_at: DateTime<Utc>,
     pub input_version: String,

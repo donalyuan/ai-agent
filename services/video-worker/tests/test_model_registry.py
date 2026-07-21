@@ -87,6 +87,36 @@ def speech_model_row(**overrides: object) -> dict[str, object]:
     return row
 
 
+def video_model_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "id": MODEL_ID,
+        "display_name": "Seedance 1.5",
+        "model_type": "video",
+        "provider_name": "火山引擎",
+        "api_protocol": "volcengine_ark_video",
+        "protocol_version": "v1",
+        "auth_scheme": "bearer",
+        "request_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "upstream_model": "doubao-seedance-1-5-pro-251215",
+        "api_key": "video-key",
+        "timeout_seconds": 300,
+        "settings": {
+            "resolutions": ["720p", "1080p"],
+            "aspect_ratios": ["16:9", "9:16", "1:1"],
+            "generate_audio": True,
+            "max_prompt_chars": 500,
+            "max_duration_seconds": 15,
+            "max_reference_images": 9,
+            "min_duration_seconds": 4,
+        },
+        "status": "enabled",
+        "deleted_at": None,
+        "version": 4,
+    }
+    row.update(overrides)
+    return row
+
+
 def openai_audio_speech_model_row(**overrides: object) -> dict[str, object]:
     row = speech_model_row(
         display_name="Doubao TTS Gateway",
@@ -245,6 +275,40 @@ def test_speech_loader_requires_locked_model_version_without_tos_fields():
     serialized = str(snapshot)
     assert "speech-key" not in serialized
     assert "staging" not in serialized
+
+
+def test_video_loader_requires_locked_version_and_returns_safe_snapshot():
+    registry, connection = registry_for(video_model_row())
+
+    config = registry.resolve_video(MODEL_ID, 4)
+
+    assert connection.params == (MODEL_ID,)
+    assert config.api_protocol == "volcengine_ark_video"
+    assert config.api_key == "video-key"
+    assert config.settings["max_reference_images"] == 2
+    assert config.settings["max_duration_seconds"] == 12
+    assert config.settings["reference_image_mode"] == "first_last_frames"
+    assert config.snapshot()["registry_version"] == 4
+    assert "video-key" not in str(config.snapshot())
+
+
+@pytest.mark.parametrize(
+    ("row", "code"),
+    [
+        (video_model_row(version=5), "model_version_changed"),
+        (video_model_row(status="disabled"), "model_disabled"),
+        (video_model_row(auth_scheme="api_key"), "invalid_model_config"),
+        (video_model_row(request_base_url="http://ark.example/api/v3"), "invalid_model_config"),
+        (video_model_row(settings={"max_reference_images": 10}), "invalid_model_config"),
+    ],
+)
+def test_video_loader_rejects_changed_or_unsafe_config(row, code):
+    registry, _ = registry_for(row)
+
+    with pytest.raises(ModelRegistryError) as captured:
+        registry.resolve_video(MODEL_ID, 4)
+
+    assert captured.value.code == code
 
 
 def test_speech_loader_accepts_openai_audio_speech_bearer_runtime():

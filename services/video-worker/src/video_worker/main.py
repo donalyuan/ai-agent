@@ -24,6 +24,10 @@ from video_worker.tos_tool_check import (
     run_next_tos_connection_check,
 )
 from video_worker.voice_catalog import PostgresVoiceCatalogStore, run_next_voice_catalog_sync
+from video_worker.work_generation import (
+    default_process_next_work_generation as process_work_generation,
+    validate_work_generation_mode,
+)
 
 
 def default_process_next_image_task() -> bool:
@@ -85,15 +89,21 @@ def default_process_next_tos_tool_work() -> bool:
     return run_next_tos_connection_check(store)
 
 
+def default_process_next_work_generation() -> bool:
+    return process_work_generation()
+
+
 def create_app(
     process_next_image_task: Callable[[], bool] | None = None,
     process_next_voice_catalog: Callable[[], bool] | None = None,
     process_next_speech_work: Callable[[], bool] | None = None,
     process_next_tos_tool_work: Callable[[], bool] | None = None,
+    process_next_work_generation: Callable[[], bool] | None = None,
     enable_background_worker: bool | None = None,
     enable_voice_catalog_worker: bool | None = None,
     enable_speech_worker: bool | None = None,
     enable_tos_tool_worker: bool | None = None,
+    enable_work_generation_worker: bool | None = None,
 ) -> FastAPI:
     app = FastAPI(title="novex-video-worker")
     processor = process_next_image_task or default_process_next_image_task
@@ -102,6 +112,7 @@ def create_app(
     )
     speech_processor = process_next_speech_work or default_process_next_speech_work
     tos_tool_processor = process_next_tos_tool_work or default_process_next_tos_tool_work
+    work_generation_processor = process_next_work_generation or default_process_next_work_generation
     background_enabled = (
         enable_background_worker
         if enable_background_worker is not None
@@ -122,6 +133,17 @@ def create_app(
         if enable_tos_tool_worker is not None
         else os.getenv("TOS_TOOL_WORKER_ENABLED", "false").lower() == "true"
     )
+    work_generation_background_enabled = (
+        enable_work_generation_worker
+        if enable_work_generation_worker is not None
+        else os.getenv("WORK_GENERATION_WORKER_ENABLED", "false").lower() == "true"
+    )
+    if process_next_work_generation is None:
+        validate_work_generation_mode(
+            fake_enabled=os.getenv("WORK_GENERATION_FAKE_PROVIDER_ENABLED", "false").lower() == "true",
+            real_enabled=os.getenv("WORK_GENERATION_REAL_PROVIDER_ENABLED", "false").lower() == "true",
+            worker_enabled=work_generation_background_enabled,
+        )
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -136,6 +158,9 @@ def create_app(
                 "enabled" if speech_background_enabled else "disabled"
             ),
             "tos_tool_worker": "enabled" if tos_tool_background_enabled else "disabled",
+            "work_generation_worker": (
+                "enabled" if work_generation_background_enabled else "disabled"
+            ),
         }
 
     @app.post("/asset-generation/process-next")
@@ -153,6 +178,10 @@ def create_app(
     @app.post("/tools/tos-staging/process-next")
     def process_next_tos_tool() -> dict[str, bool]:
         return {"processed": bool(tos_tool_processor())}
+
+    @app.post("/work-generation/process-next")
+    def process_next_work_generation_task() -> dict[str, bool]:
+        return {"processed": bool(work_generation_processor())}
 
     if background_enabled:
         interval_seconds = float(os.getenv("ASSET_GENERATION_POLL_SECONDS", "5"))
@@ -240,6 +269,29 @@ def create_app(
         @app.on_event("shutdown")
         async def stop_tos_tool_worker() -> None:
             task = getattr(app.state, "tos_tool_worker_task", None)
+            if task is not None:
+                task.cancel()
+
+    if work_generation_background_enabled:
+        work_generation_interval_seconds = float(
+            os.getenv("WORK_GENERATION_POLL_SECONDS", "5")
+        )
+
+        @app.on_event("startup")
+        async def start_work_generation_worker() -> None:
+            async def loop() -> None:
+                while True:
+                    try:
+                        await asyncio.to_thread(work_generation_processor)
+                    except Exception as error:  # pragma: no cover - logged in runtime.
+                        print(f"work generation worker error: {error}")
+                    await asyncio.sleep(work_generation_interval_seconds)
+
+            app.state.work_generation_worker_task = asyncio.create_task(loop())
+
+        @app.on_event("shutdown")
+        async def stop_work_generation_worker() -> None:
+            task = getattr(app.state, "work_generation_worker_task", None)
             if task is not None:
                 task.cancel()
 

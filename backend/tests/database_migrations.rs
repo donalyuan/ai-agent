@@ -243,6 +243,10 @@ async fn migrations_create_video_agent_core_schema() {
         "voice_catalog_entries",
         "audio_material_inspections",
         "sound_subtitle_tasks",
+        "work_generation_runs",
+        "work_generation_steps",
+        "work_generation_attempts",
+        "work_generation_retry_idempotency",
     ] {
         assert!(
             table_exists(&test_pool, table).await,
@@ -293,6 +297,9 @@ async fn migrations_create_video_agent_core_schema() {
         "idx_sound_subtitle_tasks_queue",
         "tos_staging_tool_configs_one_current",
         "idx_tos_staging_tool_configs_pending_check",
+        "idx_work_generation_runs_visible_updated",
+        "work_generation_attempts_one_in_flight",
+        "idx_work_generation_attempts_upstream",
     ] {
         assert!(
             index_exists(&test_pool, index).await,
@@ -322,6 +329,10 @@ async fn migrations_create_video_agent_core_schema() {
         ("tos_staging_tool_configs", "last_check_requested_at"),
         ("tos_staging_tool_configs", "check_locked_at"),
         ("tos_staging_tool_configs", "check_worker_id"),
+        ("work_generation_runs", "current_stage"),
+        ("work_generation_runs", "progress_percent"),
+        ("work_generation_runs", "dismissed_at"),
+        ("work_generation_attempts", "upstream_task_id"),
     ] {
         assert!(
             column_exists(&test_pool, table, column).await,
@@ -984,7 +995,24 @@ async fn migrations_create_video_agent_core_schema() {
     .fetch_one(&test_pool)
     .await
     .expect("planned menu seed query should run");
-    assert_eq!(planned_top_level_count, 4);
+    assert_eq!(planned_top_level_count, 3);
+
+    let work_generation_menu = sqlx::query_as::<_, (bool, String, bool, String)>(
+        r#"
+        SELECT parent.is_enabled, parent.status, child.is_enabled, child.status
+        FROM video_workspace_menus child
+        JOIN video_workspace_menus parent ON parent.id = child.parent_id
+        WHERE parent.menu_key = 'production'
+          AND child.menu_key = 'work-generation'
+        "#,
+    )
+    .fetch_one(&test_pool)
+    .await
+    .expect("work generation menu seed query should run");
+    assert_eq!(
+        work_generation_menu,
+        (true, "active".to_string(), true, "active".to_string())
+    );
 
     let script_child_count = sqlx::query_scalar::<_, i64>(
         r#"

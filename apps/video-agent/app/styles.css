@@ -57,12 +57,15 @@ textarea:disabled {
 }
 
 .workspaceShell {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   display: grid;
   grid-template-columns: 272px minmax(1118px, 1fr);
+  overflow: hidden;
 }
 
 .agentRail {
+  min-height: 0;
   background: var(--color-agent-rail);
   border-right: 1px solid var(--color-border);
   color: var(--color-text);
@@ -70,6 +73,7 @@ textarea:disabled {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  overflow-y: auto;
 }
 
 .brandBlock {
@@ -192,8 +196,15 @@ textarea:disabled {
 
 .workbench {
   min-width: 0;
+  min-height: 0;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.workbench > :not(.topbar) {
+  min-height: 0;
+  overflow: auto;
 }
 
 .topbar {
@@ -274,6 +285,907 @@ textarea:disabled {
   grid-template-columns: 300px minmax(520px, 1fr) 340px;
   gap: 16px;
   padding: 16px;
+}
+
+.workGenerationWorkspace {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 90px minmax(0, 1fr);
+  gap: 16px;
+  padding: 20px 34px 24px;
+  overflow: hidden;
+}
+
+.workGenerationHeader {
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid var(--color-border);
+  padding: 0 0 16px;
+}
+
+.workGenerationWorkspace .sectionKicker {
+  font-size: 13px;
+}
+
+.workGenerationHeader h2 {
+  margin: 3px 0 5px;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.workGenerationHeader > div:first-child > p:last-child {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.workGenerationHeaderStatus {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.workGenerationHeaderStatus span,
+.workGenerationRecommendBadge,
+.workGenerationParamsState {
+  border: 1px solid var(--color-success-border);
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: var(--color-success-soft);
+  color: var(--color-success-text);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.workGenerationHeaderStatus small {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.workGenerationGrid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 330px minmax(0, 1fr) 436px;
+  gap: 16px;
+}
+
+.workGenerationPanel {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.workGenerationAgentPanel,
+.workGenerationPlanPanel,
+.workGenerationParamsPanel {
+  display: grid;
+}
+
+.workGenerationAgentPanel {
+  grid-template-rows: auto auto minmax(132px, 1fr) auto auto;
+}
+
+.workGenerationPlanPanel {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.workGenerationParamsPanel {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.workGenerationPanelHeader {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--color-border);
+  padding: 12px 16px;
+}
+
+.workGenerationPanelHeader h3 {
+  margin: 2px 0 0;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.workGenerationEyebrow {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.workGenerationBinding {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  border-bottom: 1px solid var(--color-border);
+  padding: 12px 16px;
+  background: var(--color-surface-muted);
+}
+
+.workGenerationBinding div {
+  min-width: 0;
+}
+
+.workGenerationBinding dt,
+.workGenerationBinding dd {
+  display: inline;
+  margin: 0;
+  font-size: 13px;
+}
+
+.workGenerationBinding dt {
+  color: var(--color-text-muted);
+}
+
+.workGenerationBinding dt::after {
+  content: " · ";
+}
+
+.workGenerationBinding dd {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.workGenerationMessages {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+  background: #f9fbfd;
+}
+
+.workGenerationMessages article {
+  margin: 0 0 12px;
+  border-left: 2px solid var(--color-primary-border);
+  padding: 1px 0 1px 10px;
+}
+
+.workGenerationMessages article.user {
+  border-left-color: var(--color-border-strong);
+}
+
+.workGenerationMessages strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.workGenerationMessages p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.workGenerationAudit {
+  border-top: 1px solid var(--color-border);
+  padding: 12px 16px;
+}
+
+.workGenerationSectionTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 11px;
+}
+
+.workGenerationSectionTitle > span {
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.workGenerationSectionTitle > small {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.workGenerationAudit ol,
+.workGenerationFlow,
+.workGenerationScenes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workGenerationAudit ol {
+  display: grid;
+  gap: 8px;
+}
+
+.workGenerationAudit li {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.workGenerationAudit li > span,
+.workGenerationFlow li > span {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.workGenerationAudit li.done > span,
+.workGenerationFlow li.done > span {
+  border-color: var(--color-success-border);
+  background: var(--color-success-soft);
+  color: var(--color-success-text);
+}
+
+.workGenerationAudit li.ready > span,
+.workGenerationFlow li.active > span {
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.workGenerationAudit strong,
+.workGenerationAudit small {
+  display: block;
+}
+
+.workGenerationAudit strong {
+  font-size: 13px;
+}
+
+.workGenerationAudit small {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.workGenerationComposer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  border-top: 1px solid var(--color-border);
+  padding: 12px 16px 14px;
+}
+
+.workGenerationPanel textarea,
+.workGenerationPanel input[type="number"] {
+  width: 100%;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  background: #ffffff;
+  color: var(--color-text);
+  font: inherit;
+}
+
+.workGenerationPanel input[type="number"] {
+  height: 36px;
+  padding: 0 9px;
+}
+
+.workspaceSelectField,
+.workGenerationVoiceField {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.workspaceSelectControl {
+  position: relative;
+  min-width: 0;
+  display: block;
+}
+
+.workspaceSelectControl select {
+  width: 100%;
+  height: 36px;
+  appearance: none;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  padding: 0 38px 0 11px;
+  background: #fff;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 700;
+  outline: none;
+}
+
+.workspaceSelectControl select:hover:not(:disabled) {
+  border-color: var(--color-primary-border);
+}
+
+.workspaceSelectControl select:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+
+.workspaceSelectChevron,
+.voiceCatalogChevron {
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--color-text-muted);
+  border-bottom: 2px solid var(--color-text-muted);
+  pointer-events: none;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.workspaceSelectChevron {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  margin-top: -3px;
+}
+
+.workspaceSelectControl select:disabled + .workspaceSelectChevron {
+  opacity: 0.55;
+}
+
+.workGenerationPanel textarea {
+  padding: 8px 9px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.workGenerationComposer textarea {
+  min-height: 58px;
+  max-height: 96px;
+  resize: none;
+  font-size: 13px;
+}
+
+.workGenerationComposer .secondaryButton {
+  min-width: 52px;
+  height: 36px;
+  padding: 0 10px;
+}
+
+.workGenerationPlanHeader {
+  padding-right: 18px;
+}
+
+.workGenerationPlanState {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+}
+
+.workGenerationPlanState span {
+  color: var(--color-warning, #b7791f);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.workGenerationPlanState small {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.workGenerationPlanState.ready span,
+.workGenerationPlanState.running span {
+  color: var(--color-success-text);
+}
+
+.workGenerationPlanState.stale span {
+  color: var(--color-danger-text);
+}
+
+.workGenerationPlanScroll,
+.workGenerationParamsScroll {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.workGenerationPlanSection {
+  border-bottom: 1px solid var(--color-border);
+  padding: 15px 18px 17px;
+}
+
+.workGenerationPlanSection:last-child {
+  border-bottom: 0;
+}
+
+.workGenerationFlow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workGenerationFlow li {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  column-gap: 7px;
+  align-items: center;
+  border-right: 1px solid var(--color-border);
+  padding-right: 8px;
+}
+
+.workGenerationFlow li:last-child {
+  border-right: 0;
+}
+
+.workGenerationFlow strong,
+.workGenerationFlow small {
+  grid-column: 2;
+}
+
+.workGenerationFlow strong {
+  font-size: 13px;
+}
+
+.workGenerationFlow small {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.workGenerationScenes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workGenerationScenes li {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+
+.workGenerationScenes img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  display: block;
+  object-fit: cover;
+  background: var(--color-surface-muted);
+}
+
+.workGenerationScenes li > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 9px 4px;
+}
+
+.workGenerationScenes strong,
+.workGenerationScenes span {
+  font-size: 13px;
+}
+
+.workGenerationScenes span {
+  color: var(--color-text-muted);
+}
+
+.workGenerationScenes p {
+  margin: 0;
+  padding: 0 9px 8px;
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.workGenerationTasksWorkspace {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 72px minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 16px 24px 20px;
+  overflow: hidden;
+}
+
+.workGenerationTasksHeader,
+.workGenerationTaskRunFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workGenerationTasksHeader {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 12px;
+}
+
+.workGenerationTasksHeader h2 { margin: 3px 0 4px; font-size: 22px; }
+.workGenerationTasksHeader p:last-child { margin: 0; color: var(--color-text-muted); font-size: 12px; }
+.workGenerationIconButton { width: 34px; height: 34px; border: 1px solid var(--color-border-strong); border-radius: 6px; background: #fff; color: var(--color-primary); cursor: pointer; font-size: 20px; line-height: 1; }
+.workGenerationTaskLayout { min-height: 0; display: grid; grid-template-columns: 300px minmax(520px, 1fr) 340px; gap: 12px; }
+.workGenerationTaskListPanel,
+.workGenerationTaskStepsPanel,
+.workGenerationTaskAuditPanel { min-width: 0; min-height: 0; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); overflow: hidden; }
+.workGenerationTaskListPanel { display: grid; grid-template-rows: auto auto auto auto minmax(0, 1fr); align-content: start; }
+.workGenerationTaskListHeader { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--color-border); padding: 10px 12px; }
+.workGenerationTaskListHeader strong,
+.workGenerationTaskListHeader small { display: block; }
+.workGenerationTaskListHeader strong { font-size: 14px; }
+.workGenerationTaskListHeader small { margin-top: 3px; color: var(--color-text-muted); font-size: 10px; }
+.workGenerationFilterButton { height: 28px; border: 1px solid var(--color-border); border-radius: 5px; background: #fff; color: var(--color-text-muted); padding: 0 8px; font-size: 10px; font-weight: 800; }
+.workGenerationFilterButton.active { border-color: var(--color-primary-border); color: var(--color-primary); background: var(--color-primary-soft); }
+.workGenerationTaskTabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; margin: 10px 10px 7px; border: 1px solid var(--color-border); border-radius: 6px; padding: 3px; background: var(--color-surface-muted); }
+.workGenerationTaskTabs button { min-width: 0; height: 28px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-muted); font-size: 11px; font-weight: 800; }
+.workGenerationTaskTabs button.active { background: #fff; color: var(--color-primary); box-shadow: 0 1px 2px #1720331a; }
+.workGenerationAttentionButton { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 10px 8px; border: 1px solid var(--color-danger-border); border-radius: 5px; padding: 0 10px; background: var(--color-danger-soft); color: var(--color-danger-text); text-align: left; }
+.workGenerationAttentionButton span { font-size: 11px; font-weight: 800; }
+.workGenerationAttentionButton small { font-size: 9px; }
+.workGenerationAttentionButton.active { outline: 2px solid #f4b9b566; }
+.workGenerationTaskFilters { min-width: 0; display: grid; gap: 7px; border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); padding: 9px 10px; background: var(--color-surface-muted); }
+.workGenerationTaskFilters input,
+.workGenerationTaskFilters select { width: 100%; height: 30px; border: 1px solid var(--color-border-strong); border-radius: 5px; background: #fff; color: var(--color-text); padding: 0 8px; font: inherit; font-size: 11px; }
+.workGenerationTaskFilters label { display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 10px; }
+.workGenerationTaskList { min-height: 0; display: grid; align-content: start; gap: 6px; overflow: auto; padding: 8px; }
+.workGenerationTaskRow { min-width: 0; display: grid; gap: 6px; border: 1px solid var(--color-border); border-radius: 5px; padding: 10px; background: #fff; text-align: left; }
+.workGenerationTaskRow:hover,
+.workGenerationTaskRow.selected { border-color: var(--color-primary-border); background: var(--color-primary-soft); }
+.workGenerationTaskRow > div:first-child { min-width: 0; display: flex; align-items: start; justify-content: space-between; gap: 6px; }
+.workGenerationTaskRow strong { overflow: hidden; color: var(--color-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.workGenerationTaskRow small { color: var(--color-text-muted); font-size: 10px; }
+.workGenerationTaskRow footer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; color: var(--color-text-muted); font-size: 9px; }
+.workGenerationTaskRow footer span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workGenerationTaskStatus { width: max-content; border: 1px solid var(--color-border); border-radius: 999px; padding: 3px 7px; color: var(--color-text-muted); font-size: 12px; font-weight: 800; }
+.workGenerationTaskStatus.succeeded { border-color: var(--color-success-border); background: var(--color-success-soft); color: var(--color-success-text); }
+.workGenerationTaskStatus.running { border-color: var(--color-primary-border); background: var(--color-primary-soft); color: var(--color-primary); }
+.workGenerationTaskStatus.attention { border-color: var(--color-danger-border); background: var(--color-danger-soft); color: var(--color-danger-text); }
+.workGenerationTaskProgress { height: 4px; overflow: hidden; border-radius: 2px; background: var(--color-border); }
+.workGenerationTaskProgress span { display: block; height: 100%; background: var(--color-primary); }
+.workGenerationTaskEmpty { min-height: 180px; display: grid; place-content: center; justify-items: center; gap: 7px; padding: 24px; text-align: center; }
+.workGenerationTaskEmpty strong { font-size: 14px; }
+.workGenerationTaskEmpty span { color: var(--color-text-muted); font-size: 12px; }
+.workGenerationTaskStepsPanel { display: grid; grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
+.workGenerationTaskRunHeader { min-height: 76px; display: flex; align-items: start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border); padding: 13px 16px; }
+.workGenerationTaskRunHeader p { margin: 0 0 3px; color: var(--color-text-muted); font-size: 9px; font-weight: 800; }
+.workGenerationTaskRunHeader h3 { margin: 0 0 4px; font-size: 16px; }
+.workGenerationTaskRunHeader > div > span { color: var(--color-text-muted); font-size: 10px; }
+.workGenerationTaskProgressSummary { display: grid; grid-template-columns: 76px minmax(100px, 1fr) minmax(260px, 1.4fr); align-items: center; gap: 12px; border-bottom: 1px solid var(--color-border); padding: 11px 16px; background: #f9fbfd; }
+.workGenerationTaskProgressSummary > div:first-child { display: grid; }
+.workGenerationTaskProgressSummary > div:first-child strong { font-size: 18px; }
+.workGenerationTaskProgressSummary > div:first-child span { color: var(--color-text-muted); font-size: 9px; }
+.workGenerationTaskProgressSummary dl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 0; }
+.workGenerationTaskProgressSummary dl div { border-left: 1px solid var(--color-border); padding-left: 8px; }
+.workGenerationTaskProgressSummary dt { color: var(--color-text-muted); font-size: 9px; }
+.workGenerationTaskProgressSummary dd { margin: 2px 0 0; font-size: 13px; font-weight: 800; }
+.workGenerationTaskFailure { margin: 0 0 12px; border-left: 3px solid var(--color-danger-text); background: var(--color-danger-soft); padding: 9px 11px; color: var(--color-danger-text); font-size: 12px; line-height: 1.5; }
+.workGenerationStepTableHeader { display: grid; grid-template-columns: minmax(180px, 1.2fr) 90px minmax(130px, 1fr) minmax(120px, 1fr); gap: 8px; border-bottom: 1px solid var(--color-border); padding: 8px 12px 8px 48px; color: var(--color-text-muted); font-size: 9px; font-weight: 800; }
+.workGenerationTaskSteps { min-height: 0; display: grid; align-content: start; gap: 0; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.workGenerationTaskSteps li { min-width: 0; }
+.workGenerationTaskStep { width: 100%; min-width: 0; min-height: 52px; display: grid; grid-template-columns: 28px minmax(140px, 1.2fr) 90px minmax(130px, 1fr) minmax(120px, 1fr); align-items: center; gap: 8px; border: 0; border-bottom: 1px solid var(--color-border); padding: 8px 12px; background: #fff; text-align: left; }
+.workGenerationTaskStep:hover,
+.workGenerationTaskStep.selected { background: var(--color-primary-soft); }
+.workGenerationTaskStep.selected { box-shadow: inset 3px 0 0 var(--color-primary); }
+.workGenerationTaskStep > strong { font-size: 11px; }
+.workGenerationTaskStep > small { overflow: hidden; color: var(--color-text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.workGenerationTaskStepMarker { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--color-border); border-radius: 50%; background: var(--color-surface-muted); color: var(--color-text-muted); font-size: 9px; font-weight: 800; }
+.workGenerationTaskStepMarker.succeeded { border-color: var(--color-success-border); background: var(--color-success-soft); color: var(--color-success-text); }
+.workGenerationTaskStepMarker.running { border-color: var(--color-primary-border); background: var(--color-primary-soft); color: var(--color-primary); }
+.workGenerationTaskStepMarker.failed { border-color: var(--color-danger-border); background: var(--color-danger-soft); color: var(--color-danger-text); }
+.workGenerationStepStatus { width: max-content; border-radius: 4px; padding: 3px 6px; background: var(--color-surface-muted); color: var(--color-text-muted); font-size: 12px; font-weight: 800; }
+.workGenerationStepStatus.succeeded { background: var(--color-success-soft); color: var(--color-success-text); }
+.workGenerationStepStatus.running { background: var(--color-primary-soft); color: var(--color-primary); }
+.workGenerationStepStatus.failed,
+.workGenerationStepStatus.waiting_manual { background: var(--color-danger-soft); color: var(--color-danger-text); }
+.workGenerationTaskRunFooter { min-height: 48px; border-top: 1px solid var(--color-border); padding: 8px 14px; }
+.workGenerationTaskRunFooter > span { margin-left: auto; color: var(--color-text-muted); font-size: 9px; }
+.workGenerationTaskAuditPanel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.workGenerationAuditHeader { position: relative; min-height: 76px; border-bottom: 1px solid var(--color-border); padding: 13px 15px; }
+.workGenerationAuditHeader p { margin: 0 0 3px; }
+.workGenerationAuditHeader h3 { margin: 0; font-size: 15px; }
+.workGenerationAuditHeader > span { position: absolute; top: 15px; right: 15px; }
+.workGenerationAuditBody { min-height: 0; overflow: auto; }
+.workGenerationAuditBlock { border-bottom: 1px solid var(--color-border); padding: 12px 15px; }
+.workGenerationAuditBlock h4 { margin: 0 0 7px; color: var(--color-text-muted); font-size: 9px; text-transform: uppercase; }
+.workGenerationAuditBlock p { margin: 0; color: var(--color-text); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.workGenerationAuditBlock small { display: block; margin-top: 4px; color: var(--color-text-muted); font-size: 9px; }
+.workGenerationAttempts { display: grid; gap: 7px; }
+.workGenerationAttemptRow { border: 1px solid var(--color-border); border-radius: 5px; padding: 8px; background: #f9fbfd; }
+.workGenerationAttemptRow > div { display: flex; justify-content: space-between; gap: 8px; }
+.workGenerationAttemptRow strong { font-size: 10px; }
+.workGenerationAttemptRow p { margin-top: 5px; font-size: 9px; }
+.workGenerationAuditFooter { border-top: 1px solid var(--color-border); padding: 10px 14px; }
+.workGenerationAuditFooter button { width: 100%; }
+.dangerText { color: var(--color-danger-text) !important; }
+.workGenerationTaskError { position: fixed; right: 24px; bottom: 20px; z-index: 20; max-width: 460px; margin: 0; }
+
+.dangerButton { border-color: var(--color-danger-border); color: var(--color-danger-text); }
+
+.workGenerationPromptField {
+  display: block;
+  margin: 0;
+}
+
+.workGenerationPromptField textarea {
+  min-height: 82px;
+  font-size: 13px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.workGenerationSegments {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workGenerationSegments label {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.workGenerationSegments label > small {
+  color: var(--color-primary);
+  font-size: 12px;
+}
+
+.workGenerationSegments textarea {
+  grid-column: 1 / -1;
+  min-height: 68px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.workGenerationSegmentPlaceholder {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.workGenerationSegmentPlaceholder > div {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 5px;
+  padding: 10px;
+  background: var(--color-surface-muted);
+}
+
+.workGenerationSegmentPlaceholder span {
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.workGenerationSegmentPlaceholder p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.workGenerationStale,
+.workGenerationWarning {
+  margin: 10px 0 0;
+  border: 1px solid #efd27a;
+  border-radius: 4px;
+  padding: 8px 10px;
+  background: #fff6db;
+  color: #7a5100;
+  font-size: 13px;
+}
+
+.workGenerationUsage {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.workGenerationUsage div {
+  min-width: 0;
+  border-left: 2px solid var(--color-border-strong);
+  padding: 3px 0 3px 9px;
+}
+
+.workGenerationUsage dt {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.workGenerationUsage dd {
+  margin: 4px 0 0;
+  color: var(--color-text);
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.workGenerationParamsSection {
+  border-bottom: 1px solid var(--color-border);
+  padding: 13px 16px 15px;
+}
+
+.workGenerationParamsSection h4 {
+  margin: 0 0 10px;
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.workGenerationParamsSection > label,
+.workGenerationParamsSection > .workspaceSelectField,
+.workGenerationParamsSection > .workGenerationInlineFields,
+.workGenerationInlineFields label {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 10px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.workGenerationInlineFields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.workGenerationTtsFields {
+  margin-bottom: 0;
+}
+
+.workGenerationTtsFields > .workspaceSelectField,
+.workGenerationTtsFields > .workGenerationVoiceField {
+  margin-bottom: 0;
+}
+
+.workGenerationAudioMaterials {
+  display: grid;
+  gap: 7px;
+  margin: 11px 0;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 9px 10px 10px;
+}
+
+.workGenerationAudioMaterials legend {
+  padding: 0 5px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workGenerationAudioMaterials label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.workGenerationAudioMaterials input,
+.workGenerationSubtitleOptions input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
+.workGenerationAudioMaterials span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.workGenerationSubtitleOptions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 9px 10px;
+  background: var(--color-surface-muted);
+}
+
+.workGenerationSubtitleOptions label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.workGenerationSubtitleOptions span {
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.workGenerationRisk {
+  margin-top: 10px;
+  border-left: 3px solid #b7791f;
+  padding: 8px 10px;
+  background: #fff6db;
+}
+
+.workGenerationRisk strong {
+  color: #7a5100;
+  font-size: 13px;
+}
+
+.workGenerationRisk p {
+  margin: 4px 0 0;
+  color: #7a5100;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.workGenerationSnapshot {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.workGenerationSnapshot div {
+  min-width: 0;
+}
+
+.workGenerationSnapshot dt {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.workGenerationSnapshot dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.workGenerationActions {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 10px;
+  border-top: 1px solid var(--color-border);
+  padding: 13px 16px 15px;
+  background: var(--color-surface);
+}
+
+.workGenerationActions button {
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  white-space: nowrap;
 }
 
 .assetGenerationPage {
@@ -2194,6 +3106,137 @@ button.topicReviewDuplicateTitle:hover {
   background: var(--color-danger-soft);
 }
 
+/* D0Gwzh 作品生成任务页：复用作品生成页工作台骨架，仅定义页面内部布局。 */
+.workGenerationTasksWorkspace {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 90px minmax(0, 1fr);
+  gap: 16px;
+  padding: 20px 34px 24px;
+  overflow: hidden;
+}
+.workGenerationTasksHeader { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--color-border); padding: 0 0 16px; }
+.workGenerationTasksWorkspace .sectionKicker { font-size: 13px; }
+.workGenerationTasksHeader h2 { margin: 3px 0 0; font-size: 22px; line-height: 1.25; }
+.workGenerationTaskTitleLine { display: flex; align-items: center; gap: 8px; }
+.workGenerationTaskTitleLine .workGenerationTaskHeaderBadge:first-of-type { margin-left: clamp(24px, 13vw, 210px); }
+.workGenerationTaskHeaderBadge { border: 1px solid #efd27a; border-radius: 999px; padding: 5px 12px; background: #fff6db; color: #7a5100; font-size: 12px; font-weight: 800; }
+.workGenerationTaskHeaderBadge.neutral { border-color: var(--color-border); background: #fff; color: var(--color-text-muted); }
+.workGenerationTaskRefresh { width: 150px; height: 36px; border: 1px solid var(--color-border-strong); border-radius: 8px; background: #fff; color: var(--color-text); font-size: 13px; font-weight: 800; }
+.workGenerationTaskWorkspaceFrame { width: 100%; height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1022px) minmax(0, 504px); gap: 16px; border: 1px solid var(--color-border); border-radius: 8px; padding: 18px; background: #f8fafd; }
+.workGenerationTaskTablePanel, .workGenerationTaskDetailPanel { min-width: 0; min-height: 0; border: 1px solid var(--color-border); border-radius: 8px; background: #fff; overflow: hidden; }
+.workGenerationTaskTablePanel { display: grid; grid-template-rows: 70px 54px minmax(0, 1fr); }
+.workGenerationTaskTableHeader { display: grid; align-content: center; gap: 5px; padding: 0 18px; }
+.workGenerationTaskTableHeader strong { font-size: 16px; }
+.workGenerationTaskTableHeader small { color: var(--color-text-muted); font-size: 12px; }
+.workGenerationTaskListToolbar { position: relative; display: flex; align-items: center; gap: 9px; padding: 0 18px 16px; }
+.workGenerationTaskTabs { width: 526px; height: 38px; display: grid; grid-template-columns: 154px 170px 182px; gap: 6px; margin: 0; border: 1px solid var(--color-border); border-radius: 6px; padding: 4px; background: #eef2f6; }
+.workGenerationTaskTabs, .workGenerationAttentionButton, .workGenerationTaskSearch, .workGenerationMoreFilter { flex: 0 0 auto; }
+.workGenerationTaskTabs button { border: 0; border-radius: 5px; background: transparent; color: var(--color-text-muted); font-size: 13px; font-weight: 700; }
+.workGenerationTaskTabs button.active { background: #fff; color: var(--color-primary); box-shadow: 0 1px 3px #1720331a; }
+.workGenerationTaskTabs button small { margin-left: 5px; font-size: 12px; font-weight: 500; }
+.workGenerationAttentionButton { width: 126px; height: 38px; min-height: 38px; margin: 0; border: 1px solid #f4b9b5; border-radius: 6px; display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 8px; padding: 0 12px; background: var(--color-danger-soft); color: var(--color-danger-text); text-align: left; }
+.workGenerationAttentionButton span { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; background: var(--color-danger-text); color: #fff; font-size: 12px; font-weight: 800; }
+.workGenerationAttentionButton strong { color: #9f2f2a; font-size: 13px; font-weight: 800; white-space: nowrap; }
+.workGenerationAttentionButton.active { outline: 2px solid #f4b9b566; }
+.workGenerationTaskSearch { width: 212px; height: 38px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--color-border-strong); border-radius: 6px; padding: 0 12px; color: var(--color-text-muted); }
+.workGenerationTaskSearch:focus-within { border-color: var(--color-primary); box-shadow: inset 0 0 0 2px rgba(40, 96, 232, 0.18); }
+.workGenerationTaskSearch input, .workGenerationTaskSearch input:focus { min-width: 0; width: 100%; border: 0; outline: 0; box-shadow: none; background: transparent; color: var(--color-text); font: inherit; font-size: 13px; }
+.workGenerationMoreFilter { width: 92px; height: 38px; border: 1px solid var(--color-border-strong); border-radius: 6px; display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 8px; padding: 0 12px; background: #fff; color: var(--color-text); text-align: left; }
+.workGenerationMoreFilterAnchor { position: relative; flex: 0 0 auto; }
+.workGenerationMoreFilter span { color: var(--color-text-muted); font-size: 13px; }
+.workGenerationMoreFilter strong { font-size: 13px; font-weight: 700; white-space: nowrap; }
+.workGenerationMoreFilter.active { border-color: var(--color-primary); background: var(--color-primary-soft); color: var(--color-primary); }
+.workGenerationTaskFilterPopover { position: absolute; z-index: 5; top: 46px; right: 0; width: 280px; display: grid; gap: 10px; border: 1px solid var(--color-border); border-radius: 6px; padding: 12px; background: #fff; box-shadow: 0 8px 20px #1720331a; }
+.workGenerationTaskFilterPopover label { display: grid; gap: 5px; color: var(--color-text-muted); font-size: 12px; font-weight: 700; }
+.workGenerationTaskFilterPopover select { width: 100%; height: 32px; border: 1px solid var(--color-border-strong); border-radius: 5px; padding: 0 7px; background: #fff; font: inherit; font-size: 13px; }
+.workGenerationTaskFilterPopover .workGenerationHiddenFilter { display: flex; grid-template-columns: none; align-items: center; height: 24px; white-space: nowrap; }
+.workGenerationTaskFilterPopover .workGenerationHiddenFilter input[type="checkbox"],
+.workGenerationTaskFilterPopover .workGenerationHiddenFilter input[type="checkbox"]:focus { width: 14px; height: 14px; min-width: 14px; margin: 0; padding: 0; border-radius: 3px; box-shadow: none; }
+.workGenerationTaskTable { min-height: 0; display: grid; grid-template-rows: 38px minmax(0, 1fr) 44px; margin: 0 18px 18px; border: 1px solid var(--color-border); overflow: hidden; }
+.workGenerationTaskTableBody { min-height: 0; overflow-x: hidden; overflow-y: auto; }
+.workGenerationTaskTableRow { width: 100%; min-width: 0; display: grid; grid-template-columns: minmax(180px, 250px) minmax(96px, 120px) minmax(96px, 120px) minmax(118px, 150px) minmax(128px, 160px) minmax(96px, 120px) 64px; align-items: center; gap: 0; }
+.workGenerationTaskTableRow.head { background: var(--color-surface-muted); color: var(--color-text-muted); font-size: 12px; font-weight: 800; }
+.workGenerationTaskTableRow.head { height: 38px; }
+.workGenerationTaskTableRow.head span { padding: 0 10px; }
+.workGenerationTaskTableRow:not(.head) { width: 100%; min-height: 92px; border: 0; border-bottom: 1px solid var(--color-border); background: #fff; color: var(--color-text); text-align: left; }
+.workGenerationTaskTableRow:not(.head):hover, .workGenerationTaskTableRow.selected { background: #f1f6ff; }
+.workGenerationTaskTableRow > span { min-width: 0; display: grid; gap: 5px; padding: 12px 10px; overflow: hidden; font-size: 12px; line-height: 1.45; }
+.workGenerationTaskTableRow > span > strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.workGenerationTaskTableRow > span > small { color: var(--color-text-muted); font-size: 12px; }
+.workGenerationTaskTableRow > span > i { width: 96px; height: 6px; display: block; overflow: hidden; border-radius: 4px; background: var(--color-border); }
+.workGenerationTaskTableRow > span > i b { display: block; height: 100%; border-radius: inherit; background: var(--color-primary); }
+.workGenerationTaskViewAction { color: var(--color-primary); font-weight: 800; }
+.workGenerationTaskTableFooter { height: 44px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--color-border); padding: 0 12px; color: var(--color-text-muted); font-size: 12px; }
+.workGenerationTaskDetailPanel { display: grid; grid-template-rows: 72px minmax(0, 1fr) auto; }
+.workGenerationTaskDetailHeader { position: relative; display: block; border-bottom: 1px solid var(--color-border); padding: 14px 18px; }
+.workGenerationTaskDetailHeader h3 { margin: 0 0 6px; font-size: 16px; }
+.workGenerationTaskDetailHeader small { color: var(--color-text-muted); font-size: 12px; }
+.workGenerationTaskDetailHeader > .workGenerationTaskStatus { position: absolute; top: 14px; right: 18px; }
+.workGenerationCancelRun { position: absolute; top: 42px; right: 18px; width: 88px; height: 26px; border: 1px solid var(--color-border-strong); border-radius: 5px; background: #fff; color: var(--color-text-muted); font-size: 12px; font-weight: 700; }
+.workGenerationCancelBlockReason { margin: 0; padding: 8px 18px; border-bottom: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.4; }
+.workGenerationTaskDetailScroll { min-height: 0; overflow: auto; padding: 0 18px; }
+.workGenerationTaskProgressCard { border: 1px solid var(--color-border); border-radius: 6px; padding: 12px 14px; }
+.workGenerationTaskProgressCard > div:first-child { display: flex; align-items: center; justify-content: space-between; color: var(--color-text-muted); font-size: 12px; font-weight: 800; }
+.workGenerationTaskProgressCard > div:first-child strong { color: var(--color-text); font-size: 17px; }
+.workGenerationTaskProgressCard > .workGenerationTaskProgress { width: 100%; height: 8px; margin: 10px 0 8px; }
+.workGenerationTaskProgressCard footer { display: flex; justify-content: space-between; gap: 8px; color: var(--color-text-muted); font-size: 12px; }
+.workGenerationTaskResultCard { display: grid; gap: 10px; border: 1px solid #b8dec8; border-radius: 6px; padding: 12px 14px; background: #f5fbf7; }
+.workGenerationTaskResultCard > div:first-child { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.workGenerationTaskResultCard > div:first-child strong { font-size: 14px; color: #146c43; }
+.workGenerationTaskResultCard > div:first-child small { color: var(--color-text-muted); font-size: 12px; }
+.workGenerationTaskResultItem { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.workGenerationTaskResultItem video { display: block; width: 100%; max-height: 220px; border: 1px solid var(--color-border); border-radius: 4px; background: #101418; }
+.workGenerationTaskResultItem > div { display: grid; gap: 8px; justify-items: end; min-width: 120px; }
+.workGenerationTaskResultItem > div strong { max-width: 180px; overflow-wrap: anywhere; text-align: right; font-size: 13px; }
+.workGenerationTaskArtifactMissing { margin: 0; border: 1px solid #ead6a4; border-radius: 6px; padding: 10px 12px; color: #785b14; background: #fffaf0; font-size: 12px; line-height: 1.5; }
+.workGenerationTaskStepsHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 16px 0 9px; }
+.workGenerationTaskStepsHeading strong { font-size: 13px; }
+.workGenerationTaskStepsHeading small { color: var(--color-text-muted); font-size: 12px; }
+.workGenerationTaskDetailSteps { display: grid; gap: 8px; }
+.workGenerationTaskDetailStep { width: 100%; min-height: 58px; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 1px solid var(--color-border); border-radius: 5px; padding: 8px 12px; background: #fff; text-align: left; }
+.workGenerationTaskDetailStep:hover, .workGenerationTaskDetailStep.selected { border-color: var(--color-primary-border); background: #f1f6ff; }
+.workGenerationTaskStepIcon { width: 20px; height: 20px; display: grid; place-items: center; border: 1px solid var(--color-border); border-radius: 50%; color: var(--color-text-muted); font-size: 12px; font-weight: 800; }
+.workGenerationTaskStepIcon.succeeded { border-color: var(--color-success-border); color: var(--color-success-text); }
+.workGenerationTaskStepIcon.running { border-color: var(--color-primary-border); color: var(--color-primary); }
+.workGenerationTaskStepIcon.failed { border-color: var(--color-danger-border); color: var(--color-danger-text); }
+.workGenerationTaskDetailStep > span:nth-child(2) { min-width: 0; display: grid; gap: 5px; }
+.workGenerationTaskDetailStep strong { font-size: 13px; }
+.workGenerationTaskDetailStep small { overflow: hidden; color: var(--color-text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.workGenerationTaskDetailFooter { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid var(--color-border); padding: 10px 18px; }
+.workGenerationTaskDetailFooter button { width: 96px; height: 30px; min-height: 30px; padding: 0; font-size: 13px; }
+.workGenerationTaskError { position: fixed; right: 24px; bottom: 20px; z-index: 20; max-width: 460px; margin: 0; }
+
+@media (max-width: 1919px) {
+  .workGenerationTaskListToolbar { gap: 8px; }
+  .workGenerationTaskTabs { width: auto; min-width: 0; flex: 1 1 auto; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .workGenerationAttentionButton { width: 126px; }
+  .workGenerationMoreFilter { width: 92px; }
+  .workGenerationTaskSearch { width: 212px; min-width: 0; flex: 0 0 212px; }
+  .workGenerationTaskTableRow { grid-template-columns: minmax(0, 1.55fr) minmax(0, .8fr) minmax(0, .85fr) minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, .8fr) 54px; }
+  .workGenerationTaskTableRow > span { padding-inline: 7px; }
+}
+
+@media (max-width: 1599px) {
+  .workGenerationGrid { grid-template-columns: 260px minmax(0, 1fr) 350px; gap: 12px; }
+  .workGenerationFlow { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 12px; }
+  .workGenerationFlow li:nth-child(2n) { border-right: 0; }
+  .workGenerationTaskWorkspaceFrame { grid-template-columns: minmax(0, 1.55fr) minmax(360px, 1fr); }
+  .workGenerationTaskTablePanel { grid-template-rows: 70px 100px minmax(0, 1fr); }
+  .workGenerationTaskListToolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 100px 78px;
+    grid-template-rows: 38px 38px;
+    gap: 8px;
+  }
+  .workGenerationTaskTabs { grid-column: 1; grid-row: 1; width: auto; }
+  .workGenerationAttentionButton { grid-column: 2; grid-row: 1; width: 100%; }
+  .workGenerationMoreFilterAnchor { grid-column: 3; grid-row: 1; width: 100%; }
+  .workGenerationMoreFilter { width: 100%; }
+  .workGenerationTaskSearch { grid-column: 1 / -1; grid-row: 2; width: 100%; flex-basis: auto; }
+}
+
 .modalBackdrop {
   position: fixed;
   inset: 0;
@@ -3506,6 +4549,65 @@ button.topicReviewDuplicateTitle:hover {
   min-width: 0;
 }
 
+.materialVideoPreview {
+  display: block;
+  height: auto;
+  min-height: 0;
+  border-color: var(--color-border);
+  background: #111827;
+}
+
+.materialVideoPlayerBlock {
+  display: grid;
+  grid-template-rows: auto 34px 26px;
+  width: 100%;
+  overflow: visible;
+}
+
+.materialVideoPreview video {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  background: #111827;
+}
+
+.materialVideoPlaybackState {
+  display: block;
+  padding: 5px 8px;
+  background: #1f2937;
+  color: #dbeafe;
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.materialVideoPlayButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-top: 1px solid #374151;
+  background: #111827;
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.materialVideoPlayButton:hover {
+  background: #1f2937;
+}
+
+.materialVideoPlayButton:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
 .materialAudioPreview strong,
 .materialAudioPreview span {
   overflow: hidden;
@@ -4242,7 +5344,7 @@ button.topicReviewDuplicateTitle:hover {
   height: 54px;
 }
 
-.soundSubtitlePage .voiceCatalogTrigger {
+.voiceCatalogTrigger {
   width: 100%;
   min-height: 54px;
   display: grid;
@@ -4250,10 +5352,25 @@ button.topicReviewDuplicateTitle:hover {
   align-items: center;
   gap: 8px;
   padding: 7px 9px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--color-text);
   text-align: left;
 }
 
-.soundSubtitlePage .voiceCatalogTrigger.invalid {
+.voiceCatalogTrigger:hover:not(:disabled) {
+  border-color: var(--color-primary-border);
+}
+
+.voiceCatalogTrigger:focus-visible,
+.voiceCatalogTrigger[aria-expanded="true"] {
+  border-color: var(--color-primary);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+
+.voiceCatalogTrigger.invalid {
   border-color: var(--color-danger-border);
   background: var(--color-danger-soft);
 }
@@ -4283,13 +5400,7 @@ button.topicReviewDuplicateTitle:hover {
 }
 
 .voiceCatalogChevron {
-  width: 8px;
-  height: 8px;
   justify-self: center;
-  border-right: 2px solid var(--color-text-muted);
-  border-bottom: 2px solid var(--color-text-muted);
-  transform: translateY(-2px) rotate(45deg);
-  transition: transform 120ms ease;
 }
 
 .voiceCatalogChevron.open {
@@ -4297,13 +5408,13 @@ button.topicReviewDuplicateTitle:hover {
 }
 
 .voiceCatalogPopover {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 6px);
-  left: 0;
+  position: fixed;
+  z-index: 100;
   width: min(520px, calc(100vw - 72px));
+  grid-template-rows: auto auto auto minmax(72px, 1fr);
   display: grid;
   gap: 10px;
+  overflow: hidden;
   border: 1px solid var(--color-border-strong);
   border-radius: 6px;
   padding: 12px;
@@ -4363,10 +5474,11 @@ button.topicReviewDuplicateTitle:hover {
   gap: 6px;
 }
 
-.soundSubtitlePage .voiceCatalogFilterTags button {
+.voiceCatalogFilterTags button {
   min-width: 54px;
   min-height: 28px;
   height: 28px;
+  border: 1px solid var(--color-border);
   border-color: var(--color-border);
   border-radius: 6px;
   padding: 0 12px;
@@ -4375,20 +5487,21 @@ button.topicReviewDuplicateTitle:hover {
   font-size: 11px;
 }
 
-.soundSubtitlePage .voiceCatalogFilterTags button.active {
+.voiceCatalogFilterTags button.active {
   border-color: var(--color-primary-border);
   background: var(--color-primary-soft);
   color: var(--color-primary);
 }
 
 .voiceCatalogList {
+  min-height: 72px;
   max-height: 330px;
   overflow: auto;
   border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
 }
 
-.soundSubtitlePage .voiceCatalogOption {
+.voiceCatalogOption {
   width: 100%;
   min-height: 68px;
   display: grid;
@@ -4402,22 +5515,22 @@ button.topicReviewDuplicateTitle:hover {
   text-align: left;
 }
 
-.soundSubtitlePage .voiceCatalogOption:last-of-type {
+.voiceCatalogOption:last-of-type {
   border-bottom: 0;
 }
 
-.soundSubtitlePage .voiceCatalogOption:hover:not([aria-disabled="true"]),
-.soundSubtitlePage .voiceCatalogOption.active:not([aria-disabled="true"]) {
+.voiceCatalogOption:hover:not([aria-disabled="true"]),
+.voiceCatalogOption.active:not([aria-disabled="true"]) {
   border-color: var(--color-border);
   background: var(--color-surface-muted);
   color: var(--color-text);
 }
 
-.soundSubtitlePage .voiceCatalogOption.selected {
+.voiceCatalogOption.selected {
   background: var(--color-primary-soft);
 }
 
-.soundSubtitlePage .voiceCatalogOption.invalid {
+.voiceCatalogOption.invalid {
   cursor: not-allowed;
   background: var(--color-danger-soft);
 }
@@ -5831,14 +6944,34 @@ button.topicReviewDuplicateTitle:hover {
   border: 0;
 }
 
-.voiceCatalogSelect,
-.soundSubtitlePage .voiceCatalogTrigger {
+.voiceCatalogSelect.detailed,
+.voiceCatalogSelect.detailed .voiceCatalogTrigger {
   height: 56px;
 }
 
-.soundSubtitlePage .voiceCatalogTrigger {
+.voiceCatalogSelect.detailed .voiceCatalogTrigger {
   min-height: 56px;
   padding: 5px 9px 5px 11px;
+}
+
+.voiceCatalogSelect.compact,
+.voiceCatalogSelect.compact .voiceCatalogTrigger {
+  height: 36px;
+  min-height: 36px;
+}
+
+.voiceCatalogSelect.compact .voiceCatalogTrigger {
+  grid-template-columns: minmax(0, 1fr) 14px;
+  padding: 0 11px;
+}
+
+.voiceCatalogTriggerCompact {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .voiceCatalogTriggerCopy {

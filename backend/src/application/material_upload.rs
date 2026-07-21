@@ -294,6 +294,44 @@ impl LocalMaterialStorage {
         })
     }
 
+    pub async fn store_generated_thumbnail(
+        &self,
+        project_id: Uuid,
+        artifact_id: Uuid,
+        bytes: &[u8],
+    ) -> Result<StoredMaterialFile, std::io::Error> {
+        let directory = self
+            .root
+            .join("generated")
+            .join("artifacts")
+            .join(project_id.to_string());
+        fs::create_dir_all(&directory).await?;
+        let file_name = format!("{artifact_id}.jpg");
+        let absolute_path = directory.join(&file_name);
+        fs::write(&absolute_path, bytes).await?;
+        Ok(StoredMaterialFile {
+            absolute_path,
+            public_url: format!("/assets/generated/artifacts/{project_id}/{file_name}"),
+        })
+    }
+
+    pub async fn store_upload_thumbnail(
+        &self,
+        project_id: Uuid,
+        upload_id: Uuid,
+        bytes: &[u8],
+    ) -> Result<StoredMaterialFile, std::io::Error> {
+        let directory = self.root.join("uploads").join(project_id.to_string());
+        fs::create_dir_all(&directory).await?;
+        let file_name = format!("{upload_id}.jpg");
+        let absolute_path = directory.join(&file_name);
+        fs::write(&absolute_path, bytes).await?;
+        Ok(StoredMaterialFile {
+            absolute_path,
+            public_url: format!("/assets/uploads/{project_id}/{file_name}"),
+        })
+    }
+
     pub async fn remove(&self, stored: &StoredMaterialFile) -> Result<(), std::io::Error> {
         match fs::remove_file(&stored.absolute_path).await {
             Ok(()) => Ok(()),

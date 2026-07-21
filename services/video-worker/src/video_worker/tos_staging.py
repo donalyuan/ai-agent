@@ -55,6 +55,21 @@ class StagedAudioObject:
         }
 
 
+@dataclass(frozen=True)
+class StagedMediaObject:
+    object_key: str
+    source_sha256: str
+    source_size_bytes: int
+    signed_get_url: str
+
+    def audit_snapshot(self) -> dict[str, str | int]:
+        return {
+            "object_key": self.object_key,
+            "source_sha256": self.source_sha256,
+            "source_size_bytes": self.source_size_bytes,
+        }
+
+
 class TosClient(Protocol):
     def head_bucket(self, bucket: str): ...
 
@@ -174,6 +189,83 @@ class TosAudioStaging:
             ) from error
 
 
+class TosMediaStaging(TosAudioStaging):
+    """作品参考图片暂存；签名 URL 只返回调用方，不进入审计快照。"""
+
+    def stage_media(
+        self,
+        *,
+        project_id: UUID,
+        task_id: UUID,
+        content: bytes,
+        extension: str,
+        content_type: str,
+    ) -> StagedMediaObject:
+        normalized_extension = extension.lower().lstrip(".")
+        normalized_type = content_type.lower().strip()
+        signatures = {
+            "png": content.startswith(b"\x89PNG\r\n\x1a\n"),
+            "jpg": content.startswith(b"\xff\xd8\xff"),
+            "jpeg": content.startswith(b"\xff\xd8\xff"),
+            "webp": content.startswith(b"RIFF") and content[8:12] == b"WEBP",
+        }
+        expected_types = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "webp": "image/webp",
+        }
+        if (
+            normalized_extension not in signatures
+            or normalized_type != expected_types.get(normalized_extension)
+            or not signatures.get(normalized_extension)
+        ):
+            raise TosStagingError(
+                "media_type_unsupported", "暂存文件不是受支持的图片", retryable=False
+            )
+        if len(content) > self.config.max_file_bytes:
+            raise TosStagingError(
+                "media_too_large", "暂存图片超过系统 TOS 文件大小限制", retryable=False
+            )
+        source_sha256 = hashlib.sha256(content).hexdigest()
+        object_key = str(
+            PurePosixPath(
+                self.config.object_prefix.strip().strip("/"),
+                "work-generation",
+                str(project_id),
+                str(task_id),
+                f"{source_sha256}.{normalized_extension}",
+            )
+        )
+        try:
+            try:
+                self.client.put_object(
+                    self.config.bucket,
+                    object_key,
+                    content=io.BytesIO(content),
+                    content_length=len(content),
+                    content_type=normalized_type,
+                    forbid_overwrite=True,
+                )
+            except Exception as error:
+                if not _is_already_exists(error):
+                    raise
+            signed_url = self.signed_get_url(object_key)
+        except Exception as error:
+            if isinstance(error, TosStagingError):
+                error.object_key = object_key
+                error.source_sha256 = source_sha256
+                raise
+            raise TosStagingError(
+                "tos_stage_failed",
+                f"TOS 暂存失败: {error.__class__.__name__}",
+                retryable=True,
+                object_key=object_key,
+                source_sha256=source_sha256,
+            ) from error
+        return StagedMediaObject(object_key, source_sha256, len(content), signed_url)
+
+
 class TosConnectionChecker:
     def __init__(
         self,
@@ -281,3 +373,7 @@ def _valid_object_key(object_key: str, prefix: str) -> bool:
 def _read_signed_url(url: str) -> bytes:
     with urlopen(url, timeout=15) as response:
         return response.read(1024)
+
+
+def _is_already_exists(error: Exception) -> bool:
+    return getattr(error, "status_code", None) in {409, 412}

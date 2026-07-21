@@ -8,10 +8,11 @@ mod topic_generation;
 mod topic_quality;
 mod topic_review;
 mod types;
+mod work;
 
 pub use error::AgentRuntimeError;
 pub use prompt::format_account_strategy_context;
-pub use types::{AgentTurnRequest, AgentTurnResponse};
+pub use types::{AgentTurnRequest, AgentTurnResponse, SoundAgentContext};
 
 use prompt::truncate_for_prompt;
 
@@ -79,6 +80,15 @@ impl AgentRuntime {
         &self,
         request: AgentTurnRequest,
     ) -> Result<AgentTurnResponse, AgentRuntimeError> {
+        self.handle_turn_with_sound_context(request, None).await
+    }
+
+    /// 声音上下文只通过声音消息入口传入；其他 Agent 继续使用通用单轮接口。
+    pub async fn handle_turn_with_sound_context(
+        &self,
+        request: AgentTurnRequest,
+        sound_context: Option<SoundAgentContext>,
+    ) -> Result<AgentTurnResponse, AgentRuntimeError> {
         if request.user_message.trim().is_empty() {
             return Err(AgentRuntimeError::Validation("消息不能为空".to_string()));
         }
@@ -87,22 +97,34 @@ impl AgentRuntime {
             .conversation_repository
             .get_conversation(request.conversation_id)
             .await?;
+        validate_sound_context(&conversation, sound_context.as_ref())?;
+        let user_metadata = sound_context
+            .as_ref()
+            .map(|context| json!({"sound_context": context}))
+            .unwrap_or_else(|| json!({}));
         let user_message = self
             .conversation_repository
             .save_message(CreateAgentMessageInput {
                 conversation_id: conversation.id,
                 role: AgentMessageRole::User,
                 content: request.user_message.trim().to_string(),
-                metadata: json!({}),
+                metadata: user_metadata,
             })
             .await?;
+        let mut run_input = json!({"user_message_id": user_message.id});
+        if let Some(context) = sound_context.as_ref() {
+            run_input
+                .as_object_mut()
+                .expect("Agent run input 固定为 object")
+                .insert("sound_context".to_string(), json!(context));
+        }
         let run = self
             .conversation_repository
             .create_run(CreateAgentRunInput {
                 conversation_id: conversation.id,
                 project_id: conversation.project_id,
                 agent_type: conversation.agent_type.clone(),
-                input: json!({ "user_message_id": user_message.id }),
+                input: run_input,
                 model_id: self
                     .model_execution
                     .as_ref()
@@ -129,7 +151,16 @@ impl AgentRuntime {
                 .await
             }
             "sound" => {
-                self.handle_sound_turn(&conversation, &user_message, &run)
+                self.handle_sound_turn(
+                    &conversation,
+                    &user_message,
+                    &run,
+                    sound_context.as_ref().expect("声音上下文已在分派前校验"),
+                )
+                .await
+            }
+            "work" => {
+                self.handle_work_turn(&conversation, &user_message, &run)
                     .await
             }
             agent_type => Err(AgentRuntimeError::UnsupportedAgent(agent_type.to_string())),
@@ -167,4 +198,33 @@ impl AgentRuntime {
             }
         }
     }
+}
+
+fn validate_sound_context(
+    conversation: &crate::domain::conversation::AgentConversation,
+    sound_context: Option<&SoundAgentContext>,
+) -> Result<(), AgentRuntimeError> {
+    if conversation.agent_type != "sound" {
+        if sound_context.is_some() {
+            return Err(AgentRuntimeError::Validation(
+                "非声音会话不能携带声音上下文".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+    let context = sound_context
+        .ok_or_else(|| AgentRuntimeError::Validation("声音消息缺少当前编辑上下文".to_string()))?;
+    context.validate().map_err(AgentRuntimeError::Validation)?;
+    let conversation_model_id = conversation
+        .metadata
+        .get("speech_model_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .ok_or_else(|| AgentRuntimeError::Validation("声音会话缺少有效 TTS 模型".to_string()))?;
+    if context.speech_model_id != conversation_model_id {
+        return Err(AgentRuntimeError::Validation(
+            "声音消息上下文与会话 TTS 模型不一致".to_string(),
+        ));
+    }
+    Ok(())
 }

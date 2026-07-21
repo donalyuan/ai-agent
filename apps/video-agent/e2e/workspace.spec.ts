@@ -9,6 +9,8 @@ const imageModelId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const ttsModelId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const openAiTtsModelId = "cececece-cece-4cec-8cec-cececececece";
 const asrModelId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const videoModelId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const silentVideoModelId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
 
 const textModelOption = {
   model_id: textModelId,
@@ -29,6 +31,45 @@ const imageModelOption = {
   upstream_model: "gpt-image-test",
   is_default: true,
 };
+
+const videoModelOptions = [
+  {
+    model_id: videoModelId,
+    display_name: "Seedance 2.0",
+    model_type: "video",
+    provider_name: "火山引擎",
+    api_protocol: "volcengine_ark_video",
+    upstream_model: "doubao-seedance-2-0-pro",
+    is_default: true,
+    capabilities: {
+      aspect_ratios: ["16:9", "9:16"],
+      resolutions: ["720p", "1080p"],
+      min_duration_seconds: 4,
+      max_duration_seconds: 15,
+      max_reference_images: 9,
+      max_prompt_chars: 500,
+      generate_audio: true,
+    },
+  },
+  {
+    model_id: silentVideoModelId,
+    display_name: "静音视频模型",
+    model_type: "video",
+    provider_name: "测试供应商",
+    api_protocol: "volcengine_ark_video",
+    upstream_model: "silent-video-test",
+    is_default: false,
+    capabilities: {
+      aspect_ratios: ["1:1"],
+      resolutions: ["720p"],
+      min_duration_seconds: 4,
+      max_duration_seconds: 15,
+      max_reference_images: 9,
+      max_prompt_chars: 500,
+      generate_audio: false,
+    },
+  },
+];
 
 const speechModelOptions = [
   {
@@ -484,6 +525,41 @@ const materialWorkspaceMenus = [
   menuNode("workflow-tasks", "工作流任务", false, "planned", 70),
 ];
 
+const workGenerationWorkspaceMenus = [
+  ...materialWorkspaceMenus.slice(0, 3),
+  {
+    ...menuNode("production", "作品生产", true, "active", 40),
+    children: [
+      {
+        ...menuNode("work-generation", "作品生成", true, "active", 10),
+        agent_key: "work-generation-agent",
+        menu_type: "page",
+        module_key: "production.work-generation",
+      },
+    ],
+  },
+  menuNode("publishing", "发布运营", false, "planned", 50),
+  menuNode("analytics", "数据分析", false, "planned", 60),
+  menuNode("workflow-tasks", "工作流任务", false, "planned", 70),
+];
+
+const workGenerationTaskWorkspaceMenus = workGenerationWorkspaceMenus.map((menu) =>
+  menu.menu_key === "production"
+    ? {
+        ...menu,
+        children: [
+          ...menu.children,
+          {
+            ...menuNode("work-generation-task", "生成任务", true, "active", 20),
+            agent_key: "work-generation-agent",
+            menu_type: "page",
+            module_key: "production.work-generation-task",
+          },
+        ],
+      }
+    : menu,
+);
+
 function soundSubtitleMenuNode() {
   return {
     ...menuNode("sound-subtitle-generation", "声音与字幕生成", true, "active", 30),
@@ -933,11 +1009,242 @@ test.beforeEach(async ({ page }) => {
           ? [textModelOption]
           : modelType === "image"
             ? [imageModelOption]
-            : modelType === "speech" ? speechModelOptions : [],
+            : modelType === "video"
+              ? videoModelOptions
+              : modelType === "speech" ? speechModelOptions : [],
       },
     });
   });
 });
+
+async function mockWorkGenerationWorkflow(page: Page) {
+  const workId = "31313131-3131-4131-8131-313131313131";
+  const workVersionId = "32323232-3232-4232-8232-323232323232";
+  const planIds = [
+    "33333333-3333-4333-8333-333333333331",
+    "33333333-3333-4333-8333-333333333332",
+  ];
+  const runId = "34343434-3434-4434-8434-343434343434";
+  const workConversationId = "35353535-3535-4535-8535-353535353535";
+  const audioMaterialId = "36363636-3636-4636-8636-363636363636";
+  const ttsVoiceType = "zh_female_fixture";
+  const manifest = {
+    script_id: scriptId,
+    project_id: projectId,
+    script_title: scriptDetail.title,
+    script_updated_at: scriptDetail.updated_at,
+    input_version: "manifest-v1",
+    scenes: scriptDetail.scenes.map((scene, index) => ({
+      ...scene,
+      visual_description: `${scene.visual_description} 主角在连续镜头中保持服装、面部、光线和空间关系一致，并完整展示当前镜头动作。`,
+      candidate_id: `37373737-3737-4737-8737-37373737373${index}`,
+      material_id: `38383838-3838-4838-8838-38383838383${index}`,
+      file_url: `https://cdn.example.com/work-scene-${index + 1}.png`,
+      thumbnail_url: null,
+      source_snapshot: { source: "selected_primary" },
+    })),
+  };
+  const planRequests: Array<Record<string, unknown>> = [];
+  let confirmCount = 0;
+
+  await page.unroute(/\/api\/video-workspace\/menus$/);
+  await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { menus: workGenerationWorkspaceMenus } });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/scripts(\\?.*)?$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { scripts: [scriptSummary], total: 1, limit: 20, offset: 0 } });
+  });
+  await page.route(new RegExp(`/api/scripts/${scriptId}$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: scriptDetail });
+  });
+  await page.route(new RegExp(`/api/scripts/${scriptId}/asset-candidates(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { candidates: [] } });
+  });
+  await page.route(new RegExp(`/api/scripts/${scriptId}/asset-generation-tasks(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { script_id: scriptId, tasks: [] } });
+  });
+  await page.route(new RegExp(`/api/scripts/${scriptId}/scene-visual-manifest$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: manifest });
+  });
+  await page.route(new RegExp(`/api/scripts/${scriptId}/scene-visual-manifest/validate$`), async (route) => {
+    expect(route.request().postDataJSON()).toEqual({ expected_input_version: manifest.input_version });
+    await route.fulfill({ contentType: "application/json", json: manifest });
+  });
+  await page.route(new RegExp(`/api/speech/models/${ttsModelId}/voice-catalog$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        model_id: ttsModelId,
+        source_model_id: ttsModelId,
+        model_settings: {},
+        last_sync: null,
+        voices: [{
+          voice_id: "39393939-3939-4939-8939-393939393939",
+          voice_type: ttsVoiceType,
+          resource_id: "seed-tts-2.0",
+          name: "灿灿",
+          avatar_url: null,
+          gender: "female",
+          age: "adult",
+          categories: [],
+          normal_labels: ["清晰"],
+          special_labels: [],
+          trial_url: null,
+          short_trial_url: null,
+          languages: [{ Language: "zh-cn", Text: "试听" }],
+          emotions: [],
+          description: "中文女声",
+          is_available: true,
+          catalog_version: 1,
+          created_at: "2026-07-20T00:00:00Z",
+          updated_at: "2026-07-20T00:00:00Z",
+        }, {
+          voice_id: "39393939-3939-4939-8939-393939393938",
+          voice_type: "en_male_alastor",
+          resource_id: "seed-tts-2.0",
+          name: "Alastor 2.0",
+          avatar_url: null,
+          gender: "male",
+          age: "young",
+          categories: [],
+          normal_labels: ["侵略性"],
+          special_labels: [],
+          trial_url: null,
+          short_trial_url: null,
+          languages: [{ Language: "en", Text: "Preview" }],
+          emotions: [],
+          description: "声音尖锐，有侵略性",
+          is_available: true,
+          catalog_version: 1,
+          created_at: "2026-07-20T00:00:00Z",
+          updated_at: "2026-07-20T00:00:00Z",
+        }],
+      },
+    });
+  });
+  await page.route(new RegExp(`/api/speech/models/${openAiTtsModelId}/voice-catalog$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        model_id: openAiTtsModelId,
+        source_model_id: openAiTtsModelId,
+        model_settings: {},
+        last_sync: null,
+        voices: [{
+          voice_id: "39393939-3939-4939-8939-393939393937",
+          voice_type: "gateway_female_fixture",
+          resource_id: "seed-tts-2.0",
+          name: "中转女声",
+          avatar_url: null,
+          gender: "female",
+          age: "adult",
+          categories: [],
+          normal_labels: [],
+          special_labels: [],
+          trial_url: null,
+          short_trial_url: null,
+          languages: [{ Language: "zh-cn", Text: "试听" }],
+          emotions: [],
+          description: "仅中转模型可用",
+          is_available: true,
+          catalog_version: 1,
+          created_at: "2026-07-20T00:00:00Z",
+          updated_at: "2026-07-20T00:00:00Z",
+        }],
+      },
+    });
+  });
+  await page.route(new RegExp(`/api/projects/${projectId}/materials\\?type=audio&status=active$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        materials: [{
+          material_id: audioMaterialId,
+          project_id: projectId,
+          material_type: "audio",
+          file_url: "https://cdn.example.com/background.wav",
+          thumbnail_url: null,
+          file_name: "科技感背景音乐.wav",
+          tags: ["BGM"],
+          metadata: {},
+          source: "user_upload",
+          audio_usage: "bgm",
+          work_id: null,
+          work_version_id: null,
+          generation: null,
+          usage_count: 0,
+          status: "active",
+          created_at: "2026-07-20T00:00:00Z",
+          updated_at: "2026-07-20T00:00:00Z",
+        }],
+      },
+    });
+  });
+  await page.route(/https:\/\/cdn\.example\.com\/.*\.(png|wav)$/, async (route) => {
+    await route.fulfill({ status: 200, contentType: "image/png", body: png1x1 });
+  });
+  await page.route(new RegExp(`/api/scripts/${scriptId}/work-generation/plans$`), async (route) => {
+    const request = route.request().postDataJSON() as Record<string, unknown>;
+    planRequests.push(request);
+    const version = planRequests.length;
+    const segmentPrompts = Array.isArray(request.segment_prompts)
+      ? request.segment_prompts as string[]
+      : ["开场提示词", "收束提示词"];
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        work_id: workId,
+        work_title: scriptDetail.title,
+        plan_id: planIds[version - 1],
+        work_version_id: workVersionId,
+        plan_version: version,
+        status: "ready",
+        input_fingerprint: `fingerprint-${version}`,
+        model_snapshot: {
+          llm_model_id: request.llm_model_id,
+          video_model_id: request.video_model_id,
+          tts_model_id: request.tts_model_id,
+        },
+        capability_snapshot: {},
+        output_snapshot: {},
+        prompt_snapshot: {},
+        timeline_snapshot: {},
+        resource_usage: { video_task_count: 2, video_seconds: 30, tts_characters: 38, asr_seconds: 0 },
+        warnings: request.audio_mode === "seedance_original_and_tts" ? ["可能出现双重人声"] : [],
+        segments: segmentPrompts.map((prompt, index) => ({ sequence: index + 1, duration_seconds: 15, prompt })),
+        can_confirm: true,
+        blockers: [],
+        created_at: "2026-07-20T00:01:00Z",
+      },
+    });
+  });
+  await page.route(new RegExp(`/api/work-generation/plans/${planIds[1]}/confirm$`), async (route) => {
+    confirmCount += 1;
+    expect(route.request().headers()["idempotency-key"]).toMatch(/^[0-9a-f-]{36}$/);
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      json: { run_id: runId, work_id: workId, work_version_id: workVersionId, work_plan_id: planIds[1], status: "queued", created: true, resource_usage: { video_task_count: 2 } },
+    });
+  });
+  await page.route(/\/api\/agent\/conversations$/, async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({ agent_type: "work", project_id: projectId, subject_type: "work", subject_id: workId });
+    await route.fulfill({ contentType: "application/json", json: { ...conversation, conversation_id: workConversationId, agent_type: "work", subject_type: "work", subject_id: workId, title: "作品生成 Agent" } });
+  });
+  await page.route(new RegExp(`/api/agent/conversations/${workConversationId}/messages$`), async (route) => {
+    const content = route.request().postDataJSON().content;
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        user_message: { ...userMessage, conversation_id: workConversationId, content },
+        assistant_message: { ...assistantMessage, conversation_id: workConversationId, content: "已保留角色连续性并更新下一版草稿。" },
+        run: { ...agentRun, conversation_id: workConversationId, agent_type: "work" },
+      },
+    });
+  });
+
+  return { audioMaterialId, manifest, planRequests, ttsVoiceType, confirmCount: () => confirmCount };
+}
 
 async function mockExistingScriptWorkflow(page: Page) {
   let scriptRefreshed = false;
@@ -1164,6 +1471,8 @@ function workspaceRoutePath(menuKey: string) {
     "asset-generation": "/materials/generation",
     "sound-subtitle-generation": "/materials/sound-subtitle-generation",
     production: "/production",
+    "work-generation": "/production/generation",
+    "work-generation-task": "/production/tasks",
     publishing: "/publishing",
     analytics: "/analytics",
     "workflow-tasks": "/workflow-tasks",
@@ -1682,6 +1991,486 @@ test("画面生成页支持生成、预览和选择主画面且不提供旧视�
   await expect.poll(() => assetWorkflow.dismissAssetGenerationTaskRequestCount()).toBe(1);
   await expect(panel.getByRole("button", { name: "清理失败任务" })).toHaveCount(0);
   await expect(dismissDialog).toHaveCount(0);
+});
+
+test("作品生成从完整主画面一次确认、按能力重规划并保持幂等", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 952 });
+  const workflow = await mockWorkGenerationWorkflow(page);
+  await page.goto("/materials/generation");
+
+  const workspaceMenu = page.getByRole("navigation", { name: "视频工作台菜单" });
+  await workspaceMenu.getByRole("button", { name: /素材管理/ }).click();
+  await workspaceMenu.getByRole("button", { name: "画面生成" }).click();
+  const assetPanel = page.getByRole("region", { name: "画面生成图片候选" });
+  await expect(assetPanel.getByText("还缺")).toHaveCount(0);
+  const enterButton = assetPanel.getByRole("button", { name: "进入作品生成" });
+  await expect(enterButton).toBeEnabled();
+  await enterButton.click();
+
+  await expect(page).toHaveURL(/\/production\/generation$/);
+  await expect(page.getByRole("heading", { name: scriptDetail.title })).toBeVisible();
+  await expect(page.getByText("一次确认创建一部作品")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "作品 Agent" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "作品计划预览" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "参数确认" })).toBeVisible();
+  await expect(page.getByText("生成流程")).toBeVisible();
+  await expect(page.getByText("主画面", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("全片提示词")).toBeVisible();
+  await expect(page.getByText("资源用量", { exact: true })).toBeVisible();
+  await expect(page.getByText("第 1 镜")).toBeVisible();
+  await expect(page.getByText("第 2 镜")).toBeVisible();
+
+  const agentPanel = page.getByRole("region", { name: "作品 Agent" });
+  const planPanel = page.getByRole("region", { name: "作品计划预览" });
+  const paramsPanel = page.getByRole("region", { name: "参数确认" });
+  const generationFontSizes = await page.evaluate(() => {
+    const fontSize = (selector: string) => {
+      const element = document.querySelector(selector);
+      return element ? getComputedStyle(element).fontSize : null;
+    };
+    return {
+      panelTitle: fontSize(".workGenerationPanelHeader h3"),
+      eyebrow: fontSize(".workGenerationEyebrow"),
+      binding: fontSize(".workGenerationBinding dt"),
+      message: fontSize(".workGenerationMessages p"),
+      auditMeta: fontSize(".workGenerationAudit small"),
+      sceneDescription: fontSize(".workGenerationScenes p"),
+      prompt: fontSize(".workGenerationPromptField textarea"),
+      formLabel: fontSize(".workGenerationParamsSection > label"),
+    };
+  });
+  expect(generationFontSizes).toEqual({
+    panelTitle: "16px",
+    eyebrow: "12px",
+    binding: "13px",
+    message: "13px",
+    auditMeta: "12px",
+    sceneDescription: "12px",
+    prompt: "13px",
+    formLabel: "13px",
+  });
+  const clippedSceneDescriptions = await planPanel.locator(".workGenerationScenes p").evaluateAll((nodes) =>
+    nodes
+      .map((node, index) => ({
+        index,
+        clientHeight: node.clientHeight,
+        scrollHeight: node.scrollHeight,
+      }))
+      .filter((metrics) => metrics.scrollHeight > metrics.clientHeight),
+  );
+  expect(clippedSceneDescriptions).toEqual([]);
+  const [agentBox, planBox, paramsBox] = await Promise.all([
+    agentPanel.boundingBox(),
+    planPanel.boundingBox(),
+    paramsPanel.boundingBox(),
+  ]);
+  expect(agentBox).not.toBeNull();
+  expect(planBox).not.toBeNull();
+  expect(paramsBox).not.toBeNull();
+  expect(Math.round(agentBox!.width)).toBe(330);
+  expect(planBox!.width).toBeGreaterThan(700);
+  expect(Math.round(paramsBox!.width)).toBe(436);
+  expect(agentBox!.x + agentBox!.width).toBeLessThan(planBox!.x);
+  expect(planBox!.x + planBox!.width).toBeLessThan(paramsBox!.x);
+  const viewportMetrics = await page.evaluate(() => ({
+    clientHeight: document.documentElement.clientHeight,
+    clientWidth: document.documentElement.clientWidth,
+    scrollHeight: document.documentElement.scrollHeight,
+    scrollWidth: document.documentElement.scrollWidth,
+    topbarHeight: document.querySelector(".topbar")?.getBoundingClientRect().height,
+    workspaceHeight: document.querySelector(".workGenerationWorkspace")?.getBoundingClientRect().height,
+  }));
+  expect(viewportMetrics.scrollWidth).toBeLessThanOrEqual(viewportMetrics.clientWidth);
+  expect(viewportMetrics.scrollHeight, JSON.stringify(viewportMetrics)).toBeLessThanOrEqual(viewportMetrics.clientHeight);
+  expect(viewportMetrics.workspaceHeight).toBe(viewportMetrics.clientHeight - Number(viewportMetrics.topbarHeight));
+  const fullHeightLayout = await page.evaluate(() => {
+    const panels = Array.from(document.querySelectorAll<HTMLElement>(".workGenerationPanel"));
+    const planScroll = document.querySelector<HTMLElement>(".workGenerationPlanScroll");
+    const paramsScroll = document.querySelector<HTMLElement>(".workGenerationParamsScroll");
+    const paramsPanel = document.querySelector<HTMLElement>(".workGenerationParamsPanel");
+    const paramsActions = document.querySelector<HTMLElement>(".workGenerationActions");
+    const rail = document.querySelector<HTMLElement>(".agentRail");
+    return {
+      windowScrollY: window.scrollY,
+      panelBottomGaps: panels.map((panel) => Math.round(window.innerHeight - panel.getBoundingClientRect().bottom)),
+      panelHeights: panels.map((panel) => Math.round(panel.getBoundingClientRect().height)),
+      planCanScrollInternally: Boolean(planScroll && planScroll.scrollHeight > planScroll.clientHeight),
+      paramsCanScrollInternally: Boolean(paramsScroll && paramsScroll.scrollHeight > paramsScroll.clientHeight),
+      paramsActionBottomGap: paramsPanel && paramsActions
+        ? Math.round(paramsPanel.getBoundingClientRect().bottom - paramsActions.getBoundingClientRect().bottom)
+        : null,
+      railOverflowY: rail ? getComputedStyle(rail).overflowY : null,
+    };
+  });
+  expect(fullHeightLayout.windowScrollY).toBe(0);
+  expect(fullHeightLayout.panelBottomGaps.every((gap) => gap >= 20 && gap <= 24)).toBe(true);
+  expect(new Set(fullHeightLayout.panelHeights).size).toBe(1);
+  expect(fullHeightLayout.planCanScrollInternally).toBe(true);
+  expect(fullHeightLayout.paramsCanScrollInternally).toBe(true);
+  expect(fullHeightLayout.paramsActionBottomGap).toBeLessThanOrEqual(1);
+  expect(fullHeightLayout.railOverflowY).toBe("auto");
+
+  const llm = page.getByRole("combobox", { name: "方案 LLM" });
+  const video = page.getByRole("combobox", { name: "视频模型" });
+  const tts = page.getByRole("combobox", { name: "TTS 模型" });
+  await expect(llm).toHaveValue(textModelId);
+  await expect(video).toHaveValue(videoModelId);
+  await expect(tts).toHaveValue(ttsModelId);
+  const voice = page.getByRole("combobox", { name: "音色" });
+  await expect(voice).toContainText("灿灿");
+  await expect(page.getByRole("combobox", { name: "画面比例" })).toHaveValue("16:9");
+  await expect(page.getByRole("combobox", { name: "分辨率" })).toHaveValue("1080p");
+  await expect(page.getByRole("checkbox", { name: "烧录字幕" })).toBeChecked();
+  await expect(page.getByLabel("已有音频素材").getByText("科技感背景音乐.wav")).toBeVisible();
+
+  const selectMetrics = await paramsPanel.locator(".workspaceSelectField").evaluateAll((fields) => fields.map((field) => {
+    const select = field.querySelector("select");
+    const chevron = field.querySelector(".workspaceSelectChevron");
+    if (!select || !chevron) return null;
+    const style = getComputedStyle(select);
+    return {
+      height: Math.round(select.getBoundingClientRect().height),
+      radius: style.borderRadius,
+      fontSize: style.fontSize,
+      background: style.backgroundColor,
+      chevronVisible: getComputedStyle(chevron).display !== "none",
+    };
+  }));
+  expect(selectMetrics.length).toBeGreaterThanOrEqual(7);
+  expect(selectMetrics.every((metric) => metric && metric.height === 36 && metric.radius === "6px" && metric.fontSize === "13px" && metric.background === "rgb(255, 255, 255)" && metric.chevronVisible)).toBe(true);
+
+  await voice.click();
+  const voicePopover = page.locator(".voiceCatalogPopover");
+  const voiceListbox = page.getByRole("listbox", { name: "可用音色" });
+  await expect(voicePopover).toBeVisible();
+  expect(Math.round((await voicePopover.boundingBox())!.width)).toBe(650);
+  await expect(page.getByText("2 个可用")).toBeVisible();
+  await page.getByRole("group", { name: "按语言筛选音色" }).getByRole("button", { name: "英文" }).click();
+  await page.getByRole("group", { name: "按声线筛选音色" }).getByRole("button", { name: "男声" }).click();
+  await page.getByRole("searchbox", { name: "搜索音色" }).fill("侵略性");
+  await expect(voiceListbox.getByRole("option", { name: /Alastor 2\.0.*声音尖锐.*男.*青年.*英语/ })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(voicePopover).toHaveCount(0);
+
+  await tts.selectOption(openAiTtsModelId);
+  await expect(voice).toContainText("灿灿（已失效）");
+  await expect(voice).toHaveAttribute("aria-invalid", "true");
+  await page.getByRole("button", { name: "生成计划" }).click();
+  await expect(page.locator(".errorText[role='alert']")).toHaveText("当前音色不适用于所选 TTS 模型，请重新选择");
+  expect(workflow.planRequests).toHaveLength(0);
+  await tts.selectOption(ttsModelId);
+  await expect(voice).toContainText("灿灿");
+  await expect(voice).not.toHaveAttribute("aria-invalid", "true");
+
+  await page.getByRole("combobox", { name: "声音模式" }).selectOption("seedance_original_and_tts");
+  await page.getByLabel("已有音频素材").getByRole("checkbox", { name: /科技感背景音乐/ }).check();
+  await page.getByLabel("全片提示词").fill("统一角色、空间和光线连续性，开场快速进入主题。");
+  await page.getByRole("button", { name: "生成计划" }).click();
+
+  await expect(page.getByText("计划版本 1")).toBeVisible();
+  await expect(page.getByText("2", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("30 秒", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("38", { exact: true })).toBeVisible();
+  await expect(page.getByText("可能出现双重人声")).toBeVisible();
+  await expect(page.getByLabel("第 1 段提示词")).toHaveValue("开场提示词");
+  await expect(page.getByRole("button", { name: "确认生成作品" })).toBeEnabled();
+
+  await page.getByLabel("第 1 段提示词").fill("重写后的开场提示词");
+  await expect(page.getByRole("button", { name: "确认生成作品" })).toBeDisabled();
+  await expect(page.getByText("计划已过期，请重新生成计划")).toBeVisible();
+
+  await video.selectOption(silentVideoModelId);
+  await expect(page.getByRole("combobox", { name: "声音模式" }).locator("option")).toHaveText(["独立 TTS"]);
+  await expect(page.getByRole("combobox", { name: "画面比例" })).toHaveValue("1:1");
+  await expect(page.getByRole("combobox", { name: "分辨率" })).toHaveValue("720p");
+  await page.getByRole("combobox", { name: "成片时长" }).selectOption("custom");
+  await page.getByLabel("自定义时长（秒）").fill("30");
+  await page.getByRole("checkbox", { name: "烧录字幕" }).uncheck();
+  await page.getByRole("button", { name: "重新生成计划" }).click();
+
+  await expect(page.getByText("计划版本 2")).toBeVisible();
+  expect(workflow.planRequests[1]).toMatchObject({
+    video_model_id: silentVideoModelId,
+    duration_strategy: "custom",
+    duration_seconds: 30,
+    aspect_ratio: "1:1",
+    resolution: "720p",
+    audio_mode: "independent_tts",
+    tts_voice_type: workflow.ttsVoiceType,
+    audio_material_ids: [workflow.audioMaterialId],
+    burn_subtitles: false,
+    segment_prompts: ["重写后的开场提示词", "收束提示词"],
+  });
+
+  const agentInput = page.getByLabel("作品 Agent 消息");
+  await agentInput.fill("保持角色连续性，但把结尾收束更明确。");
+  await page.getByRole("button", { name: "发送" }).click();
+  await expect(page.getByText("已保留角色连续性并更新下一版草稿。")).toBeVisible();
+
+  await expect(page.getByText(/费用|价格|金额|币种|预算|成本/)).toHaveCount(0);
+  await page.getByRole("button", { name: "确认生成作品" }).click();
+  await expect(page.getByText("生成中", { exact: true })).toBeVisible();
+  await expect.poll(() => workflow.confirmCount()).toBe(1);
+
+  await page.setViewportSize({ width: 1440, height: 980 });
+  const compactGenerationLayout = await page.evaluate(() => {
+    const workspace = document.querySelector<HTMLElement>(".workGenerationWorkspace");
+    const panels = Array.from(document.querySelectorAll<HTMLElement>(".workGenerationPanel"));
+    const flowLabels = Array.from(document.querySelectorAll<HTMLElement>(".workGenerationFlow strong, .workGenerationFlow small"));
+    const lineCount = (element: HTMLElement) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return range.getClientRects().length;
+    };
+    return {
+      workspaceOverflow: workspace ? workspace.scrollWidth > workspace.clientWidth : null,
+      panelOverflow: panels.filter((panel) => panel.scrollWidth > panel.clientWidth).map((panel) => panel.className),
+      wrappedFlowLabels: flowLabels.filter((label) => lineCount(label) > 1).map((label) => label.innerText),
+    };
+  });
+  expect(compactGenerationLayout).toEqual({ workspaceOverflow: false, panelOverflow: [], wrappedFlowLabels: [] });
+});
+
+test("生成任务页保留完整菜单并与作品生成页共享工作台骨架", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 980 });
+  await mockWorkGenerationWorkflow(page);
+  await page.unroute(/\/api\/video-workspace\/menus$/);
+  await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: { menus: workGenerationTaskWorkspaceMenus },
+    });
+  });
+  const task = {
+    id: "90909090-9090-4090-8090-909090909090",
+    work_id: "91919191-9191-4191-8191-919191919191",
+    work_version_id: "92929292-9292-4292-8292-929292929292",
+    work_plan_id: "93939393-9393-4393-8393-939393939393",
+    title: "夏日防晒知识短片",
+    version_no: 2,
+    status: "running",
+    current_stage: "video_segment",
+    progress_percent: 40,
+    successful_steps: 2,
+    running_steps: 1,
+    queued_steps: 2,
+    failed_steps: 0,
+    can_cancel: false,
+    cancel_mode: "provider",
+    cancel_block_reason: "当前 provider 不支持运行中取消，任务仍需等待上游终态",
+    resource_usage: { video_task_count: 2, video_seconds: 30 },
+    error_category: null,
+    error_summary: null,
+    created_at: "2026-07-20T01:00:00Z",
+    updated_at: "2026-07-20T01:01:00Z",
+    dismissed_at: null,
+  };
+  const cancelledTask = {
+    ...task,
+    id: "95959595-9595-4595-8595-959595959595",
+    work_version_id: "96969696-9696-4696-8696-969696969696",
+    work_plan_id: "97979797-9797-4797-8797-979797979797",
+    version_no: 1,
+    status: "cancelled",
+    current_stage: "cancelled",
+    progress_percent: 16,
+    successful_steps: 1,
+    running_steps: 0,
+    queued_steps: 0,
+    cancel_mode: "none",
+    cancel_block_reason: null,
+  };
+  const taskCounts = { pending: 0, running: 1, completed: 0, attention: 0, cancelled: 1, total: 2 };
+  await page.route(new RegExp(`/api/projects/${projectId}/work-generation/tasks(?:\\?.*)?$`), async (route) => {
+    const view = new URL(route.request().url()).searchParams.get("view");
+    const tasks = view === "pending" ? [] : view === "cancelled" ? [cancelledTask] : [task];
+    await route.fulfill({ contentType: "application/json", json: { tasks, counts: taskCounts } });
+  });
+  await page.route(new RegExp(`/api/work-generation/runs/${task.id}$`), async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        task,
+        steps: [{
+          id: "94949494-9494-4494-8494-949494949494",
+          step_no: 1,
+          step_type: "video_segment",
+          status: "running",
+          is_required: true,
+          depends_on: [],
+          model_snapshot: { display_name: "Fake Video" },
+          resource_usage: { video_seconds: 15 },
+          result_material_ids: [],
+          external_task_id: "fake-upstream",
+          error_category: null,
+          error_code: null,
+          error_summary: null,
+          attempts: [],
+        }],
+      },
+    });
+  });
+  await page.route(new RegExp(`/api/work-generation/runs/${cancelledTask.id}$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { task: cancelledTask, steps: [] } });
+  });
+
+  await page.goto("/production/tasks");
+  await expect(page.getByRole("heading", { name: "生成任务" })).toBeVisible();
+  await expect(page.getByText("共 2 个任务")).toBeVisible();
+  await expect(page.getByText(task.title).first()).toBeVisible();
+  await expect(page.getByText("选择一个运行")).toBeVisible();
+  const taskRow = page.getByRole("button", { name: new RegExp(`${task.title}.*查看`) });
+  await expect(taskRow).toHaveAttribute("aria-pressed", "false");
+  await taskRow.click();
+  await expect(page.getByRole("button", { name: new RegExp(`${task.title}.*查看中`) })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: `${task.title} · V${task.version_no}` })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`run_id=${task.id}`));
+  await expect(page.getByText(task.cancel_block_reason)).toBeVisible();
+  await expect(page.getByRole("button", { name: "取消运行" })).toHaveCount(0);
+  const taskFontSizes = await page.evaluate(() => {
+    const fontSize = (selector: string) => {
+      const element = document.querySelector(selector);
+      return element ? getComputedStyle(element).fontSize : null;
+    };
+    return {
+      listTitle: fontSize(".workGenerationTaskTableHeader strong"),
+      listMeta: fontSize(".workGenerationTaskTableHeader small"),
+      tab: fontSize(".workGenerationTaskTabs button"),
+      tableHead: fontSize(".workGenerationTaskTableRow.head"),
+      taskTitle: fontSize(".workGenerationTaskTableRow:not(.head) > span > strong"),
+      taskMeta: fontSize(".workGenerationTaskTableRow:not(.head) > span > small"),
+      detailTitle: fontSize(".workGenerationTaskDetailHeader h3"),
+      detailMeta: fontSize(".workGenerationTaskDetailHeader small"),
+      stepTitle: fontSize(".workGenerationTaskDetailStep strong"),
+      stepMeta: fontSize(".workGenerationTaskDetailStep small"),
+    };
+  });
+  expect(taskFontSizes).toEqual({
+    listTitle: "16px",
+    listMeta: "12px",
+    tab: "13px",
+    tableHead: "12px",
+    taskTitle: "13px",
+    taskMeta: "12px",
+    detailTitle: "16px",
+    detailMeta: "12px",
+    stepTitle: "13px",
+    stepMeta: "12px",
+  });
+
+  const workspaceMenu = page.getByRole("navigation", { name: "视频工作台菜单" });
+  for (const label of [
+    "内容策略",
+    "脚本创作",
+    "素材管理",
+    "作品生产",
+    "发布运营",
+    "数据分析",
+    "工作流任务",
+  ]) {
+    await expect(workspaceMenu.getByRole("button", { name: new RegExp(label) })).toBeVisible();
+  }
+  await expect(workspaceMenu.getByRole("button", { name: "生成任务" })).toHaveClass(/active/);
+
+  const readShellGeometry = (workspaceSelector: string, headerSelector: string) => page.evaluate(
+    ({ workspaceSelector: workspace, headerSelector: header }) => {
+      const rect = (selector: string) => {
+        const element = document.querySelector(selector);
+        if (!element) return null;
+        const box = element.getBoundingClientRect();
+        return {
+          x: Math.round(box.x),
+          y: Math.round(box.y),
+          width: Math.round(box.width),
+          height: Math.round(box.height),
+        };
+      };
+      return {
+        shellClass: document.querySelector(".workspaceShell")?.className,
+        rail: rect(".agentRail"),
+        brand: rect(".brandBlock"),
+        topbar: rect(".topbar"),
+        workspace: rect(workspace),
+        header: rect(header),
+      };
+    },
+    { workspaceSelector, headerSelector },
+  );
+
+  const taskGeometry = await readShellGeometry(".workGenerationTasksWorkspace", ".workGenerationTasksHeader");
+  const overflowingTaskPanels = await page.locator([
+    ".workGenerationTaskTablePanel",
+    ".workGenerationTaskListToolbar",
+    ".workGenerationTaskTable",
+    ".workGenerationTaskDetailPanel",
+  ].join(", ")).evaluateAll((elements) => elements
+    .filter((element) => element.scrollWidth > element.clientWidth)
+    .map((element) => element.className));
+  expect(overflowingTaskPanels).toEqual([]);
+  const [railBox, lastMenuBox] = await Promise.all([
+    page.locator(".workspaceShell > .agentRail").boundingBox(),
+    workspaceMenu.getByRole("button", { name: /工作流任务/ }).boundingBox(),
+  ]);
+  expect(taskGeometry.shellClass).toBe("workspaceShell");
+  expect(railBox).not.toBeNull();
+  expect(lastMenuBox).not.toBeNull();
+  expect(lastMenuBox!.y + lastMenuBox!.height).toBeLessThanOrEqual(railBox!.y + railBox!.height);
+
+  await page.getByRole("tab", { name: /未生成/ }).click();
+  await expect(page.getByText("暂无任务")).toBeVisible();
+  const [emptyTableBox, emptyFooterBox] = await Promise.all([
+    page.locator(".workGenerationTaskTable").boundingBox(),
+    page.locator(".workGenerationTaskTableFooter").boundingBox(),
+  ]);
+  expect(emptyTableBox).not.toBeNull();
+  expect(emptyFooterBox).not.toBeNull();
+  expect(Math.abs(
+    (emptyTableBox!.y + emptyTableBox!.height) - (emptyFooterBox!.y + emptyFooterBox!.height),
+  )).toBeLessThanOrEqual(1);
+
+  await page.getByRole("button", { name: /更多筛选/ }).click();
+  await page.getByRole("combobox", { name: "特殊状态" }).selectOption("cancelled");
+  await expect(page.getByText(cancelledTask.title).first()).toBeVisible();
+  await expect(page.getByText("当前显示：已取消 1 个运行")).toBeVisible();
+
+  await workspaceMenu.getByRole("button", { name: "作品生成" }).click();
+  await expect(page).toHaveURL(/\/production\/generation$/);
+  await expect(page.getByRole("heading", { name: scriptDetail.title })).toBeVisible();
+  const generationGeometry = await readShellGeometry(".workGenerationWorkspace", ".workGenerationHeader");
+
+  expect(generationGeometry.shellClass).toBe("workspaceShell");
+  expect(taskGeometry.rail).toEqual(generationGeometry.rail);
+  expect(taskGeometry.brand).toEqual(generationGeometry.brand);
+  expect(taskGeometry.topbar).toEqual(generationGeometry.topbar);
+  expect(taskGeometry.workspace).toEqual(generationGeometry.workspace);
+  expect(taskGeometry.header).not.toBeNull();
+  expect(generationGeometry.header).not.toBeNull();
+  expect({
+    x: taskGeometry.header!.x,
+    y: taskGeometry.header!.y,
+    width: taskGeometry.header!.width,
+  }).toEqual({
+    x: generationGeometry.header!.x,
+    y: generationGeometry.header!.y,
+    width: generationGeometry.header!.width,
+  });
+  expect(Math.abs(taskGeometry.header!.height - generationGeometry.header!.height)).toBeLessThanOrEqual(1);
+
+  await page.setViewportSize({ width: 1440, height: 980 });
+  await workspaceMenu.getByRole("button", { name: "生成任务" }).click();
+  await expect(page).toHaveURL(/\/production\/tasks$/);
+  await expect(page.getByText(task.title).first()).toBeVisible();
+  const compactTaskLayout = await page.evaluate(() => {
+    const toolbar = document.querySelector<HTMLElement>(".workGenerationTaskListToolbar");
+    const frame = document.querySelector<HTMLElement>(".workGenerationTaskWorkspaceFrame");
+    const tabs = Array.from(document.querySelectorAll<HTMLElement>(".workGenerationTaskTabs button"));
+    return {
+      frameOverflow: frame ? frame.scrollWidth > frame.clientWidth : null,
+      toolbarOverflow: toolbar ? toolbar.scrollWidth > toolbar.clientWidth : null,
+      wrappedTabs: tabs.filter((tab) => tab.scrollHeight > tab.clientHeight).map((tab) => tab.innerText),
+    };
+  });
+  expect(compactTaskLayout).toEqual({ frameOverflow: false, toolbarOverflow: false, wrappedTabs: [] });
 });
 
 test("声音与字幕工作区使用动态中文语言并在确认后创建任务", async ({ page }) => {

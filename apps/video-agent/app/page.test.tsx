@@ -1638,6 +1638,31 @@ describe("video-agent 视频工作台页面", () => {
     expect(screen.queryByText("动作音效生成")).not.toBeInTheDocument();
   });
 
+  it("视频素材详情使用原文件播放并显示缩略图海报", async () => {
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
+    mockProjects({ projects: [project] });
+    const generatedVideo: Material = {
+      ...generatedTtsMaterial,
+      material_id: "41414141-4141-4141-8141-414141414141",
+      material_type: "video",
+      file_name: "Debug解决烦心事 成片.mp4",
+      file_url: "http://api.test/assets/generated/final.mp4",
+      thumbnail_url: "http://api.test/assets/generated/final.jpg",
+      audio_usage: null,
+    };
+    mockMaterials([generatedVideo]);
+
+    render(createElement(Home));
+    fireEvent.click(await screen.findByRole("button", { name: /素材管理/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Debug解决烦心事 成片/ }));
+
+    const player = screen.getByLabelText("Debug解决烦心事 成片.mp4 视频播放器");
+    expect(player).toHaveAttribute("src", generatedVideo.file_url);
+    expect(player).toHaveAttribute("poster", generatedVideo.thumbnail_url);
+    expect(player).toHaveAttribute("controls");
+    expect(screen.getByRole("button", { name: "播放视频" })).toBeInTheDocument();
+  });
+
   it("图片详情可打开、缩放并关闭大图预览", async () => {
     vi.mocked(api.listWorkspaceMenus).mockResolvedValue(materialWorkspaceMenus);
     mockProjects({ projects: [project] });

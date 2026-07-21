@@ -112,7 +112,7 @@ function MenuButton({
 }) {
   const active = menu.menu_key === selectedMenuKey;
   return (
-    <div className="agentMenuGroup">
+    <div className={`agentMenuGroup menu-${menu.menu_key}`}>
       <button
         className={active ? "agentItem active" : "agentItem"}
         disabled={!menu.is_enabled}

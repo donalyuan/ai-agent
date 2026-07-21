@@ -567,11 +567,28 @@ describe("声音与字幕生成页面", () => {
     );
     await waitFor(() => expect(screen.getByRole("combobox", { name: "音色" })).toHaveTextContent("测试女声"));
 
-    fireEvent.change(screen.getByLabelText("声音 Agent 输入"), { target: { value: "推荐沉稳声音" } });
+    fireEvent.click(screen.getByRole("tab", { name: "字幕" }));
+    fireEvent.change(screen.getByLabelText("配音文本"), { target: { value: "这是当前旁白" } });
+    fireEvent.change(screen.getByLabelText("字幕断句"), { target: { value: "这是当前\n旁白" } });
+    fireEvent.change(screen.getByRole("slider", { name: "语速" }), { target: { value: "1.2" } });
+    fireEvent.change(screen.getByLabelText("声音 Agent 输入"), { target: { value: "按照旁边文本推荐沉稳声音" } });
     fireEvent.click(screen.getByRole("button", { name: "发送建议" }));
 
     expect(await screen.findByText("建议使用测试女声。")).toBeInTheDocument();
-    expect(screen.getByLabelText("配音文本")).toHaveValue("");
+    const agentMessageCall = fetcher.mock.calls.find(([url]) => String(url).endsWith("/messages"));
+    expect(JSON.parse(String(agentMessageCall?.[1]?.body))).toEqual({
+      content: "按照旁边文本推荐沉稳声音",
+      model_id: textModelId,
+      sound_context: {
+        speech_model_id: ttsModelId,
+        tts_text: "这是当前旁白",
+        voice_type: firstVoice.voice_type,
+        language: "zh-cn",
+        parameters: { audio_format: "mp3", sample_rate: 24000, speed_ratio: 1.2 },
+        subtitle_segments: ["这是当前", "旁白"],
+      },
+    });
+    expect(screen.getByLabelText("配音文本")).toHaveValue("这是当前旁白");
     expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith("/sound-subtitle/tasks") && init?.method === "POST")).toBe(false);
 
     fireEvent.click(screen.getByRole("button", { name: "应用建议" }));

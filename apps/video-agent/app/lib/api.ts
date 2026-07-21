@@ -316,10 +316,140 @@ export type SceneVisualManifestItem = {
 
 export type SceneVisualManifest = {
   script_id: string;
+  project_id?: string;
   script_title: string;
   script_updated_at: string;
   input_version: string;
   scenes: SceneVisualManifestItem[];
+};
+
+export type WorkPlanResponse = {
+  work_id: string;
+  work_title: string;
+  plan_id: string;
+  work_version_id: string;
+  plan_version: number;
+  status: string;
+  input_fingerprint: string;
+  model_snapshot: Record<string, unknown>;
+  capability_snapshot: Record<string, unknown>;
+  output_snapshot: Record<string, unknown>;
+  prompt_snapshot: Record<string, unknown>;
+  timeline_snapshot: Record<string, unknown>;
+  resource_usage: Record<string, unknown>;
+  warnings: unknown;
+  segments: Array<Record<string, unknown>>;
+  can_confirm: boolean;
+  blockers: string[];
+  created_at: string;
+};
+
+export type WorkRunResponse = {
+  run_id: string;
+  work_id: string;
+  work_version_id: string;
+  work_plan_id: string;
+  status: string;
+  created: boolean;
+  resource_usage: Record<string, unknown>;
+};
+
+export type WorkGenerationTask = {
+  id: string;
+  work_id: string;
+  work_version_id: string;
+  work_plan_id: string;
+  title: string;
+  version_no: number;
+  status: string;
+  current_stage: string;
+  progress_percent: number;
+  successful_steps: number;
+  running_steps: number;
+  queued_steps: number;
+  failed_steps: number;
+  can_cancel?: boolean;
+  cancel_mode?: "local" | "provider" | "none";
+  cancel_block_reason?: string | null;
+  resource_usage: Record<string, unknown>;
+  error_category: string | null;
+  error_summary: string | null;
+  created_at: string;
+  updated_at: string;
+  dismissed_at: string | null;
+};
+
+export type WorkGenerationAttempt = {
+  id: string;
+  attempt_no: number;
+  status: string;
+  model_snapshot: Record<string, unknown>;
+  resource_usage: Record<string, unknown>;
+  error_category: string | null;
+  error_code: string | null;
+  error_summary: string | null;
+  request_trace_id: string | null;
+  upstream_task_id: string | null;
+  provider_cancel_supported?: boolean;
+  cancel_requested_at?: string | null;
+  cancel_response?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkGenerationStep = {
+  id: string;
+  step_no: number;
+  step_type: string;
+  status: string;
+  is_required: boolean;
+  depends_on: unknown;
+  model_snapshot: Record<string, unknown>;
+  resource_usage: Record<string, unknown>;
+  result_material_ids: unknown;
+  external_task_id: string | null;
+  error_category: string | null;
+  error_code: string | null;
+  error_summary: string | null;
+  attempts: WorkGenerationAttempt[];
+};
+
+export type WorkGenerationTaskDetails = {
+  task: WorkGenerationTask;
+  steps: WorkGenerationStep[];
+};
+
+export type WorkGenerationTaskCounts = {
+  pending: number;
+  running: number;
+  completed: number;
+  attention: number;
+  cancelled: number;
+  total: number;
+};
+
+export type WorkGenerationTaskListResponse = {
+  tasks: WorkGenerationTask[];
+  counts: WorkGenerationTaskCounts;
+};
+
+export type WorkPlanPayload = {
+  llm_model_id: string;
+  video_model_id: string;
+  tts_model_id?: string | null;
+  tts_voice_type?: string | null;
+  narration_override?: string | null;
+  duration_strategy: "preset15" | "preset30" | "preset45" | "preset60" | "custom" | "follow_narration";
+  duration_seconds?: number | null;
+  aspect_ratio: string;
+  resolution: string;
+  audio_mode: "independent_tts" | "seedance_original" | "seedance_original_and_tts" | "silent";
+  full_prompt: string;
+  scene_prompts?: string[];
+  segment_prompts?: string[];
+  narration_seconds?: number;
+  audio_material_ids?: string[];
+  burn_subtitles?: boolean;
 };
 
 export type ContentTopicSnapshot = {
@@ -548,7 +678,7 @@ export type UpdateScriptStatusResponse = {
   updated_at: string;
 };
 
-export type AgentType = "script" | "topic" | "sound" | "material" | "video" | "publish" | "optimization";
+export type AgentType = "script" | "topic" | "sound" | "work" | "material" | "video" | "publish" | "optimization";
 export type AgentMessageRole = "user" | "assistant" | "system";
 export type AgentRunStatus = "running" | "succeeded" | "completed" | "failed";
 export type ScriptAgentIntent = "generate_script" | "edit_script";
@@ -611,10 +741,20 @@ export type AgentMessageListResponse = {
   messages: AgentMessage[];
 };
 
+export type SoundAgentContextPayload = {
+  speech_model_id: string;
+  tts_text: string;
+  voice_type: string;
+  language: string;
+  parameters: Record<string, unknown>;
+  subtitle_segments: string[];
+};
+
 export type SendAgentMessagePayload = {
   content: string;
   model_id: string;
   supplement_of_batch_id?: string | null;
+  sound_context?: SoundAgentContextPayload;
 };
 
 export type AgentTurnResponse = {
@@ -637,6 +777,7 @@ export type ModelOption = {
   api_protocol: string;
   upstream_model: string;
   is_default: boolean;
+  capabilities?: Record<string, unknown>;
 };
 
 export type ModelOptionListResponse = { models: ModelOption[] };
@@ -1212,6 +1353,56 @@ export function validateSceneVisualManifest(
       body: { expected_input_version: expectedInputVersion },
     },
   ).then((manifest) => normalizeSceneVisualManifestUrls(client, manifest));
+}
+
+export function createWorkPlan(client: ApiClient, scriptId: string, payload: WorkPlanPayload) {
+  return request<WorkPlanResponse>(client, `/api/scripts/${scriptId}/work-generation/plans`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function confirmWorkPlan(client: ApiClient, planId: string, idempotencyKey: string) {
+  return request<WorkRunResponse>(client, `/api/work-generation/plans/${planId}/confirm`, {
+    method: "POST",
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+export function listWorkGenerationTasks(
+  client: ApiClient,
+  projectId: string,
+  filters: { view?: string; stage?: string; query?: string; include_hidden?: boolean } = {},
+) {
+  const params = new URLSearchParams();
+  if (filters.view) params.set("view", filters.view);
+  if (filters.stage) params.set("stage", filters.stage);
+  if (filters.query) params.set("query", filters.query);
+  if (filters.include_hidden) params.set("include_hidden", "true");
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<WorkGenerationTaskListResponse>(
+    client,
+    `/api/projects/${projectId}/work-generation/tasks${suffix}`,
+  );
+}
+
+export function getWorkGenerationTask(client: ApiClient, runId: string) {
+  return request<WorkGenerationTaskDetails>(client, `/api/work-generation/runs/${runId}`);
+}
+
+export function cancelWorkGenerationRun(client: ApiClient, runId: string) {
+  return request<WorkGenerationTaskDetails>(client, `/api/work-generation/runs/${runId}/cancel`, { method: "POST" });
+}
+
+export function dismissWorkGenerationRun(client: ApiClient, runId: string) {
+  return request<WorkGenerationTaskDetails>(client, `/api/work-generation/runs/${runId}/dismiss`, { method: "POST" });
+}
+
+export function retryWorkGenerationStep(client: ApiClient, stepId: string, idempotencyKey: string) {
+  return request<WorkGenerationAttempt>(client, `/api/work-generation/steps/${stepId}/retry`, {
+    method: "POST",
+    headers: { "idempotency-key": idempotencyKey },
+  });
 }
 
 export function selectAssetCandidate(client: ApiClient, sceneId: string, candidateId: string) {

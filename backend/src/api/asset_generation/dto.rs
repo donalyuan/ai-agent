@@ -258,6 +258,7 @@ impl From<SceneVisualManifestItem> for SceneVisualManifestItemResponse {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct SceneVisualManifestResponse {
     pub script_id: Uuid,
+    pub project_id: Uuid,
     pub script_title: String,
     pub script_updated_at: DateTime<Utc>,
     pub input_version: String,
@@ -268,6 +269,7 @@ impl From<SceneVisualManifest> for SceneVisualManifestResponse {
     fn from(manifest: SceneVisualManifest) -> Self {
         Self {
             script_id: manifest.script_id,
+            project_id: manifest.project_id,
             script_title: manifest.script_title,
             script_updated_at: manifest.script_updated_at,
             input_version: manifest.input_version,

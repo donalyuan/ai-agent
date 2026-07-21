@@ -58,11 +58,17 @@ fn settings_are_deserialized_into_model_specific_types() {
             "resolutions": ["1080p"],
             "aspect_ratios": ["9:16"],
             "min_duration_seconds": 5,
-            "max_duration_seconds": 10
+            "max_duration_seconds": 10,
+            "reference_image_mode": "first_last_frames"
         }),
     )
     .expect("valid video settings should parse");
     assert_eq!(video.video_duration_range(), Some((5, 10)));
+    assert!(ModelSettings::parse(
+        ModelType::Video,
+        json!({"reference_image_mode": "unsupported"})
+    )
+    .is_err());
 
     let speech = ModelSettings::parse(
         ModelType::Speech,

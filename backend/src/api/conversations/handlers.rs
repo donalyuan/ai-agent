@@ -56,6 +56,7 @@ pub(super) async fn send_agent_message(
             request.model_id,
             request.content,
             request.supplement_of_batch_id,
+            request.sound_context.map(|context| context.normalized()),
         )
         .await?;
 

@@ -271,6 +271,44 @@ async fn insert_tts_model_with_voice(pool: &PgPool) -> Uuid {
     model_id
 }
 
+async fn insert_large_voice_catalog(pool: &PgPool, model_id: Uuid) {
+    let sync_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM voice_catalog_syncs WHERE model_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(model_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO voice_catalog_entries (
+            model_id, voice_type, resource_id, name, languages, emotions,
+            description, is_available, first_seen_sync_id, last_seen_sync_id
+        )
+        SELECT
+            $1,
+            'catalog_voice_' || LPAD(series::text, 3, '0'),
+            'seed-tts-2.0',
+            'voice-' || LPAD(series::text, 3, '0'),
+            jsonb_build_array(jsonb_build_object(
+                'Language', CASE WHEN series = 80 THEN 'en' ELSE 'zh-cn' END,
+                'Text', CASE WHEN series = 80 THEN '目录试听文案不应进入Prompt' ELSE '试听文案' END
+            )),
+            '[]'::jsonb,
+            CASE WHEN series = 80 THEN '完整目录末尾音色' ELSE '测试音色' END,
+            TRUE,
+            $2,
+            $2
+        FROM generate_series(0, 80) AS series
+        "#,
+    )
+    .bind(model_id)
+    .bind(sync_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 fn app_state(test_url: String, pool: PgPool, openai_base_url: String) -> AppState {
     let llm_client = OpenAIClient::new(OpenAIConfig {
         api_protocol: ApiProtocol::OpenAiChatCompletions,
@@ -649,6 +687,7 @@ async fn sound_agent_recommends_only_catalog_voice_and_never_executes_speech_too
     let project_id = insert_project(&test_pool).await;
     let text_model_id = insert_enabled_text_model(&test_pool).await;
     let speech_model_id = insert_tts_model_with_voice(&test_pool).await;
+    insert_large_voice_catalog(&test_pool, speech_model_id).await;
     let requests = Arc::new(Mutex::new(Vec::new()));
     let openai_base_url = local_sound_openai_base_url(requests.clone()).await;
     let app = build_app_with_state(app_state(test_url, test_pool.clone(), openai_base_url));
@@ -677,7 +716,7 @@ async fn sound_agent_recommends_only_catalog_voice_and_never_executes_speech_too
     let conversation = response_json(create_response).await;
     let conversation_id = conversation["conversation_id"].as_str().unwrap();
 
-    let send_response = app
+    let missing_context_response = app
         .clone()
         .oneshot(
             Request::builder()
@@ -690,6 +729,79 @@ async fn sound_agent_recommends_only_catalog_voice_and_never_executes_speech_too
                     json!({
                         "content": "给这段知识旁白推荐沉稳声音",
                         "model_id": text_model_id
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_context_response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(missing_context_response).await["error"],
+        "声音消息缺少当前编辑上下文"
+    );
+    assert!(requests.lock().unwrap().is_empty());
+
+    let mismatched_context_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/agent/conversations/{conversation_id}/messages"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "content": "给这段知识旁白推荐沉稳声音",
+                        "model_id": text_model_id,
+                        "sound_context": {
+                            "speech_model_id": Uuid::new_v4(),
+                            "tts_text": "当前旁白内容",
+                            "voice_type": "zh_female_fixture_mars_bigtts",
+                            "language": "zh-cn",
+                            "parameters": {"speed_ratio": 1.0},
+                            "subtitle_segments": ["当前旁白内容"]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        mismatched_context_response.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        response_json(mismatched_context_response).await["error"],
+        "声音消息上下文与会话 TTS 模型不一致"
+    );
+    assert!(requests.lock().unwrap().is_empty());
+
+    let send_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/agent/conversations/{conversation_id}/messages"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "content": "给这段知识旁白推荐沉稳声音",
+                        "model_id": text_model_id,
+                        "sound_context": {
+                            "speech_model_id": speech_model_id,
+                            "tts_text": "当前旁白内容",
+                            "voice_type": "zh_female_fixture_mars_bigtts",
+                            "language": "zh-cn",
+                            "parameters": {"speed_ratio": 1.0},
+                            "subtitle_segments": ["当前旁白", "内容"]
+                        }
                     })
                     .to_string(),
                 ))
@@ -734,9 +846,33 @@ async fn sound_agent_recommends_only_catalog_voice_and_never_executes_speech_too
         .await
         .unwrap();
     assert_eq!(task_count, 0);
-    let prompt = requests.lock().unwrap()[0].to_string();
+    assert_eq!(
+        turn["user_message"]["metadata"]["sound_context"]["tts_text"],
+        "当前旁白内容"
+    );
+    assert_eq!(
+        turn["run"]["input"]["sound_context"]["speech_model_id"],
+        speech_model_id.to_string()
+    );
+    let request_payload = requests.lock().unwrap()[0].clone();
+    assert_eq!(request_payload["response_format"]["type"], "json_object");
+    let prompt = request_payload["messages"][1]["content"]
+        .as_str()
+        .expect("声音 Agent 请求必须包含 user prompt");
+    assert!(prompt.contains("当前编辑上下文"));
+    assert!(prompt.contains("当前旁白内容"));
+    assert!(prompt.contains("模型可调参数定义"));
+    assert!(prompt.contains("声音建议 JSON 输出契约"));
+    assert!(prompt.contains("recommended_voice_type"));
+    assert!(prompt.contains("subtitle_segments"));
+    assert!(prompt.contains("additionalProperties"));
+    assert!(prompt.contains("\"minimum\":0.5"));
+    assert!(prompt.contains("完整可用音色目录（共 82 项）"));
     assert!(prompt.contains("zh_female_fixture_mars_bigtts"));
-    assert!(!prompt.contains("runtime-secret"));
+    assert!(prompt.contains("catalog_voice_080"));
+    assert!(prompt.contains("完整目录末尾音色"));
+    assert!(!prompt.contains("目录试听文案不应进入Prompt"));
+    assert!(!request_payload.to_string().contains("runtime-secret"));
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;

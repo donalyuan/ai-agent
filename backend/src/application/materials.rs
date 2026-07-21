@@ -11,6 +11,7 @@ use crate::repositories::{
 };
 use serde_json::{json, Map, Value};
 use std::fmt;
+use std::path::Path;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -77,11 +78,12 @@ impl MaterialService {
                 "audio_usage 只能用于音频素材".to_string(),
             ));
         }
+        let upload_id = Uuid::new_v4();
         let stored = self
             .storage
             .store(
                 command.project_id,
-                Uuid::new_v4(),
+                upload_id,
                 &detected.extension,
                 &command.bytes,
             )
@@ -97,6 +99,28 @@ impl MaterialService {
                 Err(error) => {
                     let _ = self.storage.remove(&stored).await;
                     return Err(error.into());
+                }
+            }
+        } else {
+            None
+        };
+        let thumbnail = if detected.material_type == MaterialType::Video {
+            let bytes = match generate_video_thumbnail(&stored.absolute_path).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let _ = self.storage.remove(&stored).await;
+                    return Err(error);
+                }
+            };
+            match self
+                .storage
+                .store_upload_thumbnail(command.project_id, upload_id, &bytes)
+                .await
+            {
+                Ok(thumbnail) => Some(thumbnail),
+                Err(error) => {
+                    let _ = self.storage.remove(&stored).await;
+                    return Err(MaterialApplicationError::UploadStorage(error.to_string()));
                 }
             }
         } else {
@@ -141,7 +165,7 @@ impl MaterialService {
             material_type: detected.material_type,
             file_url: stored.public_url.clone(),
             file_name: command.file_name,
-            thumbnail_url: None,
+            thumbnail_url: thumbnail.as_ref().map(|value| value.public_url.clone()),
             tags: command.tags,
             metadata: Value::Object(metadata),
         };
@@ -149,6 +173,9 @@ impl MaterialService {
             Ok(material) => Ok(material),
             Err(error) => {
                 let _ = self.storage.remove(&stored).await;
+                if let Some(thumbnail) = thumbnail.as_ref() {
+                    let _ = self.storage.remove(thumbnail).await;
+                }
                 Err(error.into())
             }
         }
@@ -221,11 +248,12 @@ impl MaterialService {
         }
         validate_material_metadata(&Value::Object(metadata.clone()))?;
 
+        let artifact_id = Uuid::new_v4();
         let stored = self
             .storage
             .store_generated(
                 command.project_id,
-                Uuid::new_v4(),
+                artifact_id,
                 &detected.extension,
                 &command.bytes,
             )
@@ -255,12 +283,35 @@ impl MaterialService {
             }
         }
 
+        let thumbnail = if detected.material_type == MaterialType::Video {
+            let bytes = match generate_video_thumbnail(&stored.absolute_path).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let _ = self.storage.remove(&stored).await;
+                    return Err(error);
+                }
+            };
+            match self
+                .storage
+                .store_generated_thumbnail(command.project_id, artifact_id, &bytes)
+                .await
+            {
+                Ok(thumbnail) => Some(thumbnail),
+                Err(error) => {
+                    let _ = self.storage.remove(&stored).await;
+                    return Err(MaterialApplicationError::UploadStorage(error.to_string()));
+                }
+            }
+        } else {
+            None
+        };
+
         let input = CreateMaterialInput {
             project_id: command.project_id,
             material_type: detected.material_type,
             file_url: stored.public_url.clone(),
             file_name: command.file_name,
-            thumbnail_url: None,
+            thumbnail_url: thumbnail.as_ref().map(|value| value.public_url.clone()),
             tags: command.tags,
             metadata: Value::Object(metadata),
         };
@@ -268,6 +319,9 @@ impl MaterialService {
             Ok(material) => Ok(material),
             Err(error) => {
                 let _ = self.storage.remove(&stored).await;
+                if let Some(thumbnail) = thumbnail.as_ref() {
+                    let _ = self.storage.remove(thumbnail).await;
+                }
                 Err(error.into())
             }
         }
@@ -324,6 +378,34 @@ impl MaterialService {
             Err(MaterialApplicationError::ProjectNotFound(project_id))
         }
     }
+}
+
+async fn generate_video_thumbnail(path: &Path) -> Result<Vec<u8>, MaterialApplicationError> {
+    let output = tokio::process::Command::new("ffmpeg")
+        .args(["-y", "-ss", "0", "-i"])
+        .arg(path)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=640:-2",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "pipe:1",
+        ])
+        .output()
+        .await
+        .map_err(|error| {
+            MaterialApplicationError::UploadStorage(format!("视频缩略图生成失败: {error}"))
+        })?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return Err(MaterialApplicationError::UploadStorage(
+            "视频缩略图生成失败".to_string(),
+        ));
+    }
+    Ok(output.stdout)
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -1,12 +1,13 @@
-use super::{AgentRuntime, AgentRuntimeError};
+use super::{AgentRuntime, AgentRuntimeError, SoundAgentContext};
 use crate::domain::conversation::{
     AgentConversation, AgentMessage, AgentMessageRole, AgentRunRecord, CreateAgentMessageInput,
     CreateAgentStepInput,
 };
 use crate::repositories::VoiceCatalogEntry;
-use novex_model::{LLMJsonSchema, LLMPrompt};
+use novex_model::LLMPrompt;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 impl AgentRuntime {
@@ -15,6 +16,7 @@ impl AgentRuntime {
         conversation: &AgentConversation,
         user_message: &AgentMessage,
         run: &AgentRunRecord,
+        sound_context: &SoundAgentContext,
     ) -> Result<AgentMessage, AgentRuntimeError> {
         let model_id = speech_model_id(conversation)?;
         let repository = self.voice_catalog_repository.as_ref().ok_or_else(|| {
@@ -46,7 +48,9 @@ impl AgentRuntime {
             .llm_client
             .generate_script(sound_recommendation_prompt(
                 &user_message.content,
+                sound_context,
                 &catalog.voices,
+                &catalog.model_settings,
             ))
             .await?;
         let recommendation = SoundRecommendation::parse(&raw)?;
@@ -57,7 +61,7 @@ impl AgentRuntime {
             .ok_or_else(|| {
                 AgentRuntimeError::InvalidLlmOutput("声音 Agent 推荐了目录外音色".to_string())
             })?;
-        validate_recommendation(&recommendation, voice)?;
+        validate_recommendation(&recommendation, voice, &catalog.model_settings)?;
         self.conversation_repository
             .add_step(CreateAgentStepInput {
                 agent_run_id: run.id,
@@ -163,6 +167,7 @@ fn speech_model_id(conversation: &AgentConversation) -> Result<Uuid, AgentRuntim
 fn validate_recommendation(
     recommendation: &SoundRecommendation,
     voice: &VoiceCatalogEntry,
+    model_settings: &Value,
 ) -> Result<(), AgentRuntimeError> {
     if !catalog_contains(
         &voice.languages,
@@ -173,7 +178,61 @@ fn validate_recommendation(
             "声音 Agent 推荐了音色不支持的语言".to_string(),
         ));
     }
+    validate_recommended_parameters(&recommendation.parameters, model_settings)?;
     Ok(())
+}
+
+fn validate_recommended_parameters(
+    parameters: &Value,
+    model_settings: &Value,
+) -> Result<(), AgentRuntimeError> {
+    let definitions = model_settings.get("parameters").and_then(Value::as_object);
+    let values = parameters.as_object().ok_or_else(|| {
+        AgentRuntimeError::InvalidLlmOutput("声音 Agent 参数必须是 object".to_string())
+    })?;
+    for (name, value) in values {
+        let definition = definitions
+            .and_then(|items| items.get(name))
+            .ok_or_else(|| {
+                AgentRuntimeError::InvalidLlmOutput(format!(
+                    "声音 Agent 推荐了模型未声明的参数: {name}"
+                ))
+            })?;
+        if !parameter_value_is_supported(value, definition) {
+            return Err(AgentRuntimeError::InvalidLlmOutput(format!(
+                "声音 Agent 推荐了不支持的参数值: {name}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn parameter_value_is_supported(value: &Value, definition: &Value) -> bool {
+    if let Some(options) = definition
+        .get("enum")
+        .or_else(|| definition.get("options"))
+        .and_then(Value::as_array)
+    {
+        return options.contains(value);
+    }
+    match definition.get("type").and_then(Value::as_str) {
+        Some("number") => value.as_f64().is_some_and(|number| {
+            definition
+                .get("minimum")
+                .or_else(|| definition.get("min"))
+                .and_then(Value::as_f64)
+                .is_none_or(|minimum| number >= minimum)
+                && definition
+                    .get("maximum")
+                    .or_else(|| definition.get("max"))
+                    .and_then(Value::as_f64)
+                    .is_none_or(|maximum| number <= maximum)
+        }),
+        Some("integer") => value.as_i64().is_some(),
+        Some("boolean") => value.is_boolean(),
+        Some("string") => value.is_string(),
+        _ => false,
+    }
 }
 
 fn catalog_contains(value: &Value, expected: &str, keys: &[&str]) -> bool {
@@ -200,43 +259,76 @@ fn alignment_text(value: &str) -> String {
         .collect()
 }
 
-fn sound_recommendation_prompt(user_message: &str, voices: &[VoiceCatalogEntry]) -> LLMPrompt {
+fn sound_recommendation_prompt(
+    user_message: &str,
+    sound_context: &SoundAgentContext,
+    voices: &[VoiceCatalogEntry],
+    model_settings: &Value,
+) -> LLMPrompt {
     let voices = voices
         .iter()
-        .take(80)
         .map(|voice| {
             json!({
                 "voice_type": voice.voice_type,
                 "name": voice.name,
-                "languages": voice.languages,
+                "language_codes": language_codes(&voice.languages),
                 "description": voice.description,
             })
         })
         .collect::<Vec<_>>();
+    let parameter_definitions = model_settings
+        .get("parameters")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let output_schema = sound_recommendation_schema();
     LLMPrompt {
-        system: "你是声音 Agent。只能从给定可用目录推荐音色、语言和声音参数；当前 TTS 协议不支持结构化情绪字段。只输出建议，不执行 TTS/ASR。字幕断句必须完整覆盖 TTS 文本。".to_string(),
+        system: "你是声音 Agent。必须结合当前编辑上下文理解用户要求；只能从给定的完整可用目录推荐音色和语言，只能推荐模型声明的声音参数。当前 TTS 协议不支持结构化情绪字段，不得虚构能力或把会被朗读的情绪标签擅自写入旁白。只输出建议，不执行 TTS/ASR。字幕断句必须完整覆盖 TTS 文本。".to_string(),
         user: format!(
-            "用户要求：\n{}\n\n可用音色目录：\n{}\n\n输出严格 JSON。",
+            "用户要求：\n{}\n\n当前编辑上下文：\n{}\n\n模型可调参数定义：\n{}\n\n完整可用音色目录（共 {} 项）：\n{}\n\n声音建议 JSON 输出契约：\n{}\n\n只输出符合契约的 JSON object。",
             user_message,
-            serde_json::to_string(&voices).unwrap_or_else(|_| "[]".to_string())
+            serde_json::to_string(sound_context).unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&parameter_definitions).unwrap_or_else(|_| "{}".to_string()),
+            voices.len(),
+            serde_json::to_string(&voices).unwrap_or_else(|_| "[]".to_string()),
+            serde_json::to_string(&output_schema).unwrap_or_else(|_| "{}".to_string())
         ),
         max_output_tokens: Some(1_500),
-        output_schema: Some(LLMJsonSchema {
-            name: "sound_recommendation".to_string(),
-            strict: true,
-            schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["reply", "recommended_voice_type", "language", "tts_text", "subtitle_segments", "parameters"],
-                "properties": {
-                    "reply": {"type": "string", "minLength": 1},
-                    "recommended_voice_type": {"type": "string", "minLength": 1},
-                    "language": {"type": "string", "minLength": 1},
-                    "tts_text": {"type": "string", "minLength": 1},
-                    "subtitle_segments": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
-                    "parameters": {"type": "object"}
-                }
-            }),
-        }),
+        // 真实供应商对严格 json_schema 返回 502；json_object + 本地严格校验是固定协议。
+        output_schema: None,
     }
+}
+
+fn sound_recommendation_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reply", "recommended_voice_type", "language", "tts_text", "subtitle_segments", "parameters"],
+        "properties": {
+            "reply": {"type": "string", "minLength": 1},
+            "recommended_voice_type": {"type": "string", "minLength": 1},
+            "language": {"type": "string", "minLength": 1},
+            "tts_text": {"type": "string", "minLength": 1},
+            "subtitle_segments": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "parameters": {"type": "object"}
+        }
+    })
+}
+
+fn language_codes(value: &Value) -> Vec<String> {
+    let mut codes = BTreeSet::new();
+    if let Some(items) = value.as_array() {
+        for item in items {
+            let candidate = item.as_str().or_else(|| {
+                item.as_object().and_then(|object| {
+                    ["Language", "language", "Value", "value"]
+                        .iter()
+                        .find_map(|key| object.get(*key).and_then(Value::as_str))
+                })
+            });
+            if let Some(code) = candidate.map(str::trim).filter(|code| !code.is_empty()) {
+                codes.insert(code.to_ascii_lowercase());
+            }
+        }
+    }
+    codes.into_iter().collect()
 }

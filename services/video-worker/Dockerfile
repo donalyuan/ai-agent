@@ -6,6 +6,7 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY src ./src
+COPY --from=ffmpeg /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg /ffprobe /usr/local/bin/ffprobe
 RUN pip install --no-cache-dir -e ".[dev]"
 

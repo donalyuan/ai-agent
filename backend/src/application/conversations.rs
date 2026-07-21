@@ -55,7 +55,10 @@ impl ConversationService {
         &self,
         command: CreateConversationCommand,
     ) -> Result<AgentConversation, ConversationApplicationError> {
-        if matches!(command.agent_type.as_str(), "script" | "topic" | "sound") {
+        if matches!(
+            command.agent_type.as_str(),
+            "script" | "topic" | "sound" | "work"
+        ) {
             let project_id = command.project_id.ok_or_else(|| {
                 ConversationApplicationError::Validation("Agent 会话必须绑定项目".to_string())
             })?;
@@ -75,6 +78,8 @@ impl ConversationService {
                     self.ensure_project_exists(project_id).await?;
                 }
             } else if command.agent_type == "topic" {
+                self.ensure_project_exists(project_id).await?;
+            } else if command.agent_type == "work" {
                 self.ensure_project_exists(project_id).await?;
             } else {
                 self.ensure_project_exists(project_id).await?;
@@ -145,14 +150,18 @@ impl ConversationService {
         model_id: Uuid,
         content: String,
         supplement_of_batch_id: Option<Uuid>,
+        sound_context: Option<crate::application::agents::runtime::SoundAgentContext>,
     ) -> Result<AgentTurnResponse, ConversationApplicationError> {
         let resolved = self.model_resolver.text_client(model_id).await?;
         self.runtime(resolved.client, resolved.snapshot)
-            .handle_turn(AgentTurnRequest {
-                conversation_id,
-                user_message: content,
-                supplement_of_batch_id,
-            })
+            .handle_turn_with_sound_context(
+                AgentTurnRequest {
+                    conversation_id,
+                    user_message: content,
+                    supplement_of_batch_id,
+                },
+                sound_context,
+            )
             .await
             .map_err(Into::into)
     }

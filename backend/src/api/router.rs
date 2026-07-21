@@ -2,7 +2,7 @@
 
 use crate::api::{
     ai_models, asset_generation, conversations, health, materials, projects, scripts,
-    sound_subtitle, topics, tos_staging_tool, workspace,
+    sound_subtitle, topics, tos_staging_tool, work_generation, workspace,
 };
 use crate::bootstrap::AppState;
 use axum::{
@@ -42,6 +42,7 @@ pub fn build_app_with_state(state: AppState) -> Router {
         .merge(scripts::router())
         .merge(asset_generation::router())
         .merge(sound_subtitle::router())
+        .merge(work_generation::router())
         .merge(tos_staging_tool::router())
         .nest_service(
             "/assets",

@@ -12,4 +12,5 @@ pub mod scripts;
 pub mod sound_subtitle;
 pub mod topics;
 pub mod tos_staging_tool;
+pub mod work_generation;
 pub mod workspace;

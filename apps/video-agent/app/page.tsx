@@ -108,6 +108,8 @@ import {
 import { upsertSummary } from "./pages/script-creation/scriptModel";
 import { AssetGenerationPage } from "./pages/asset-generation/AssetGenerationPage";
 import { SoundSubtitlePage } from "./pages/sound-subtitle/SoundSubtitlePage";
+import { WorkGenerationPage } from "./pages/work-generation/WorkGenerationPage";
+import { WorkGenerationTaskPage } from "./pages/work-generation/WorkGenerationTaskPage";
 import { MaterialLibraryPage } from "./pages/material-library/MaterialLibraryPage";
 import {
   defaultMaterialFilters,
@@ -130,6 +132,7 @@ const assetGenerationMenuKey = "asset-generation";
 const soundSubtitleMenuKey = "sound-subtitle-generation";
 const productionMenuKey = "production";
 const workGenerationMenuKey = "work-generation";
+const workGenerationTaskMenuKey = "work-generation-task";
 const scriptCreationMenuKey = "script-creation";
 const scriptGeneratorMenuKey = "script-generator";
 const defaultMenuKey = contentStrategyMenuKey;
@@ -329,6 +332,8 @@ export default function Home() {
   const [sendingAgentMessage, setSendingAgentMessage] = useState(false);
   const [textModelOptions, setTextModelOptions] = useState<ModelOption[]>([]);
   const [imageModelOptions, setImageModelOptions] = useState<ModelOption[]>([]);
+  const [videoModelOptions, setVideoModelOptions] = useState<ModelOption[]>([]);
+  const [speechModelOptions, setSpeechModelOptions] = useState<ModelOption[]>([]);
   const [loadingTextModels, setLoadingTextModels] = useState(true);
   const [loadingImageModels, setLoadingImageModels] = useState(true);
   const [textModelError, setTextModelError] = useState("");
@@ -482,7 +487,25 @@ export default function Home() {
       }
     }
 
-    await Promise.all([refreshTextModels(), refreshImageModels()]);
+    async function refreshProductionModels() {
+      try {
+        const [video, speech] = await Promise.all([
+          listModelOptions(client, "video"),
+          listModelOptions(client, "speech"),
+        ]);
+        setVideoModelOptions(video.models);
+        setSpeechModelOptions(
+          speech.models.filter(
+            (model) => model.api_protocol.includes("tts") || model.api_protocol.includes("audio_speech"),
+          ),
+        );
+      } catch {
+        setVideoModelOptions([]);
+        setSpeechModelOptions([]);
+      }
+    }
+
+    await Promise.all([refreshTextModels(), refreshImageModels(), refreshProductionModels()]);
   }, [client]);
 
   useEffect(() => {
@@ -961,11 +984,13 @@ export default function Home() {
   }, [client, materialFilters, selectedMenuKey, selectedProjectId]);
 
   useEffect(() => {
-    if (
-      !selectedScript ||
-      selectedMenuKey !== materialManagementMenuKey ||
-      selectedMaterialSubMenuKey !== assetGenerationMenuKey
-    ) {
+    const isAssetGenerationView =
+      selectedMenuKey === materialManagementMenuKey &&
+      selectedMaterialSubMenuKey === assetGenerationMenuKey;
+    const isWorkGenerationView =
+      selectedMenuKey === productionMenuKey &&
+      selectedProductionSubMenuKey === workGenerationMenuKey;
+    if (!selectedScript || (!isAssetGenerationView && !isWorkGenerationView)) {
       setAssetCandidates([]);
       setAssetTasks([]);
       setAssetPlan(null);
@@ -1004,8 +1029,12 @@ export default function Home() {
 
       try {
         const [candidateResponse, taskResponse, manifestState] = await Promise.all([
-          listAssetCandidates(client, script.script_id),
-          listAssetGenerationTasks(client, script.script_id),
+          isAssetGenerationView
+            ? listAssetCandidates(client, script.script_id)
+            : Promise.resolve({ candidates: [] }),
+          isAssetGenerationView
+            ? listAssetGenerationTasks(client, script.script_id)
+            : Promise.resolve({ script_id: script.script_id, tasks: [] }),
           loadSceneVisualManifest(client, script.script_id),
         ]);
         if (active) {
@@ -1035,7 +1064,13 @@ export default function Home() {
     return () => {
       active = false;
     };
-  }, [client, selectedMaterialSubMenuKey, selectedMenuKey, selectedScript]);
+  }, [
+    client,
+    selectedMaterialSubMenuKey,
+    selectedMenuKey,
+    selectedProductionSubMenuKey,
+    selectedScript,
+  ]);
 
   useEffect(() => {
     const scriptId = selectedScript?.script_id;
@@ -2505,6 +2540,35 @@ export default function Home() {
           onSaveMaterial={handleSaveMaterial}
           onSelectMaterial={handleSelectMaterial}
           onUpdateStatus={handleUpdateMaterialStatus}
+        />
+      ) : selectedMenuKey === productionMenuKey && selectedProductionSubMenuKey === workGenerationMenuKey ? (
+        <WorkGenerationPage
+          client={client}
+          project={selectedProject}
+          script={selectedScript}
+          manifest={assetManifest}
+          textModels={textModelOptions}
+          videoModels={videoModelOptions}
+          speechModels={speechModelOptions}
+          writesDisabled={writesDisabled}
+          onRunCreated={(runId) => {
+            const route = findWorkspaceRouteByMenuKey(workspaceMenus, workGenerationTaskMenuKey);
+            if (!route) return;
+            navigateWorkspacePath(`${route.routePath}?run_id=${encodeURIComponent(runId)}`);
+            applyWorkspaceRouteState(route.menuKey, route.subMenuKey);
+          }}
+        />
+      ) : selectedMenuKey === productionMenuKey && selectedProductionSubMenuKey === workGenerationTaskMenuKey ? (
+        <WorkGenerationTaskPage
+          client={client}
+          project={selectedProject}
+          writesDisabled={writesDisabled}
+          onOpenMaterialLibrary={() => {
+            const route = findWorkspaceRouteByMenuKey(workspaceMenus, materialLibraryMenuKey);
+            if (!route) return;
+            applyWorkspaceRouteState(route.menuKey, route.subMenuKey);
+            navigateWorkspacePath(route.routePath);
+          }}
         />
       ) : (
         <ScriptCreationPage

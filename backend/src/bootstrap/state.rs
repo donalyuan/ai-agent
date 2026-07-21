@@ -12,6 +12,7 @@ use crate::application::scripts::ScriptService;
 use crate::application::sound_subtitle::SoundSubtitleService;
 use crate::application::topics::TopicService;
 use crate::application::voice_catalog::VoiceCatalogService;
+use crate::application::work_generation::WorkGenerationService;
 use crate::application::workspace::WorkspaceService;
 use crate::model_routing::{
     ModelClientResolver, PostgresModelClientResolver, StaticModelClientResolver,
@@ -20,7 +21,8 @@ use crate::repositories::{
     PostgresAiModelRepository, PostgresAssetGenerationRepository, PostgresConversationRepository,
     PostgresMaterialRepository, PostgresProjectRepository, PostgresScriptRepository,
     PostgresSoundSubtitleRepository, PostgresTopicRepository, PostgresTosStagingToolRepository,
-    PostgresVoiceCatalogRepository, PostgresWorkspaceMenuRepository,
+    PostgresVoiceCatalogRepository, PostgresWorkGenerationRepository,
+    PostgresWorkspaceMenuRepository,
 };
 use sqlx::PgPool;
 use std::{fmt, sync::Arc};
@@ -174,6 +176,17 @@ impl AppState {
             PostgresTosStagingToolRepository::new(pool.clone()),
             PostgresScriptRepository::new(pool.clone()),
             PostgresSoundSubtitleRepository::new(pool),
+        ))
+    }
+
+    pub(crate) fn work_generation_service(&self) -> Result<WorkGenerationService, AppStateError> {
+        let pool = self.database_pool()?;
+        let asset_service = self.asset_generation_service()?;
+        Ok(WorkGenerationService::new(
+            PostgresWorkGenerationRepository::new(pool.clone()),
+            PostgresAiModelRepository::new(pool.clone()),
+            PostgresVoiceCatalogRepository::new(pool),
+            asset_service,
         ))
     }
 

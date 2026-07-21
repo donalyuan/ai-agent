@@ -85,6 +85,7 @@ pub enum ApiProtocol {
     #[serde(rename = "openai_images")]
     OpenAiImages,
     VolcengineArkImages,
+    VolcengineArkVideo,
     RunwayApi,
     KlingApi,
     VolcengineTtsV3,
@@ -100,6 +101,7 @@ impl ApiProtocol {
             Self::OpenAiChatCompletions => "openai_chat_completions",
             Self::OpenAiImages => "openai_images",
             Self::VolcengineArkImages => "volcengine_ark_images",
+            Self::VolcengineArkVideo => "volcengine_ark_video",
             Self::RunwayApi => "runway_api",
             Self::KlingApi => "kling_api",
             Self::VolcengineTtsV3 => "volcengine_tts_v3",
@@ -117,11 +119,13 @@ impl ApiProtocol {
             ) | (
                 Self::OpenAiImages | Self::VolcengineArkImages,
                 ModelType::Image
-            ) | (Self::RunwayApi | Self::KlingApi, ModelType::Video)
-                | (
-                    Self::VolcengineTtsV3 | Self::OpenAiAudioSpeech | Self::VolcengineAsrV3,
-                    ModelType::Speech
-                )
+            ) | (
+                Self::VolcengineArkVideo | Self::RunwayApi | Self::KlingApi,
+                ModelType::Video
+            ) | (
+                Self::VolcengineTtsV3 | Self::OpenAiAudioSpeech | Self::VolcengineAsrV3,
+                ModelType::Speech
+            )
         )
     }
 
@@ -134,6 +138,7 @@ impl ApiProtocol {
             | Self::OpenAiImages
             | Self::OpenAiAudioSpeech
             | Self::VolcengineArkImages
+            | Self::VolcengineArkVideo
             | Self::RunwayApi => AuthScheme::Bearer,
         }
     }
@@ -154,6 +159,7 @@ impl FromStr for ApiProtocol {
             "openai_chat_completions" => Ok(Self::OpenAiChatCompletions),
             "openai_images" => Ok(Self::OpenAiImages),
             "volcengine_ark_images" => Ok(Self::VolcengineArkImages),
+            "volcengine_ark_video" => Ok(Self::VolcengineArkVideo),
             "runway_api" => Ok(Self::RunwayApi),
             "kling_api" => Ok(Self::KlingApi),
             "volcengine_tts_v3" => Ok(Self::VolcengineTtsV3),
@@ -190,6 +196,14 @@ pub struct VideoModelSettings {
     pub min_duration_seconds: Option<u32>,
     #[serde(default)]
     pub max_duration_seconds: Option<u32>,
+    #[serde(default)]
+    pub max_reference_images: Option<u32>,
+    #[serde(default)]
+    pub reference_image_mode: Option<String>,
+    #[serde(default)]
+    pub max_prompt_chars: Option<u32>,
+    #[serde(default)]
+    pub generate_audio: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -292,6 +306,32 @@ impl ModelSettings {
                 Ok(())
             }
             Self::Video(settings) => {
+                if settings
+                    .reference_image_mode
+                    .as_deref()
+                    .is_some_and(|value| !matches!(value, "first_last_frames" | "multi_reference"))
+                {
+                    return Err(ModelSettingsError::InvalidSettings(
+                        "video reference_image_mode must be first_last_frames or multi_reference"
+                            .to_string(),
+                    ));
+                }
+                if settings
+                    .max_reference_images
+                    .is_some_and(|value| !(1..=9).contains(&value))
+                {
+                    return Err(ModelSettingsError::InvalidSettings(
+                        "video max_reference_images must be between 1 and 9".to_string(),
+                    ));
+                }
+                if settings
+                    .max_prompt_chars
+                    .is_some_and(|value| value == 0 || value > 500)
+                {
+                    return Err(ModelSettingsError::InvalidSettings(
+                        "video max_prompt_chars must be between 1 and 500".to_string(),
+                    ));
+                }
                 match (settings.min_duration_seconds, settings.max_duration_seconds) {
                     (Some(minimum), Some(maximum)) if minimum == 0 || minimum > maximum => {
                         Err(ModelSettingsError::InvalidSettings(

@@ -252,6 +252,22 @@ async fn workspace_menu_route_returns_visible_sorted_tree() {
     let body_text = body.to_string();
     assert!(!body_text.contains("material-search"));
 
+    let production_menu = menus
+        .iter()
+        .find(|menu| menu["menu_key"] == "production")
+        .expect("production menu should exist");
+    let production_children = production_menu["children"]
+        .as_array()
+        .expect("production children should be an array")
+        .iter()
+        .map(|menu| menu["menu_key"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        production_children,
+        vec!["work-generation", "work-generation-task"]
+    );
+    assert!(!body_text.contains("video-generation"));
+
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
     admin_pool.close().await;

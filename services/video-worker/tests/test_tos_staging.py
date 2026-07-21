@@ -8,6 +8,7 @@ import pytest
 from video_worker.tos_staging import (
     TosAudioStaging,
     TosConnectionChecker,
+    TosMediaStaging,
     TosStagingConfig,
     TosStagingError,
 )
@@ -168,3 +169,59 @@ def test_presign_failure_keeps_deterministic_identity_for_cleanup() -> None:
     assert captured.value.code == "tos_presign_failed"
     assert captured.value.object_key.startswith("novex/asr/")
     assert len(captured.value.source_sha256) == 64
+
+
+def test_image_staging_uses_deterministic_key_and_never_audits_signed_url() -> None:
+    client = FakeTosClient()
+    staging = TosMediaStaging(config(), client)
+    content = b"\x89PNG\r\n\x1a\nfixture"
+
+    result = staging.stage_media(
+        project_id=UUID("11111111-1111-4111-8111-111111111111"),
+        task_id=UUID("22222222-2222-4222-8222-222222222222"),
+        content=content,
+        extension="png",
+        content_type="image/png",
+    )
+
+    assert result.object_key.endswith(f"/{hashlib.sha256(content).hexdigest()}.png")
+    assert client.uploads[0][3]["content_type"] == "image/png"
+    assert "signed_get_url" not in result.audit_snapshot()
+    assert "Signature" not in str(result.audit_snapshot())
+
+
+def test_image_staging_rejects_non_image_before_upload() -> None:
+    client = FakeTosClient()
+    staging = TosMediaStaging(config(), client)
+
+    with pytest.raises(TosStagingError) as captured:
+        staging.stage_media(
+            project_id=UUID("11111111-1111-4111-8111-111111111111"),
+            task_id=UUID("22222222-2222-4222-8222-222222222222"),
+            content=b"not an image",
+            extension="txt",
+            content_type="text/plain",
+        )
+
+    assert captured.value.code == "media_type_unsupported"
+    assert client.uploads == []
+
+
+def test_image_staging_reuses_existing_deterministic_object() -> None:
+    class ExistingObjectClient(FakeTosClient):
+        def put_object(self, bucket, key, **kwargs):
+            error = RuntimeError("already exists")
+            error.status_code = 409
+            raise error
+
+    client = ExistingObjectClient()
+    result = TosMediaStaging(config(), client).stage_media(
+        project_id=UUID("11111111-1111-4111-8111-111111111111"),
+        task_id=UUID("22222222-2222-4222-8222-222222222222"),
+        content=b"\x89PNG\r\n\x1a\nfixture",
+        extension="png",
+        content_type="image/png",
+    )
+
+    assert result.signed_get_url.startswith("https://")
+    assert len(client.presigns) == 1
