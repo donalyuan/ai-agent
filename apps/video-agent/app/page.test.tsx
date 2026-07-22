@@ -25,6 +25,7 @@ import type {
   TopicGenerationBatchListResponse,
   TopicGroupListResponse,
   TopicReviewSnapshot,
+  WorkVersion,
   WorkspaceMenuListResponse,
 } from "./lib/api";
 
@@ -126,6 +127,17 @@ vi.mock("./lib/api", async (importOriginal) => {
     createAgentConversation: vi.fn(),
     listAgentMessages: vi.fn(),
     sendAgentMessage: vi.fn(),
+    listWorks: vi.fn(),
+    getWork: vi.fn(),
+    deriveWorkVersion: vi.fn(),
+    regenerateWorkVersion: vi.fn(),
+    analyzeWorkVersionDiff: vi.fn(),
+    confirmWorkVersionDiff: vi.fn(),
+    getWorkVersionDownloads: vi.fn(),
+    archiveWork: vi.fn(),
+    restoreWork: vi.fn(),
+    deleteWork: vi.fn(),
+    createPublicationHandoff: vi.fn(),
   };
 });
 
@@ -1137,6 +1149,9 @@ function workspaceRoutePath(menuKey: string) {
     "asset-generation": "/materials/generation",
     "sound-subtitle-generation": "/materials/sound-subtitle-generation",
     production: "/production",
+    "work-generation": "/production/generation",
+    "work-generation-task": "/production/tasks",
+    "work-library": "/production/library",
     publishing: "/publishing",
     analytics: "/analytics",
     "workflow-tasks": "/workflow-tasks",
@@ -1280,6 +1295,7 @@ describe("video-agent 视频工作台页面", () => {
     });
     vi.mocked(api.updateProjectStrategyProfile).mockResolvedValue(project);
     vi.mocked(api.listSoundTasks).mockResolvedValue({ tasks: [] });
+    vi.mocked(api.listWorks).mockResolvedValue({ items: [], archived: false });
     mockMaterials();
   });
 
@@ -1324,6 +1340,138 @@ describe("video-agent 视频工作台页面", () => {
     expect(screen.getByRole("button", { name: /素材管理/ })).toHaveClass("active");
     expect(screen.getByRole("button", { name: "声音与字幕生成" })).toHaveClass("active");
     expect(window.location.pathname).toBe("/materials/sound-subtitle-generation");
+  });
+
+  it("根据数据库 route_path 直达作品库并使用当前账号查询", async () => {
+    mockProjects({ projects: [project] });
+    const menus: WorkspaceMenuListResponse = {
+      menus: workspaceMenus.menus.map((menu) => menu.menu_key === "production" ? {
+        ...menu,
+        is_enabled: true,
+        status: "active",
+        children: [
+          { ...menuNode("work-generation", "作品生成", true, "active", 10), menu_type: "page", module_key: "production.work-generation" },
+          { ...menuNode("work-generation-task", "生成任务", true, "active", 20), menu_type: "page", module_key: "production.work-generation-task" },
+          { ...menuNode("work-library", "作品库", true, "active", 30), menu_type: "page", module_key: "production.work-library" },
+        ],
+      } : menu),
+    };
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(menus);
+    window.history.replaceState({}, "", "/production/library");
+
+    render(<Home />);
+
+    expect(await screen.findByRole("heading", { name: "作品库" })).toBeInTheDocument();
+    await waitFor(() => expect(api.listWorks).toHaveBeenCalledWith(expect.anything(), project.project_id, { archived: false, query: undefined }));
+    expect(screen.getByRole("button", { name: "作品库" })).toHaveClass("active");
+  });
+
+  it("作品详情按 v3 分组展示业务摘要、Agent 对话并折叠技术快照与历史版本", async () => {
+    mockProjects({ projects: [project] });
+    const workId = "a1111111-1111-4111-8111-111111111111";
+    const currentDraftId = "a2222222-2222-4222-8222-222222222222";
+    const completedId = "a3333333-3333-4333-8333-333333333333";
+    const modelId = "a4444444-4444-4444-8444-444444444444";
+    const baseVersion = {
+      work_id: workId,
+      source_manifest_version: "manifest-v1",
+      input_snapshot: { scenes: [{ sequence: 1, narration: "先识别问题" }] },
+      model_snapshot: { video_model_id: modelId },
+      parameter_snapshot: { aspect_ratio: "9:16", resolution: "1080p" },
+      prompt_snapshot: { full_prompt: "用 Debug 方法拆解烦心事" },
+      timeline_snapshot: { duration_seconds: 30, audio_mode: "independent_tts", burn_subtitles: true },
+      created_at: "2026-07-20T00:00:00Z",
+      updated_at: "2026-07-22T00:00:00Z",
+      completed_at: null,
+    };
+    const versions: WorkVersion[] = [
+      { ...baseVersion, id: currentDraftId, version_no: 11, status: "draft" as const, source_version_id: completedId, derivation_kind: "edit" },
+      { ...baseVersion, id: "a5555555-5555-4555-8555-555555555555", version_no: 10, status: "failed" as const, source_version_id: null, derivation_kind: "initial" },
+      { ...baseVersion, id: "a6666666-6666-4666-8666-666666666666", version_no: 9, status: "failed" as const, source_version_id: null, derivation_kind: "initial" },
+      { ...baseVersion, id: completedId, version_no: 5, status: "completed" as const, source_version_id: null, derivation_kind: "initial", completed_at: "2026-07-20T00:05:00Z" },
+      { ...baseVersion, id: "a7777777-7777-4777-8777-777777777777", version_no: 4, status: "draft" as const, source_version_id: null, derivation_kind: "initial" },
+    ];
+    vi.mocked(api.listWorks).mockResolvedValue({
+      items: [{
+        id: workId,
+        project_id: project.project_id,
+        script_id: scriptSummary.script_id,
+        title: "别硬扛，用Debug解决烦心事",
+        status: "draft",
+        archived: false,
+        current_version_id: currentDraftId,
+        current_completed_version_id: completedId,
+        current_completed_version_no: 5,
+        aspect_ratio: "9:16",
+        duration_seconds: 30,
+        cover_artifact_id: null,
+        cover_storage_path: null,
+        created_at: "2026-07-20T00:00:00Z",
+        updated_at: "2026-07-22T00:00:00Z",
+      }],
+      archived: false,
+    });
+    vi.mocked(api.getWork).mockResolvedValue({
+      id: workId,
+      project_id: project.project_id,
+      script_id: scriptSummary.script_id,
+      title: "别硬扛，用Debug解决烦心事",
+      status: "draft",
+      archived: false,
+      current_version_id: currentDraftId,
+      versions,
+      artifacts: [],
+      timelines: [],
+      generation_audit: [
+        { id: "run-failed-1", work_version_id: versions[1].id, status: "failed", current_stage: "video_segment", progress_percent: 40, error_category: "provider", error_summary: "上游视频生成失败", attempt_count: 2, created_at: "2026-07-21T00:00:00Z", updated_at: "2026-07-21T00:01:00Z" },
+      ],
+      model_catalog: { [modelId]: { display_name: "Seedance 2.0", model_type: "video" } },
+      created_at: "2026-07-20T00:00:00Z",
+      updated_at: "2026-07-22T00:00:00Z",
+    });
+    window.history.replaceState({}, "", "/production/library");
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue({
+      menus: workspaceMenus.menus.map((menu) => menu.menu_key === "production" ? {
+        ...menu,
+        is_enabled: true,
+        status: "active",
+        children: [
+          { ...menuNode("work-generation", "作品生成", true, "active", 10), menu_type: "page", module_key: "production.work-generation" },
+          { ...menuNode("work-generation-task", "生成任务", true, "active", 20), menu_type: "page", module_key: "production.work-generation-task" },
+          { ...menuNode("work-library", "作品库", true, "active", 30), menu_type: "page", module_key: "production.work-library" },
+        ],
+      } : menu),
+    });
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: /别硬扛，用Debug解决烦心事.*查看详情/ }));
+
+    const summary = await screen.findByRole("region", { name: "制作摘要" });
+    expect(within(summary).getByText("Seedance 2.0")).toBeInTheDocument();
+    expect(within(summary).getByText(/9:16 \/ 1080p/)).toBeInTheDocument();
+    expect(within(summary).getByText("来自 V5")).toBeInTheDocument();
+    expect(screen.getByText("暂无运行产物")).toBeInTheDocument();
+    expect(document.querySelector(".workLibraryTimelineRuler")).toBeNull();
+
+    const versionsPanel = screen.getByRole("region", { name: "版本记录" });
+    expect(within(versionsPanel).getByRole("heading", { name: "当前草稿 · 1" })).toBeInTheDocument();
+    expect(within(versionsPanel).getByRole("heading", { name: "可用成片 · 1" })).toBeInTheDocument();
+    expect(within(versionsPanel).getByRole("button", { name: /V11.*草稿/ })).toBeInTheDocument();
+    expect(within(versionsPanel).getByRole("button", { name: /V5.*已完成/ })).toBeInTheDocument();
+    const historyToggle = within(versionsPanel).getByRole("button", { name: /失败与早期记录.*失败 2.*未运行草稿 1/ });
+    expect(historyToggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(versionsPanel).queryByRole("button", { name: /V10.*失败/ })).not.toBeInTheDocument();
+    expect(within(versionsPanel).getByRole("region", { name: "作品 Agent 对话" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("全局提示词")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存草稿修改" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "分析版本差异" })).not.toBeInTheDocument();
+
+    expect(screen.queryByText(new RegExp(modelId))).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开技术快照" }));
+    expect(screen.getByText(new RegExp(modelId))).toBeInTheDocument();
+    fireEvent.click(historyToggle);
+    expect(within(versionsPanel).getByRole("button", { name: /V10.*失败/ })).toBeInTheDocument();
+    expect(within(versionsPanel).getByRole("button", { name: /V4.*草稿/ })).toBeInTheDocument();
   });
 
   it("失败声音任务展示完整脱敏诊断且保留多任务卡片内容", async () => {

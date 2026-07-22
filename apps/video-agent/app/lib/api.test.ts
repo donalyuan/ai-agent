@@ -52,6 +52,19 @@ import {
   updateScriptStatus,
   uploadMaterial,
   validateSceneVisualManifest,
+  analyzeWorkVersionDiff,
+  archiveWork,
+  confirmWorkVersionDiff,
+  createPublicationHandoff,
+  deleteWork,
+  deriveWorkVersion,
+  getProductionPackageDownloadUrl,
+  getWork,
+  getWorkArtifactDownloadUrl,
+  getWorkVersionDownloads,
+  listWorks,
+  regenerateWorkVersion,
+  restoreWork,
 } from "./api";
 import type { MaterialPayload } from "./api";
 
@@ -1622,5 +1635,71 @@ describe("video-agent api client", () => {
       status: 404,
       message: "会话不存在",
     });
+  });
+
+  it("按项目、归档状态和关键词读取作品，并读取明确作品详情", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ items: [], archived: true }))
+      .mockResolvedValueOnce(jsonResponse({ id: "work-1", versions: [] }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await listWorks(client, project.project_id, { archived: true, query: "防晒 指南" });
+    await getWork(client, "work-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `http://api.test/api/projects/${project.project_id}/works?archived=true&query=%E9%98%B2%E6%99%92+%E6%8C%87%E5%8D%97`,
+      { headers: { accept: "application/json" } },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://api.test/api/works/work-1",
+      { headers: { accept: "application/json" } },
+    );
+  });
+
+  it("完成版本修改、差异分析和确认请求保持显式版本与幂等契约", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ id: "result" }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await deriveWorkVersion(client, "version-1", {
+      prompt_snapshot_patch: { full_prompt: "更新后的提示词" },
+    });
+    await regenerateWorkVersion(client, "version-1");
+    await analyzeWorkVersionDiff(client, "draft-1");
+    await confirmWorkVersionDiff(client, "diff-1", "diff-key");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://api.test/api/work-versions/version-1/derive", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ prompt_snapshot_patch: { full_prompt: "更新后的提示词" } }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://api.test/api/work-versions/version-1/regenerate", expect.objectContaining({ method: "POST" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://api.test/api/work-versions/draft-1/diff", expect.objectContaining({ method: "POST" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "http://api.test/api/work-version-diffs/diff-1/confirm", expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({ "idempotency-key": "diff-key" }),
+    }));
+  });
+
+  it("归档、恢复、删除、下载清单和发布交接使用作品或选定版本", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ id: "result" }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await archiveWork(client, "work-1");
+    await restoreWork(client, "work-1");
+    await deleteWork(client, "work-1");
+    await getWorkVersionDownloads(client, "version-2");
+    await createPublicationHandoff(client, "version-2", "handoff-key");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://api.test/api/works/work-1/archive", expect.objectContaining({ method: "POST" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://api.test/api/works/work-1/restore", expect.objectContaining({ method: "POST" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://api.test/api/works/work-1", expect.objectContaining({ method: "DELETE" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "http://api.test/api/work-versions/version-2/downloads", { headers: { accept: "application/json" } });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "http://api.test/api/work-versions/version-2/publication-handoffs", expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({ "idempotency-key": "handoff-key" }),
+    }));
+    expect(getWorkArtifactDownloadUrl(client, "artifact-1")).toBe("http://api.test/api/work-artifacts/artifact-1/download");
+    expect(getProductionPackageDownloadUrl(client, "version-2")).toBe("http://api.test/api/work-versions/version-2/production-package");
   });
 });

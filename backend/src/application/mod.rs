@@ -13,4 +13,5 @@ pub mod sound_subtitle;
 pub mod topics;
 pub mod voice_catalog;
 pub mod work_generation;
+pub mod work_library;
 pub mod workspace;

@@ -13,6 +13,7 @@ use crate::application::sound_subtitle::SoundSubtitleService;
 use crate::application::topics::TopicService;
 use crate::application::voice_catalog::VoiceCatalogService;
 use crate::application::work_generation::WorkGenerationService;
+use crate::application::work_library::WorkLibraryService;
 use crate::application::workspace::WorkspaceService;
 use crate::model_routing::{
     ModelClientResolver, PostgresModelClientResolver, StaticModelClientResolver,
@@ -22,7 +23,7 @@ use crate::repositories::{
     PostgresMaterialRepository, PostgresProjectRepository, PostgresScriptRepository,
     PostgresSoundSubtitleRepository, PostgresTopicRepository, PostgresTosStagingToolRepository,
     PostgresVoiceCatalogRepository, PostgresWorkGenerationRepository,
-    PostgresWorkspaceMenuRepository,
+    PostgresWorkLibraryRepository, PostgresWorkspaceMenuRepository,
 };
 use sqlx::PgPool;
 use std::{fmt, sync::Arc};
@@ -98,6 +99,7 @@ impl AppState {
             PostgresTopicRepository::new(pool.clone()),
             PostgresAiModelRepository::new(pool.clone()),
             PostgresVoiceCatalogRepository::new(pool.clone()),
+            PostgresWorkLibraryRepository::new(pool.clone()),
             self.text_model_resolver(pool),
         ))
     }
@@ -187,6 +189,13 @@ impl AppState {
             PostgresAiModelRepository::new(pool.clone()),
             PostgresVoiceCatalogRepository::new(pool),
             asset_service,
+        ))
+    }
+
+    pub(crate) fn work_library_service(&self) -> Result<WorkLibraryService, AppStateError> {
+        Ok(WorkLibraryService::new(
+            PostgresWorkLibraryRepository::new(self.database_pool()?),
+            self.config.asset_storage_root.clone().into(),
         ))
     }
 

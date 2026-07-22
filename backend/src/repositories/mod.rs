@@ -9,6 +9,7 @@ pub mod topic_repository;
 pub mod tos_staging_tool_repository;
 pub mod voice_catalog_repository;
 pub mod work_generation_repository;
+pub mod work_library_repository;
 pub mod workspace_menu_repository;
 
 pub use ai_model_repository::{
@@ -59,6 +60,11 @@ pub use work_generation_repository::{
     WorkGenerationRunRecord, WorkGenerationStepRecord, WorkGenerationTaskCounts,
     WorkGenerationTaskDetails, WorkGenerationTaskFilter, WorkGenerationTaskRecord, WorkPlanRecord,
     WorkRecord, WorkRepositoryError,
+};
+pub use work_library_repository::{
+    PostgresWorkLibraryRepository, WorkArtifactRecord, WorkDiffConfirmation,
+    WorkLibraryRepositoryError, WorkPublicationHandoff, WorkVersionDiffPlanRecord,
+    WorkVersionRecord,
 };
 pub use workspace_menu_repository::{
     PostgresWorkspaceMenuRepository, WorkspaceMenu, WorkspaceMenuRepositoryError,

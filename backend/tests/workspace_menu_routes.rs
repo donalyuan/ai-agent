@@ -264,8 +264,19 @@ async fn workspace_menu_route_returns_visible_sorted_tree() {
         .collect::<Vec<_>>();
     assert_eq!(
         production_children,
-        vec!["work-generation", "work-generation-task"]
+        vec!["work-generation", "work-generation-task", "work-library"]
     );
+    assert_eq!(production_menu["children"][2]["label"], "作品库");
+    assert_eq!(
+        production_menu["children"][2]["route_path"],
+        "/production/library"
+    );
+    assert_eq!(
+        production_menu["children"][2]["module_key"],
+        "production.work-library"
+    );
+    assert_eq!(production_menu["children"][2]["is_enabled"], true);
+    assert_eq!(production_menu["children"][2]["status"], "active");
     assert!(!body_text.contains("video-generation"));
 
     test_pool.close().await;

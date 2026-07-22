@@ -243,7 +243,7 @@ impl WorkGenerationRepository for PostgresWorkGenerationRepository {
         title: &str,
     ) -> Result<WorkRecord, WorkRepositoryError> {
         let row = sqlx::query(
-            "INSERT INTO works (project_id, script_id, title) VALUES ($1,$2,$3) ON CONFLICT (script_id) WHERE status <> 'archived' DO UPDATE SET updated_at = NOW() RETURNING id, project_id, script_id, title, status, created_at, updated_at"
+            "INSERT INTO works (project_id, script_id, title) VALUES ($1,$2,$3) ON CONFLICT (script_id) WHERE archived_at IS NULL DO UPDATE SET updated_at = NOW() RETURNING id, project_id, script_id, title, status, created_at, updated_at"
         ).bind(project_id).bind(script_id).bind(title.trim()).fetch_one(&self.pool).await?;
         Ok(work_from_row(row))
     }
@@ -265,15 +265,122 @@ impl WorkGenerationRepository for PostgresWorkGenerationRepository {
         plan: &WorkPlanRecord,
     ) -> Result<WorkPlanRecord, WorkRepositoryError> {
         let mut tx = self.pool.begin().await?;
-        let work_version_id = sqlx::query_scalar::<_, Uuid>("INSERT INTO work_versions (work_id, version_no, source_manifest_version, input_snapshot, model_snapshot, parameter_snapshot, timeline_snapshot, prompt_snapshot) VALUES ($1, COALESCE((SELECT MAX(version_no)+1 FROM work_versions WHERE work_id=$1),1), $2, $3, $4, $5, $6, $7) RETURNING id")
-            .bind(work_id).bind(source_manifest_version).bind(input_snapshot).bind(json!({"llm_model_id": plan.llm_model_id, "video_model_id": plan.video_model_id, "tts_model_id": plan.tts_model_id})).bind(plan.output_snapshot.clone()).bind(plan.timeline_snapshot.clone()).bind(plan.prompt_snapshot.clone()).fetch_one(&mut *tx).await?;
-        let row = sqlx::query("INSERT INTO work_plans (work_id, work_version_id, plan_version, status, input_fingerprint, llm_model_id, video_model_id, tts_model_id, capability_snapshot, output_snapshot, prompt_snapshot, timeline_snapshot, resource_usage, warnings) VALUES ($1,$2,$3,'ready',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id, work_id, work_version_id, plan_version, status, input_fingerprint, llm_model_id, video_model_id, tts_model_id, capability_snapshot, output_snapshot, prompt_snapshot, timeline_snapshot, resource_usage, warnings")
-            .bind(work_id).bind(work_version_id).bind(plan.plan_version).bind(&plan.input_fingerprint).bind(plan.llm_model_id).bind(plan.video_model_id).bind(plan.tts_model_id).bind(plan.capability_snapshot.clone()).bind(plan.output_snapshot.clone()).bind(plan.prompt_snapshot.clone()).bind(plan.timeline_snapshot.clone()).bind(plan.resource_usage.clone()).bind(plan.warnings.clone()).fetch_one(&mut *tx).await?;
-        sqlx::query("UPDATE work_plans SET status='invalidated', invalidated_at=NOW() WHERE work_id=$1 AND id<>$2 AND status IN ('draft','ready')").bind(work_id).bind(row.get::<Uuid,_>("id")).execute(&mut *tx).await?;
-        sqlx::query("UPDATE works SET status='planned', updated_at=NOW() WHERE id=$1")
+        // 作品行锁同时保护草稿选择、版本号和计划修订号，保证同一生产意图串行保存。
+        let work = sqlx::query("SELECT current_version_id FROM works WHERE id=$1 FOR UPDATE")
             .bind(work_id)
-            .execute(&mut *tx)
-            .await?;
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| WorkRepositoryError::NotFound(work_id.to_string()))?;
+        let current_version_id = work.get::<Option<Uuid>, _>("current_version_id");
+        let current = if let Some(version_id) = current_version_id {
+            sqlx::query(
+                "SELECT id,status,source_manifest_version,
+                        EXISTS(SELECT 1 FROM work_generation_runs run WHERE run.work_version_id=work_versions.id) AS has_run
+                 FROM work_versions WHERE id=$1 AND work_id=$2",
+            )
+            .bind(version_id)
+            .bind(work_id)
+            .fetch_optional(&mut *tx)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT id,status,source_manifest_version,
+                        EXISTS(SELECT 1 FROM work_generation_runs run WHERE run.work_version_id=work_versions.id) AS has_run
+                 FROM work_versions WHERE work_id=$1 ORDER BY version_no DESC LIMIT 1",
+            )
+            .bind(work_id)
+            .fetch_optional(&mut *tx)
+            .await?
+        };
+        let reusable_draft_id = current.as_ref().and_then(|version| {
+            (version.get::<String, _>("status") == "draft" && !version.get::<bool, _>("has_run"))
+                .then(|| version.get::<Uuid, _>("id"))
+        });
+        let model_ids = [plan.llm_model_id, plan.video_model_id, plan.tts_model_id]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let model_names = sqlx::query("SELECT id,display_name FROM ai_models WHERE id=ANY($1)")
+            .bind(&model_ids)
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<Uuid, _>("id"),
+                    row.get::<String, _>("display_name"),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let model_snapshot = json!({
+            "llm_model_id": plan.llm_model_id,
+            "llm_model_name": plan.llm_model_id.and_then(|id| model_names.get(&id).cloned()),
+            "video_model_id": plan.video_model_id,
+            "video_model_name": plan.video_model_id.and_then(|id| model_names.get(&id).cloned()),
+            "tts_model_id": plan.tts_model_id,
+            "tts_model_name": plan.tts_model_id.and_then(|id| model_names.get(&id).cloned()),
+        });
+        let work_version_id = if let Some(version_id) = reusable_draft_id {
+            sqlx::query_scalar::<_, Uuid>(
+                "UPDATE work_versions
+                 SET source_manifest_version=$2,input_snapshot=$3,model_snapshot=$4,
+                     parameter_snapshot=$5,timeline_snapshot=$6,prompt_snapshot=$7
+                 WHERE id=$1 RETURNING id",
+            )
+            .bind(version_id)
+            .bind(source_manifest_version)
+            .bind(input_snapshot)
+            .bind(model_snapshot)
+            .bind(plan.output_snapshot.clone())
+            .bind(plan.timeline_snapshot.clone())
+            .bind(plan.prompt_snapshot.clone())
+            .fetch_one(&mut *tx)
+            .await?
+        } else {
+            let source_version_id = current.as_ref().map(|version| version.get::<Uuid, _>("id"));
+            let derivation_kind = if source_version_id.is_some() {
+                "full_regeneration"
+            } else {
+                "initial"
+            };
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO work_versions (
+                    work_id,version_no,status,source_version_id,derivation_kind,
+                    source_manifest_version,input_snapshot,model_snapshot,parameter_snapshot,
+                    timeline_snapshot,prompt_snapshot
+                 ) VALUES (
+                    $1,COALESCE((SELECT MAX(version_no)+1 FROM work_versions WHERE work_id=$1),1),
+                    'draft',$2,$3,$4,$5,$6,$7,$8,$9
+                 ) RETURNING id",
+            )
+            .bind(work_id)
+            .bind(source_version_id)
+            .bind(derivation_kind)
+            .bind(source_manifest_version)
+            .bind(input_snapshot)
+            .bind(model_snapshot)
+            .bind(plan.output_snapshot.clone())
+            .bind(plan.timeline_snapshot.clone())
+            .bind(plan.prompt_snapshot.clone())
+            .fetch_one(&mut *tx)
+            .await?
+        };
+        let plan_version = sqlx::query_scalar::<_, i32>(
+            "SELECT COALESCE(MAX(plan_version),0)+1 FROM work_plans WHERE work_id=$1",
+        )
+        .bind(work_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let row = sqlx::query("INSERT INTO work_plans (work_id, work_version_id, plan_version, status, input_fingerprint, llm_model_id, video_model_id, tts_model_id, capability_snapshot, output_snapshot, prompt_snapshot, timeline_snapshot, resource_usage, warnings) VALUES ($1,$2,$3,'ready',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id, work_id, work_version_id, plan_version, status, input_fingerprint, llm_model_id, video_model_id, tts_model_id, capability_snapshot, output_snapshot, prompt_snapshot, timeline_snapshot, resource_usage, warnings")
+            .bind(work_id).bind(work_version_id).bind(plan_version).bind(&plan.input_fingerprint).bind(plan.llm_model_id).bind(plan.video_model_id).bind(plan.tts_model_id).bind(plan.capability_snapshot.clone()).bind(plan.output_snapshot.clone()).bind(plan.prompt_snapshot.clone()).bind(plan.timeline_snapshot.clone()).bind(plan.resource_usage.clone()).bind(plan.warnings.clone()).fetch_one(&mut *tx).await?;
+        sqlx::query("UPDATE work_plans SET status='invalidated', invalidated_at=NOW() WHERE work_id=$1 AND id<>$2 AND status IN ('draft','ready')").bind(work_id).bind(row.get::<Uuid,_>("id")).execute(&mut *tx).await?;
+        sqlx::query(
+            "UPDATE works SET status='planned',current_version_id=$2,updated_at=NOW() WHERE id=$1",
+        )
+        .bind(work_id)
+        .bind(work_version_id)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(plan_from_row(row))
     }
@@ -305,7 +412,11 @@ impl WorkGenerationRepository for PostgresWorkGenerationRepository {
             .as_object_mut()
             .ok_or_else(|| WorkRepositoryError::Conflict("作品模型快照无效".into()))?;
         for (id_key, version_key, protocol_key) in [
-            ("video_model_id", "video_registry_version", "video_api_protocol"),
+            (
+                "video_model_id",
+                "video_registry_version",
+                "video_api_protocol",
+            ),
             ("tts_model_id", "tts_registry_version", "tts_api_protocol"),
         ] {
             let Some(model_id) = model_object
@@ -334,8 +445,14 @@ impl WorkGenerationRepository for PostgresWorkGenerationRepository {
         .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| WorkRepositoryError::Conflict("系统 TOS 暂存工具未配置".into()))?;
-        model_object.insert("tos_staging_config_id".into(), json!(tos.get::<Uuid, _>("id")));
-        model_object.insert("tos_staging_config_version".into(), json!(tos.get::<i64, _>("version")));
+        model_object.insert(
+            "tos_staging_config_id".into(),
+            json!(tos.get::<Uuid, _>("id")),
+        );
+        model_object.insert(
+            "tos_staging_config_version".into(),
+            json!(tos.get::<i64, _>("version")),
+        );
         let row = sqlx::query("INSERT INTO work_generation_runs (work_id, work_version_id, work_plan_id, idempotency_key, model_snapshot, capability_snapshot, voice_snapshot, prompt_snapshot, timeline_snapshot, parameter_snapshot, resource_usage) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (work_id, idempotency_key) DO NOTHING RETURNING id, work_id, work_version_id, work_plan_id, idempotency_key, status, model_snapshot, capability_snapshot, voice_snapshot, prompt_snapshot, timeline_snapshot, parameter_snapshot, resource_usage")
             .bind(plan.get::<Uuid,_>("work_id")).bind(plan.get::<Uuid,_>("work_version_id")).bind(plan_id).bind(idempotency_key.trim()).bind(locked_model_snapshot).bind(snapshot.capability_snapshot.clone()).bind(snapshot.voice_snapshot.clone()).bind(snapshot.prompt_snapshot.clone()).bind(snapshot.timeline_snapshot.clone()).bind(snapshot.parameter_snapshot.clone()).bind(usage).fetch_optional(&mut *tx).await?;
         let Some(row) = row else {
@@ -776,7 +893,11 @@ async fn seed_generation_steps(
         run_id,
         step_no,
         "subtitle",
-        if subtitle_required { "queued" } else { "blocked" },
+        if subtitle_required {
+            "queued"
+        } else {
+            "blocked"
+        },
         subtitle_required,
         subtitle_dependencies,
         json!({"source": snapshot.timeline_snapshot.get("subtitle_source")}),
@@ -835,7 +956,10 @@ mod generation_requirement_tests {
     #[test]
     fn silent_dag_requires_only_video_mix_and_compose() {
         assert_eq!(generation_requirements("silent"), (false, false, false));
-        assert_eq!(generation_requirements("independent_tts"), (true, false, true));
+        assert_eq!(
+            generation_requirements("independent_tts"),
+            (true, false, true)
+        );
     }
 }
 

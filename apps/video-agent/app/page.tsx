@@ -110,6 +110,7 @@ import { AssetGenerationPage } from "./pages/asset-generation/AssetGenerationPag
 import { SoundSubtitlePage } from "./pages/sound-subtitle/SoundSubtitlePage";
 import { WorkGenerationPage } from "./pages/work-generation/WorkGenerationPage";
 import { WorkGenerationTaskPage } from "./pages/work-generation/WorkGenerationTaskPage";
+import { WorkLibraryPage } from "./pages/work-library/WorkLibraryPage";
 import { MaterialLibraryPage } from "./pages/material-library/MaterialLibraryPage";
 import {
   defaultMaterialFilters,
@@ -133,6 +134,7 @@ const soundSubtitleMenuKey = "sound-subtitle-generation";
 const productionMenuKey = "production";
 const workGenerationMenuKey = "work-generation";
 const workGenerationTaskMenuKey = "work-generation-task";
+const workLibraryMenuKey = "work-library";
 const scriptCreationMenuKey = "script-creation";
 const scriptGeneratorMenuKey = "script-generator";
 const defaultMenuKey = contentStrategyMenuKey;
@@ -2568,6 +2570,25 @@ export default function Home() {
             if (!route) return;
             applyWorkspaceRouteState(route.menuKey, route.subMenuKey);
             navigateWorkspacePath(route.routePath);
+          }}
+        />
+      ) : selectedMenuKey === productionMenuKey && selectedProductionSubMenuKey === workLibraryMenuKey ? (
+        <WorkLibraryPage
+          client={client}
+          project={selectedProject}
+          textModels={textModelOptions}
+          writesDisabled={writesDisabled}
+          onRunCreated={(runId) => {
+            const route = findWorkspaceRouteByMenuKey(workspaceMenus, workGenerationTaskMenuKey);
+            if (!route) return;
+            navigateWorkspacePath(`${route.routePath}?run_id=${encodeURIComponent(runId)}`);
+            applyWorkspaceRouteState(route.menuKey, route.subMenuKey);
+          }}
+          onOpenGenerationTask={(runId) => {
+            const route = findWorkspaceRouteByMenuKey(workspaceMenus, workGenerationTaskMenuKey);
+            if (!route) return;
+            navigateWorkspacePath(`${route.routePath}?run_id=${encodeURIComponent(runId)}`);
+            applyWorkspaceRouteState(route.menuKey, route.subMenuKey);
           }}
         />
       ) : (

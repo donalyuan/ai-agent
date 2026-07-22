@@ -433,6 +433,136 @@ export type WorkGenerationTaskListResponse = {
   counts: WorkGenerationTaskCounts;
 };
 
+export type WorkSummary = {
+  id: string;
+  project_id: string;
+  script_id: string;
+  title: string;
+  status: string;
+  archived: boolean;
+  current_version_id: string | null;
+  current_completed_version_id: string | null;
+  current_completed_version_no: number | null;
+  aspect_ratio: string | null;
+  duration_seconds: number | null;
+  cover_artifact_id: string | null;
+  cover_storage_path: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkVersion = {
+  id: string;
+  work_id: string;
+  version_no: number;
+  status: "draft" | "confirmed" | "running" | "completed" | "failed";
+  source_version_id: string | null;
+  derivation_kind: "initial" | "edit" | "full_regeneration";
+  source_manifest_version: string;
+  input_snapshot: Record<string, unknown>;
+  model_snapshot: Record<string, unknown>;
+  parameter_snapshot: Record<string, unknown>;
+  prompt_snapshot: Record<string, unknown>;
+  timeline_snapshot: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+export type WorkArtifact = {
+  id: string;
+  work_version_id: string;
+  version_status: string;
+  role: "final_video" | "subtitle" | "mix" | "audio_track" | "production_package" | "reusable_intermediate";
+  material_id: string | null;
+  file_name: string;
+  storage_path: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string;
+  metadata: Record<string, unknown>;
+};
+
+export type WorkTimeline = {
+  work_version_id: string;
+  video: unknown[];
+  audio: unknown[];
+  subtitles: unknown[];
+};
+
+export type WorkGenerationAudit = {
+  id: string;
+  work_version_id: string;
+  status: string;
+  current_stage: string;
+  progress_percent: number;
+  error_category: string | null;
+  error_summary: string | null;
+  attempt_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkDetails = {
+  id: string;
+  project_id: string;
+  script_id: string;
+  title: string;
+  status: string;
+  archived: boolean;
+  current_version_id: string | null;
+  versions: WorkVersion[];
+  artifacts: WorkArtifact[];
+  timelines: WorkTimeline[];
+  generation_audit: WorkGenerationAudit[];
+  model_catalog?: Record<string, { display_name: string; model_type: string }>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkListResponse = { items: WorkSummary[]; archived: boolean };
+
+export type DeriveWorkVersionPayload = {
+  input_snapshot_patch?: Record<string, unknown>;
+  model_snapshot_patch?: Record<string, unknown>;
+  parameter_snapshot_patch?: Record<string, unknown>;
+  prompt_snapshot_patch?: Record<string, unknown>;
+  timeline_snapshot_patch?: Record<string, unknown>;
+};
+
+export type WorkVersionChange = { path: string; old_value: unknown; new_value: unknown };
+
+export type WorkVersionDiff = {
+  id: string;
+  work_id: string;
+  source_version_id: string;
+  draft_version_id: string;
+  plan_version: number;
+  source_fingerprint: string;
+  draft_fingerprint: string;
+  changes: WorkVersionChange[];
+  affected_nodes: string[];
+  reused_artifact_ids: string[];
+  resource_usage: Record<string, number>;
+  status: string;
+  created_at: string;
+};
+
+export type WorkDiffConfirmation = { run_id: string; diff_plan_id: string; created: boolean };
+export type WorkArtifactDownload = { artifact: WorkArtifact; integrity_status: "available" | "missing" | "corrupt" };
+export type WorkDownloadManifest = { work_version_id: string; artifacts: WorkArtifactDownload[] };
+export type WorkPublicationHandoff = {
+  id: string;
+  work_id: string;
+  work_version_id: string;
+  final_video_artifact_id: string;
+  subtitle_artifact_id: string | null;
+  status: "draft";
+  payload: Record<string, unknown>;
+  created_at: string;
+  created: boolean;
+};
+
 export type WorkPlanPayload = {
   llm_model_id: string;
   video_model_id: string;
@@ -1400,6 +1530,71 @@ export function dismissWorkGenerationRun(client: ApiClient, runId: string) {
 
 export function retryWorkGenerationStep(client: ApiClient, stepId: string, idempotencyKey: string) {
   return request<WorkGenerationAttempt>(client, `/api/work-generation/steps/${stepId}/retry`, {
+    method: "POST",
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+export function listWorks(
+  client: ApiClient,
+  projectId: string,
+  filters: { archived?: boolean; query?: string } = {},
+) {
+  const params = new URLSearchParams();
+  params.set("archived", filters.archived ? "true" : "false");
+  if (filters.query?.trim()) params.set("query", filters.query.trim());
+  return request<WorkListResponse>(client, `/api/projects/${projectId}/works?${params.toString()}`);
+}
+
+export function getWork(client: ApiClient, workId: string) {
+  return request<WorkDetails>(client, `/api/works/${workId}`);
+}
+
+export function deriveWorkVersion(client: ApiClient, versionId: string, payload: DeriveWorkVersionPayload = {}) {
+  return request<WorkVersion>(client, `/api/work-versions/${versionId}/derive`, { method: "POST", body: payload });
+}
+
+export function regenerateWorkVersion(client: ApiClient, versionId: string) {
+  return request<WorkVersion>(client, `/api/work-versions/${versionId}/regenerate`, { method: "POST" });
+}
+
+export function analyzeWorkVersionDiff(client: ApiClient, versionId: string) {
+  return request<WorkVersionDiff>(client, `/api/work-versions/${versionId}/diff`, { method: "POST" });
+}
+
+export function confirmWorkVersionDiff(client: ApiClient, diffId: string, idempotencyKey: string) {
+  return request<WorkDiffConfirmation>(client, `/api/work-version-diffs/${diffId}/confirm`, {
+    method: "POST",
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+export function deleteWork(client: ApiClient, workId: string) {
+  return request<null>(client, `/api/works/${workId}`, { method: "DELETE" });
+}
+
+export function archiveWork(client: ApiClient, workId: string) {
+  return request<Pick<WorkSummary, "id" | "title" | "status" | "archived">>(client, `/api/works/${workId}/archive`, { method: "POST" });
+}
+
+export function restoreWork(client: ApiClient, workId: string) {
+  return request<Pick<WorkSummary, "id" | "title" | "status" | "archived">>(client, `/api/works/${workId}/restore`, { method: "POST" });
+}
+
+export function getWorkVersionDownloads(client: ApiClient, versionId: string) {
+  return request<WorkDownloadManifest>(client, `/api/work-versions/${versionId}/downloads`);
+}
+
+export function getWorkArtifactDownloadUrl(client: ApiClient, artifactId: string) {
+  return `${client.baseUrl}/api/work-artifacts/${encodeURIComponent(artifactId)}/download`;
+}
+
+export function getProductionPackageDownloadUrl(client: ApiClient, versionId: string) {
+  return `${client.baseUrl}/api/work-versions/${encodeURIComponent(versionId)}/production-package`;
+}
+
+export function createPublicationHandoff(client: ApiClient, versionId: string, idempotencyKey: string) {
+  return request<WorkPublicationHandoff>(client, `/api/work-versions/${versionId}/publication-handoffs`, {
     method: "POST",
     headers: { "idempotency-key": idempotencyKey },
   });

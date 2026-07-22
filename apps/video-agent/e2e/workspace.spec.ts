@@ -555,6 +555,12 @@ const workGenerationTaskWorkspaceMenus = workGenerationWorkspaceMenus.map((menu)
             menu_type: "page",
             module_key: "production.work-generation-task",
           },
+          {
+            ...menuNode("work-library", "作品库", true, "active", 30),
+            agent_key: "work-generation-agent",
+            menu_type: "page",
+            module_key: "production.work-library",
+          },
         ],
       }
     : menu,
@@ -1473,6 +1479,7 @@ function workspaceRoutePath(menuKey: string) {
     production: "/production",
     "work-generation": "/production/generation",
     "work-generation-task": "/production/tasks",
+    "work-library": "/production/library",
     publishing: "/publishing",
     analytics: "/analytics",
     "workflow-tasks": "/workflow-tasks",
@@ -2471,6 +2478,264 @@ test("生成任务页保留完整菜单并与作品生成页共享工作台骨�
     };
   });
   expect(compactTaskLayout).toEqual({ frameOverflow: false, toolbarOverflow: false, wrappedTabs: [] });
+});
+
+test("作品库完成网格列表、版本审计、下载和发布草稿交接", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 980 });
+  await page.unroute(/\/api\/video-workspace\/menus$/);
+  await page.route(/\/api\/video-workspace\/menus$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { menus: workGenerationTaskWorkspaceMenus } });
+  });
+  const workId = "a1111111-1111-4111-8111-111111111111";
+  const versionId = "a2222222-2222-4222-8222-222222222222";
+  const failedVersionId = "a3333333-3333-4333-8333-333333333333";
+  const draftVersionId = "a7777777-7777-4777-8777-777777777777";
+  const videoArtifactId = "a4444444-4444-4444-8444-444444444444";
+  const subtitleArtifactId = "a5555555-5555-4555-8555-555555555555";
+  const runId = "a6666666-6666-4666-8666-666666666666";
+  const summary = {
+    id: workId,
+    project_id: projectId,
+    script_id: scriptId,
+    title: "夏日防晒知识短片",
+    status: "succeeded",
+    archived: false,
+    current_version_id: draftVersionId,
+    current_completed_version_id: versionId,
+    current_completed_version_no: 5,
+    aspect_ratio: "9:16",
+    duration_seconds: 30,
+    cover_artifact_id: videoArtifactId,
+    cover_storage_path: "works/final-v2.mp4",
+    created_at: "2026-07-21T00:00:00Z",
+    updated_at: "2026-07-22T00:00:00Z",
+  };
+  const completedVersion = {
+    id: versionId,
+    work_id: workId,
+    version_no: 5,
+    status: "completed",
+    source_version_id: failedVersionId,
+    derivation_kind: "edit",
+    source_manifest_version: "manifest-v2",
+    input_snapshot: { scenes: [{ id: "scene-1", narration: "出门前注意涂抹防晒" }] },
+    model_snapshot: { video: { display_name: "Seedance 2.0" } },
+    parameter_snapshot: { aspect_ratio: "9:16", resolution: "1080p" },
+    prompt_snapshot: { full_prompt: "海边防晒知识短片" },
+    timeline_snapshot: { audio_mode: "independent_tts", burn_subtitles: true },
+    created_at: "2026-07-22T00:00:00Z",
+    updated_at: "2026-07-22T00:01:00Z",
+    completed_at: "2026-07-22T00:05:00Z",
+  };
+  const failedVersion = {
+    ...completedVersion,
+    id: failedVersionId,
+    version_no: 10,
+    status: "failed",
+    source_version_id: null,
+    derivation_kind: "initial",
+    completed_at: "2026-07-21T00:05:00Z",
+  };
+  const draftVersion = {
+    ...completedVersion,
+    id: draftVersionId,
+    version_no: 11,
+    status: "draft",
+    source_version_id: versionId,
+    derivation_kind: "edit",
+    prompt_snapshot: { full_prompt: "调整开场节奏，保留已确认防晒素材" },
+    completed_at: null,
+  };
+  const olderFailedVersions = [9, 8, 7, 6, 4].map((versionNo) => ({
+    ...failedVersion,
+    id: `a${versionNo}333333-3333-4333-8333-333333333333`,
+    version_no: versionNo,
+  }));
+  const artifacts = [{
+    id: videoArtifactId,
+    work_version_id: versionId,
+    version_status: "completed",
+    role: "final_video",
+    material_id: null,
+    file_name: "final-v2.mp4",
+    storage_path: "works/final-v2.mp4",
+    mime_type: "video/mp4",
+    size_bytes: 0,
+    sha256: "a".repeat(64),
+    metadata: {},
+  }, {
+    id: subtitleArtifactId,
+    work_version_id: versionId,
+    version_status: "completed",
+    role: "subtitle",
+    material_id: null,
+    file_name: "final-v2.srt",
+    storage_path: "works/final-v2.srt",
+    mime_type: "application/x-subrip",
+    size_bytes: 0,
+    sha256: "b".repeat(64),
+    metadata: {},
+  }];
+  const details = {
+    ...summary,
+    versions: [draftVersion, failedVersion, ...olderFailedVersions, completedVersion],
+    artifacts,
+    timelines: [{
+      work_version_id: versionId,
+      video: [{ label: "镜头 1", start_seconds: 0, duration_seconds: 15 }],
+      audio: [{ label: "TTS 配音", start_seconds: 0, duration_seconds: 30 }],
+      subtitles: [{ label: "中文字幕", start_seconds: 0, duration_seconds: 30 }],
+    }],
+    generation_audit: [{
+      id: runId,
+      work_version_id: failedVersionId,
+      status: "failed",
+      current_stage: "video_segment",
+      progress_percent: 40,
+      error_category: "provider",
+      error_summary: "上游视频生成失败",
+      attempt_count: 2,
+      created_at: "2026-07-21T00:00:00Z",
+      updated_at: "2026-07-21T00:01:00Z",
+    }],
+  };
+  let handoffRequests = 0;
+  let agentRequests = 0;
+  const agentConversationId = "a9999999-9999-4999-8999-999999999999";
+  const agentDiff = {
+    id: "abbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    work_id: workId,
+    source_version_id: versionId,
+    draft_version_id: draftVersionId,
+    plan_version: 1,
+    source_fingerprint: "a".repeat(64),
+    draft_fingerprint: "b".repeat(64),
+    changes: [{ path: "prompt_snapshot.full_prompt", old_value: "海边防晒知识短片", new_value: "保留配音，让画面节奏更紧凑" }],
+    affected_nodes: ["video_segment:scene-1", "compose"],
+    reused_artifact_ids: [subtitleArtifactId],
+    resource_usage: { video_task_count: 1, video_seconds: 15, tts_characters: 0, asr_seconds: 0 },
+    status: "analyzed",
+    created_at: "2026-07-22T01:00:00Z",
+  };
+  await page.route(new RegExp(`/api/projects/${projectId}/works(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { items: [summary], archived: false } });
+  });
+  await page.route(new RegExp(`/api/works/${workId}$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: details });
+  });
+  await page.route(new RegExp(`/api/work-versions/${versionId}/downloads$`), async (route) => {
+    await route.fulfill({ contentType: "application/json", json: { work_version_id: versionId, artifacts: artifacts.map((artifact) => ({ artifact, integrity_status: "available" })) } });
+  });
+  await page.route(new RegExp(`/api/work-versions/${versionId}/publication-handoffs$`), async (route) => {
+    handoffRequests += 1;
+    expect(route.request().headers()["idempotency-key"]).toMatch(/^[0-9a-f-]+$/);
+    await route.fulfill({ status: 201, contentType: "application/json", json: { id: "handoff-1", work_id: workId, work_version_id: versionId, final_video_artifact_id: videoArtifactId, subtitle_artifact_id: subtitleArtifactId, status: "draft", payload: {}, created_at: "2026-07-22T01:00:00Z", created: true } });
+  });
+  await page.route(/\/api\/agent\/conversations$/, async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({ agent_type: "work", project_id: projectId, subject_type: "work", subject_id: workId });
+    await route.fulfill({ status: 201, contentType: "application/json", json: { conversation_id: agentConversationId, project_id: projectId, agent_type: "work", subject_type: "work", subject_id: workId, title: "作品修改", status: "active", metadata: {}, created_at: "2026-07-22T01:00:00Z", updated_at: "2026-07-22T01:00:00Z" } });
+  });
+  await page.route(new RegExp(`/api/agent/conversations/${agentConversationId}/messages$`), async (route) => {
+    agentRequests += 1;
+    const content = route.request().postDataJSON().content;
+    await route.fulfill({ contentType: "application/json", json: {
+      user_message: { message_id: "accccccc-cccc-4ccc-8ccc-cccccccccccc", conversation_id: agentConversationId, role: "user", content, metadata: {}, created_at: "2026-07-22T01:00:00Z" },
+      assistant_message: { message_id: "addddddd-dddd-4ddd-8ddd-dddddddddddd", conversation_id: agentConversationId, role: "assistant", content: "已保留配音并收紧画面节奏。", metadata: { draft_version_id: draftVersionId, version_no: 11, requires_confirmation: true, diff: agentDiff }, created_at: "2026-07-22T01:00:01Z" },
+      run: { run_id: "aeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", project_id: projectId, agent_type: "work", status: "succeeded", input: {}, output: {}, started_at: "2026-07-22T01:00:00Z" },
+    } });
+  });
+  await page.route(/\/api\/work-artifacts\/[^/]+\/download$/, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/octet-stream", body: "" });
+  });
+
+  await page.goto("/production/library");
+  await expect(page.getByRole("heading", { name: "作品库" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "作品网格" })).toBeVisible();
+  await page.getByRole("button", { name: "列表视图" }).click();
+  await expect(page.getByRole("region", { name: "作品列表" })).toBeVisible();
+  await page.getByRole("button", { name: /夏日防晒知识短片.*查看详情/ }).click();
+  await expect(page.getByRole("heading", { name: "当前草稿 · 1" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "可用成片 · 1" })).toBeVisible();
+  await expect(page.getByText("暂无运行产物")).toBeVisible();
+  await expect(page.locator(".workLibraryTimelineRuler")).toHaveCount(0);
+  await expect(page.getByText(new RegExp(versionId))).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "作品 Agent 对话" })).toBeVisible();
+  await expect(page.getByLabel("全局提示词")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "保存草稿修改" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "分析版本差异" })).toHaveCount(0);
+  const workAgentInput = page.getByLabel("作品修改要求");
+  await workAgentInput.focus();
+  await expect(workAgentInput).toHaveCSS("border-top-width", "0px");
+  await expect(workAgentInput).toHaveCSS("box-shadow", "none");
+  await workAgentInput.fill("保留配音，让画面节奏更紧凑");
+  await page.getByRole("button", { name: "发送修改要求" }).click();
+  await expect(page.getByText("已保留配音并收紧画面节奏。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看影响并确认" })).toBeVisible();
+  expect(agentRequests).toBe(1);
+  await page.getByRole("button", { name: /V5.*已完成/ }).click();
+  await expect(page.getByLabel("V5 成片预览")).toHaveAttribute("src", new RegExp(`/api/work-artifacts/${videoArtifactId}/download$`));
+  await expect(page.getByText("TTS 配音")).toBeVisible();
+  await expect(page.getByText("中文字幕")).toBeVisible();
+  const detailSurface = page.locator(".workLibraryDetailSurface");
+  const collapsedSurfaceBox = await detailSurface.boundingBox();
+  await page.getByRole("button", { name: /失败与早期记录.*失败 6.*未运行草稿 0/ }).click();
+  const historyScroller = page.locator(".workLibraryVersionGroup.history > div");
+  const versionActions = page.locator(".workLibraryVersionActions");
+  const versionPanel = page.locator(".workLibraryVersionPanel");
+  const [versionActionsBox, versionPanelBox, expandedSurfaceBox, historyScrollerBox] = await Promise.all([
+    versionActions.boundingBox(),
+    versionPanel.boundingBox(),
+    detailSurface.boundingBox(),
+    historyScroller.boundingBox(),
+  ]);
+  expect(collapsedSurfaceBox).not.toBeNull();
+  expect(versionActionsBox).not.toBeNull();
+  expect(versionPanelBox).not.toBeNull();
+  expect(expandedSurfaceBox).not.toBeNull();
+  expect(historyScrollerBox).not.toBeNull();
+  expect(expandedSurfaceBox!.height).toBe(collapsedSurfaceBox!.height);
+  expect(versionActionsBox!.y).toBeGreaterThanOrEqual(historyScrollerBox!.y + historyScrollerBox!.height);
+  expect(versionPanelBox!.y + versionPanelBox!.height).toBeGreaterThanOrEqual(versionActionsBox!.y + versionActionsBox!.height);
+  expect(expandedSurfaceBox!.y + expandedSurfaceBox!.height).toBeGreaterThanOrEqual(versionActionsBox!.y + versionActionsBox!.height);
+  const historyScrollState = await historyScroller.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    return {
+      overflowY: getComputedStyle(element).overflowY,
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      scrollTop: element.scrollTop,
+    };
+  });
+  expect(historyScrollState.overflowY).toBe("auto");
+  expect(historyScrollState.scrollHeight).toBeGreaterThan(historyScrollState.clientHeight);
+  expect(historyScrollState.scrollTop).toBeGreaterThan(0);
+  await page.getByRole("button", { name: /V10.*失败/ }).click();
+  await expect(page.getByText("上游视频生成失败")).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看生成任务" })).toBeVisible();
+  await page.getByRole("button", { name: /V5.*已完成/ }).click();
+  await page.getByRole("button", { name: "下载" }).click();
+  await expect(page.getByRole("link", { name: "下载 final-v2.mp4" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "下载制作包" })).toHaveAttribute("href", new RegExp(`/api/work-versions/${versionId}/production-package$`));
+  await page.getByRole("button", { name: "进入发布" }).click();
+  await expect(page.getByText("发布草稿已创建，未自动发布")).toBeVisible();
+  expect(handoffRequests).toBe(1);
+  await expect(page.getByText(/费用|金额|币种|价格/)).toHaveCount(0);
+  const overflow = await page.locator(".workLibraryWorkspace").evaluate((element) => element.scrollWidth > element.clientWidth);
+  expect(overflow).toBe(false);
+  const scrolling = await page.evaluate(() => {
+    const workspace = document.querySelector<HTMLElement>(".workLibraryDetailWorkspace");
+    const main = document.querySelector<HTMLElement>(".workLibraryDetailMain");
+    const versions = document.querySelector<HTMLElement>(".workLibraryVersionPanel");
+    const history = document.querySelector<HTMLElement>(".workLibraryVersionGroup.history > div");
+    return {
+      workspace: workspace ? getComputedStyle(workspace).overflowY : null,
+      main: main ? getComputedStyle(main).overflowY : null,
+      versions: versions ? getComputedStyle(versions).overflowY : null,
+      history: history ? getComputedStyle(history).overflowY : null,
+      nestedScrollable: [main, versions].some((element) => element && ["auto", "scroll"].includes(getComputedStyle(element).overflowY)),
+    };
+  });
+  expect(scrolling).toEqual({ workspace: "auto", main: "visible", versions: "hidden", history: "auto", nestedScrollable: false });
 });
 
 test("声音与字幕工作区使用动态中文语言并在确认后创建任务", async ({ page }) => {

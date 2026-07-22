@@ -20,8 +20,8 @@ use crate::domain::conversation::{
     AgentMessageRole, CreateAgentMessageInput, CreateAgentRunInput, FinishAgentRunInput,
 };
 use crate::repositories::{
-    ConversationRepository, PostgresVoiceCatalogRepository, ProjectRepository, ScriptRepository,
-    TopicRepository,
+    ConversationRepository, PostgresVoiceCatalogRepository, PostgresWorkLibraryRepository,
+    ProjectRepository, ScriptRepository, TopicRepository,
 };
 use novex_model::{LLMClient, ModelExecutionSnapshot};
 use serde_json::json;
@@ -35,6 +35,7 @@ pub struct AgentRuntime {
     project_repository: Arc<dyn ProjectRepository>,
     topic_repository: Option<Arc<dyn TopicRepository>>,
     voice_catalog_repository: Option<Arc<PostgresVoiceCatalogRepository>>,
+    work_library_repository: Option<Arc<PostgresWorkLibraryRepository>>,
     llm_client: Arc<dyn LLMClient>,
     model_execution: Option<ModelExecutionSnapshot>,
 }
@@ -52,6 +53,7 @@ impl AgentRuntime {
             project_repository,
             topic_repository: None,
             voice_catalog_repository: None,
+            work_library_repository: None,
             llm_client,
             model_execution: None,
         }
@@ -72,6 +74,14 @@ impl AgentRuntime {
         repository: Arc<PostgresVoiceCatalogRepository>,
     ) -> Self {
         self.voice_catalog_repository = Some(repository);
+        self
+    }
+
+    pub fn with_work_library_repository(
+        mut self,
+        repository: Arc<PostgresWorkLibraryRepository>,
+    ) -> Self {
+        self.work_library_repository = Some(repository);
         self
     }
 

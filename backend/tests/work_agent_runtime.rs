@@ -1,0 +1,291 @@
+use async_trait::async_trait;
+use novex_api::agents::{LLMClient, LLMError};
+use novex_api::application::agents::runtime::{AgentRuntime, AgentRuntimeError, AgentTurnRequest};
+use novex_api::domain::conversation::{AgentMessageRole, CreateAgentConversationInput};
+use novex_api::repositories::{
+    ConversationRepository, PostgresConversationRepository, PostgresProjectRepository,
+    PostgresScriptRepository, PostgresWorkLibraryRepository,
+};
+use novex_model::LLMPrompt;
+use serde_json::{json, Value};
+use sqlx::{postgres::PgPoolOptions, PgPool};
+use std::sync::{Arc, Mutex};
+use uuid::Uuid;
+
+mod support;
+
+use support::test_database::TestDatabase;
+
+fn database_url() -> String {
+    std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:postgres@biga-postgres:5432/video_agent".to_string()
+    })
+}
+
+fn with_database_name(database_url: &str, database_name: &str) -> String {
+    let query_start = database_url.find('?');
+    let (base, query) = query_start
+        .map(|index| (&database_url[..index], &database_url[index..]))
+        .unwrap_or((database_url, ""));
+    let slash_index = base.rfind('/').unwrap();
+    format!("{}{}{}", &base[..=slash_index], database_name, query)
+}
+
+async fn migrated_pool() -> (PgPool, PgPool, TestDatabase) {
+    let base_url = database_url();
+    let database_name = format!("work_agent_runtime_{}", Uuid::new_v4().simple());
+    let admin_url = with_database_name(&base_url, "postgres");
+    let test_url = with_database_name(&base_url, &database_name);
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&admin_url)
+        .await
+        .unwrap();
+    sqlx::query(&format!(r#"CREATE DATABASE "{database_name}""#))
+        .execute(&admin_pool)
+        .await
+        .unwrap();
+    let database = TestDatabase::new(&admin_url, &database_name);
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&test_url)
+        .await
+        .unwrap();
+    sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+    (admin_pool, pool, database)
+}
+
+async fn seed_work(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
+    let project_id: Uuid =
+        sqlx::query_scalar("INSERT INTO projects (name) VALUES ('作品 Agent 项目') RETURNING id")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let script_id: Uuid = sqlx::query_scalar("INSERT INTO scripts (project_id,title,hook,content) VALUES ($1,'节奏测试','hook','{}') RETURNING id")
+        .bind(project_id).fetch_one(pool).await.unwrap();
+    let work_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO works (project_id,script_id,title) VALUES ($1,$2,'节奏测试成片') RETURNING id",
+    )
+    .bind(project_id)
+    .bind(script_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let source_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO work_versions (work_id,version_no,status,derivation_kind,source_manifest_version,input_snapshot,model_snapshot,parameter_snapshot,prompt_snapshot,timeline_snapshot) VALUES ($1,5,'completed','initial','manifest-v5','{}','{}','{}',$2,$3) RETURNING id",
+    )
+    .bind(work_id)
+    .bind(json!({"full_prompt": "原始节奏"}))
+    .bind(json!({"duration_seconds": 30, "audio_mode": "independent_tts"}))
+    .fetch_one(pool).await.unwrap();
+    let draft_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO work_versions (work_id,version_no,status,source_version_id,derivation_kind,source_manifest_version,input_snapshot,model_snapshot,parameter_snapshot,prompt_snapshot,timeline_snapshot) VALUES ($1,11,'draft',$2,'edit','manifest-v5','{}','{}','{}',$3,$4) RETURNING id",
+    )
+    .bind(work_id).bind(source_id)
+    .bind(json!({"full_prompt": "原始节奏"}))
+    .bind(json!({"duration_seconds": 30, "audio_mode": "independent_tts"}))
+    .fetch_one(pool).await.unwrap();
+    sqlx::query("UPDATE works SET current_version_id=$2,status='draft' WHERE id=$1")
+        .bind(work_id)
+        .bind(draft_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    (project_id, work_id, draft_id)
+}
+
+struct ScriptedLlm {
+    response: Mutex<Option<String>>,
+    prompts: Mutex<Vec<LLMPrompt>>,
+}
+
+impl ScriptedLlm {
+    fn new(response: Value) -> Self {
+        Self {
+            response: Mutex::new(Some(response.to_string())),
+            prompts: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn raw(response: &str) -> Self {
+        Self {
+            response: Mutex::new(Some(response.to_string())),
+            prompts: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl LLMClient for ScriptedLlm {
+    async fn generate_script(&self, prompt: LLMPrompt) -> Result<String, LLMError> {
+        self.prompts.lock().unwrap().push(prompt);
+        Ok(self
+            .response
+            .lock()
+            .unwrap()
+            .take()
+            .expect("每轮只允许一次模型调用"))
+    }
+}
+
+fn runtime(
+    pool: PgPool,
+    llm: Arc<ScriptedLlm>,
+) -> (AgentRuntime, Arc<PostgresConversationRepository>) {
+    let conversations = Arc::new(PostgresConversationRepository::new(pool.clone()));
+    let runtime = AgentRuntime::new(
+        conversations.clone(),
+        Arc::new(PostgresScriptRepository::new(pool.clone())),
+        Arc::new(PostgresProjectRepository::new(pool.clone())),
+        llm,
+    )
+    .with_work_library_repository(Arc::new(PostgresWorkLibraryRepository::new(pool)));
+    (runtime, conversations)
+}
+
+async fn conversation(
+    repository: &PostgresConversationRepository,
+    project_id: Uuid,
+    work_id: Uuid,
+) -> Uuid {
+    repository
+        .create_conversation(CreateAgentConversationInput {
+            project_id: Some(project_id),
+            agent_type: "work".to_string(),
+            subject_type: Some("work".to_string()),
+            subject_id: Some(work_id),
+            title: "作品修改".to_string(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap()
+        .id
+}
+
+#[tokio::test]
+async fn work_agent_reuses_current_draft_and_returns_confirmable_diff() {
+    let (_admin_pool, pool, _database) = migrated_pool().await;
+    let (project_id, work_id, draft_id) = seed_work(&pool).await;
+    let llm = Arc::new(ScriptedLlm::new(json!({
+        "assistant_message": "已保留配音并收紧画面节奏，请确认影响范围。",
+        "prompt_snapshot_patch": {"full_prompt": "保留配音，画面切换更紧凑"}
+    })));
+    let (runtime, conversations) = runtime(pool.clone(), llm.clone());
+    let conversation_id = conversation(&conversations, project_id, work_id).await;
+
+    let response = runtime
+        .handle_turn(AgentTurnRequest {
+            conversation_id,
+            user_message: "保留配音，让画面节奏更紧凑".to_string(),
+            supplement_of_batch_id: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.agent_message.role, AgentMessageRole::Assistant);
+    assert_eq!(
+        response.agent_message.metadata["draft_version_id"],
+        draft_id.to_string()
+    );
+    assert_eq!(response.agent_message.metadata["version_no"], 11);
+    assert_eq!(
+        response.agent_message.metadata["requires_confirmation"],
+        true
+    );
+    assert!(response.agent_message.metadata["diff"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|change| change["path"] == "prompt_snapshot.full_prompt"));
+    assert_eq!(llm.prompts.lock().unwrap().len(), 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM work_versions WHERE work_id=$1")
+            .bind(work_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Value>("SELECT prompt_snapshot FROM work_versions WHERE id=$1")
+            .bind(draft_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()["full_prompt"],
+        "保留配音，画面切换更紧凑"
+    );
+}
+
+#[tokio::test]
+async fn work_agent_rejects_invalid_unknown_and_empty_patches_without_writing() {
+    for response in [
+        "not-json",
+        r#"{"assistant_message":"越权","video_generation_patch":{"provider":"other"}}"#,
+        r#"{"assistant_message":"没有修改"}"#,
+    ] {
+        let (_admin_pool, pool, _database) = migrated_pool().await;
+        let (project_id, work_id, draft_id) = seed_work(&pool).await;
+        let llm = Arc::new(ScriptedLlm::raw(response));
+        let (runtime, conversations) = runtime(pool.clone(), llm);
+        let conversation_id = conversation(&conversations, project_id, work_id).await;
+
+        let result = runtime
+            .handle_turn(AgentTurnRequest {
+                conversation_id,
+                user_message: "修改作品".to_string(),
+                supplement_of_batch_id: None,
+            })
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(AgentRuntimeError::InvalidLlmOutput(_))
+        ));
+        assert_eq!(
+            sqlx::query_scalar::<_, Value>("SELECT prompt_snapshot FROM work_versions WHERE id=$1")
+                .bind(draft_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()["full_prompt"],
+            "原始节奏"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM work_version_diff_plans WHERE work_id=$1"
+            )
+            .bind(work_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0
+        );
+    }
+}
+
+#[tokio::test]
+async fn work_agent_rejects_work_from_another_project_before_model_call() {
+    let (_admin_pool, pool, _database) = migrated_pool().await;
+    let (_project_id, work_id, _draft_id) = seed_work(&pool).await;
+    let other_project_id: Uuid =
+        sqlx::query_scalar("INSERT INTO projects (name) VALUES ('其他项目') RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let llm = Arc::new(ScriptedLlm::new(json!({
+        "assistant_message": "不应执行",
+        "prompt_snapshot_patch": {"full_prompt": "不应写入"}
+    })));
+    let (runtime, conversations) = runtime(pool, llm.clone());
+    let conversation_id = conversation(&conversations, other_project_id, work_id).await;
+
+    let result = runtime
+        .handle_turn(AgentTurnRequest {
+            conversation_id,
+            user_message: "修改作品".to_string(),
+            supplement_of_batch_id: None,
+        })
+        .await;
+
+    assert!(matches!(result, Err(AgentRuntimeError::Validation(_))));
+    assert!(llm.prompts.lock().unwrap().is_empty());
+}

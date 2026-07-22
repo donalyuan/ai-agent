@@ -18,7 +18,7 @@ use crate::model_routing::ModelResolveError;
 use crate::repositories::{
     AssetGenerationRepositoryError, ConversationRepositoryError, MaterialRepositoryError,
     ProjectRepositoryError, ScriptRepositoryError, TopicRepositoryError,
-    VoiceCatalogRepositoryError, WorkspaceMenuRepositoryError,
+    VoiceCatalogRepositoryError, WorkLibraryRepositoryError, WorkspaceMenuRepositoryError,
 };
 use axum::{
     extract::{rejection::JsonRejection, FromRequest},
@@ -672,6 +672,23 @@ fn agent_runtime_error_response(error: AgentRuntimeError) -> (StatusCode, Json<s
             VoiceCatalogRepositoryError::Storage(message) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "音色目录读取失败", "details": message })),
+            ),
+        },
+        AgentRuntimeError::WorkLibraryRepository(error) => match error {
+            WorkLibraryRepositoryError::NotFound(value) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "作品库资源不存在", "details": value })),
+            ),
+            WorkLibraryRepositoryError::Conflict(message) => {
+                (StatusCode::CONFLICT, Json(json!({ "error": message })))
+            }
+            WorkLibraryRepositoryError::StaleDiff => (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "差异计划已过期，请重新分析" })),
+            ),
+            WorkLibraryRepositoryError::Database(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "作品修改失败", "details": error.to_string() })),
             ),
         },
         AgentRuntimeError::ScriptAgent(error) => script_agent_error_response(error),

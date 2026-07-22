@@ -3,7 +3,7 @@
 use crate::agents::ScriptAgentError;
 use crate::repositories::{
     ConversationRepositoryError, ProjectRepositoryError, ScriptRepositoryError,
-    TopicRepositoryError, VoiceCatalogRepositoryError,
+    TopicRepositoryError, VoiceCatalogRepositoryError, WorkLibraryRepositoryError,
 };
 use novex_model::LLMError;
 use std::fmt;
@@ -20,6 +20,7 @@ pub enum AgentRuntimeError {
     ProjectRepository(ProjectRepositoryError),
     TopicRepository(TopicRepositoryError),
     VoiceCatalogRepository(VoiceCatalogRepositoryError),
+    WorkLibraryRepository(WorkLibraryRepositoryError),
     ScriptAgent(ScriptAgentError),
     Llm(LLMError),
 }
@@ -51,6 +52,12 @@ impl From<TopicRepositoryError> for AgentRuntimeError {
 impl From<VoiceCatalogRepositoryError> for AgentRuntimeError {
     fn from(error: VoiceCatalogRepositoryError) -> Self {
         Self::VoiceCatalogRepository(error)
+    }
+}
+
+impl From<WorkLibraryRepositoryError> for AgentRuntimeError {
+    fn from(error: WorkLibraryRepositoryError) -> Self {
+        Self::WorkLibraryRepository(error)
     }
 }
 
@@ -90,6 +97,7 @@ impl fmt::Display for AgentRuntimeError {
             Self::ProjectRepository(error) => write!(formatter, "{error}"),
             Self::TopicRepository(error) => write!(formatter, "{error}"),
             Self::VoiceCatalogRepository(error) => write!(formatter, "{error}"),
+            Self::WorkLibraryRepository(error) => write!(formatter, "{error}"),
             Self::ScriptAgent(error) => write!(formatter, "{error}"),
             Self::Llm(error) => write!(formatter, "{error}"),
         }

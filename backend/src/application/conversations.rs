@@ -10,8 +10,8 @@ use crate::repositories::AiModelRepository;
 use crate::repositories::{
     ConversationRepository, ConversationRepositoryError, PostgresAiModelRepository,
     PostgresConversationRepository, PostgresProjectRepository, PostgresScriptRepository,
-    PostgresTopicRepository, PostgresVoiceCatalogRepository, ProjectRepository,
-    ProjectRepositoryError, ScriptRepository,
+    PostgresTopicRepository, PostgresVoiceCatalogRepository, PostgresWorkLibraryRepository,
+    ProjectRepository, ProjectRepositoryError, ScriptRepository,
 };
 use novex_model::{ApiProtocol, ModelType};
 use serde_json::Value;
@@ -27,6 +27,7 @@ pub struct ConversationService {
     topic_repository: PostgresTopicRepository,
     ai_model_repository: PostgresAiModelRepository,
     voice_catalog_repository: PostgresVoiceCatalogRepository,
+    work_library_repository: PostgresWorkLibraryRepository,
     model_resolver: Arc<dyn ModelClientResolver>,
 }
 
@@ -38,6 +39,7 @@ impl ConversationService {
         topic_repository: PostgresTopicRepository,
         ai_model_repository: PostgresAiModelRepository,
         voice_catalog_repository: PostgresVoiceCatalogRepository,
+        work_library_repository: PostgresWorkLibraryRepository,
         model_resolver: Arc<dyn ModelClientResolver>,
     ) -> Self {
         Self {
@@ -47,6 +49,7 @@ impl ConversationService {
             topic_repository,
             ai_model_repository,
             voice_catalog_repository,
+            work_library_repository,
             model_resolver,
         }
     }
@@ -80,7 +83,27 @@ impl ConversationService {
             } else if command.agent_type == "topic" {
                 self.ensure_project_exists(project_id).await?;
             } else if command.agent_type == "work" {
-                self.ensure_project_exists(project_id).await?;
+                if let Some(work_id) = command.subject_id {
+                    if command.subject_type.as_deref() != Some("work") {
+                        return Err(ConversationApplicationError::Validation(
+                            "作品会话 subject_type 必须为 work".to_string(),
+                        ));
+                    }
+                    if !self
+                        .work_library_repository
+                        .work_belongs_to_project(work_id, project_id)
+                        .await
+                        .map_err(|error| {
+                            ConversationApplicationError::Validation(error.to_string())
+                        })?
+                    {
+                        return Err(ConversationApplicationError::Validation(
+                            "作品不属于当前项目".to_string(),
+                        ));
+                    }
+                } else {
+                    self.ensure_project_exists(project_id).await?;
+                }
             } else {
                 self.ensure_project_exists(project_id).await?;
                 let model_id = command
@@ -191,6 +214,7 @@ impl ConversationService {
         .with_model_execution(model_execution)
         .with_topic_repository(Arc::new(self.topic_repository.clone()))
         .with_voice_catalog_repository(Arc::new(self.voice_catalog_repository.clone()))
+        .with_work_library_repository(Arc::new(self.work_library_repository.clone()))
     }
 }
 

@@ -4,3 +4,4 @@ pub mod conversation;
 pub mod script;
 pub mod topic;
 pub mod work_generation;
+pub mod work_library;
