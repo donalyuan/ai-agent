@@ -3,6 +3,7 @@ pub mod asset_generation_repository;
 pub mod conversation_repository;
 pub mod material_repository;
 pub mod project_repository;
+pub mod publication_repository;
 pub mod script_repository;
 pub mod sound_subtitle_repository;
 pub mod topic_repository;
@@ -36,6 +37,11 @@ pub use material_repository::{
 pub use project_repository::{
     AccountStrategyProfile, CreateProjectInput, PostgresProjectRepository, Project,
     ProjectRepository, ProjectRepositoryError, UpdateProjectStrategyProfileInput,
+};
+pub use publication_repository::{
+    PostgresPublicationRepository, PublicationPackageContext, PublicationPackageRecord,
+    PublicationPlanRecord, PublicationRepositoryError, PublicationTargetRecord,
+    SavePublicationTarget,
 };
 pub use script_repository::{PostgresScriptRepository, ScriptRepository, ScriptRepositoryError};
 pub use sound_subtitle_repository::{

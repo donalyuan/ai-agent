@@ -563,6 +563,102 @@ export type WorkPublicationHandoff = {
   created: boolean;
 };
 
+export type PublicationPlatform = "douyin" | "xiaohongshu";
+export type PublicationTargetStatus =
+  | "draft"
+  | "ready"
+  | "handed_off"
+  | "needs_attention"
+  | "published"
+  | "cancelled";
+export type PublicationPlanStatus =
+  | "draft"
+  | "ready"
+  | "handed_off"
+  | "needs_attention"
+  | "partially_published"
+  | "published"
+  | "cancelled";
+
+export type PublicationTarget = {
+  id: string;
+  publication_plan_id: string;
+  platform: PublicationPlatform;
+  status: PublicationTargetStatus;
+  title: string;
+  body: string;
+  tags: string[];
+  cover_artifact_id: string | null;
+  planned_at: string | null;
+  draft_revision: number;
+  handed_off_at: string | null;
+  published_at: string | null;
+  published_url: string | null;
+  result_snapshot: Record<string, unknown>;
+  overdue?: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PublicationPlanRecord = {
+  id: string;
+  handoff_id: string;
+  work_id: string;
+  work_version_id: string;
+  final_video_artifact_id: string;
+  subtitle_artifact_id: string | null;
+  targets: PublicationTarget[];
+  created: boolean;
+};
+
+export type PublicationPlanDetails = Omit<PublicationPlanRecord, "created"> & {
+  status: PublicationPlanStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PublicationPlanSummary = PublicationPlanDetails & { work_title: string };
+export type PublicationListResponse = { items: PublicationPlanSummary[] };
+
+export type SavePublicationTargetPayload = {
+  expected_revision: number | null;
+  title: string;
+  body: string;
+  tags: string[];
+  cover_artifact_id: string | null;
+  planned_at: string | null;
+};
+
+export type PublicationPackage = {
+  id: string;
+  publication_target_id: string;
+  draft_revision: number;
+  platform_rule_version: string;
+  manifest: Record<string, unknown>;
+  manifest_sha256: string;
+  created_at: string;
+  created: boolean;
+};
+
+export type PublicationDownloads = {
+  target_id: string;
+  draft_revision: number;
+  video: { artifact_id: string; download_url: string };
+  cover: { artifact_id: string; download_url: string } | null;
+  package: { id: string; manifest_sha256: string; download_url: string };
+};
+
+export type PublicationHandoffResult = {
+  target: PublicationTarget;
+  official_entrance: string;
+  publication_confirmation: "manual_required";
+};
+
+export type PublicationResultPayload = {
+  published_url: string;
+  published_at: string;
+};
+
 export type WorkPlanPayload = {
   llm_model_id: string;
   video_model_id: string;
@@ -1600,6 +1696,104 @@ export function createPublicationHandoff(client: ApiClient, versionId: string, i
   });
 }
 
+export function createPublicationPlan(client: ApiClient, handoffId: string, idempotencyKey: string) {
+  return request<PublicationPlanRecord>(client, `/api/publication-handoffs/${handoffId}/publication`, {
+    method: "POST",
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+export function listPublications(client: ApiClient) {
+  return request<PublicationListResponse>(client, "/api/publications");
+}
+
+export function getPublication(client: ApiClient, planId: string) {
+  return request<PublicationPlanDetails>(client, `/api/publications/${planId}`);
+}
+
+export function savePublicationTarget(
+  client: ApiClient,
+  planId: string,
+  platform: PublicationPlatform,
+  payload: SavePublicationTargetPayload,
+  idempotencyKey: string,
+) {
+  return request<PublicationTarget>(client, `/api/publications/${planId}/targets/${platform}`, {
+    method: "PUT",
+    body: payload,
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+export function generatePublicationPackage(client: ApiClient, targetId: string, draftRevision: number, idempotencyKey: string) {
+  return request<PublicationPackage>(client, `/api/publication-targets/${targetId}/package`, {
+    method: "POST",
+    body: { draft_revision: draftRevision },
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+export function getPublicationDownloads(client: ApiClient, targetId: string) {
+  return request<PublicationDownloads>(client, `/api/publication-targets/${targetId}/downloads`).then((downloads) => ({
+    ...downloads,
+    video: { ...downloads.video, download_url: resolveApiUrl(client, downloads.video.download_url) },
+    cover: downloads.cover ? { ...downloads.cover, download_url: resolveApiUrl(client, downloads.cover.download_url) } : null,
+    package: { ...downloads.package, download_url: resolveApiUrl(client, downloads.package.download_url) },
+  }));
+}
+
+export function auditPublicationDownload(client: ApiClient, targetId: string, idempotencyKey: string) {
+  return request<null>(client, `/api/publication-targets/${targetId}/download-audits`, {
+    method: "POST",
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+export function auditPublicationCopy(client: ApiClient, targetId: string, idempotencyKey: string) {
+  return request<null>(client, `/api/publication-targets/${targetId}/copy-audits`, {
+    method: "POST",
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+export function handoffPublicationTarget(client: ApiClient, targetId: string, idempotencyKey: string) {
+  return request<PublicationHandoffResult>(client, `/api/publication-targets/${targetId}/handoff`, {
+    method: "POST",
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+function publicationTargetAction(client: ApiClient, targetId: string, action: "needs-attention" | "cancel", idempotencyKey: string) {
+  return request<PublicationTarget>(client, `/api/publication-targets/${targetId}/${action}`, {
+    method: "POST",
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+export function markPublicationNeedsAttention(client: ApiClient, targetId: string, idempotencyKey: string) {
+  return publicationTargetAction(client, targetId, "needs-attention", idempotencyKey);
+}
+
+export function cancelPublicationTarget(client: ApiClient, targetId: string, idempotencyKey: string) {
+  return publicationTargetAction(client, targetId, "cancel", idempotencyKey);
+}
+
+function savePublicationResult(client: ApiClient, targetId: string, action: "published" | "result-corrections", payload: PublicationResultPayload, idempotencyKey: string) {
+  return request<PublicationTarget>(client, `/api/publication-targets/${targetId}/${action}`, {
+    method: "POST",
+    body: payload,
+    headers: { "idempotency-key": idempotencyKey },
+  });
+}
+
+export function confirmPublicationPublished(client: ApiClient, targetId: string, payload: PublicationResultPayload, idempotencyKey: string) {
+  return savePublicationResult(client, targetId, "published", payload, idempotencyKey);
+}
+
+export function correctPublicationResult(client: ApiClient, targetId: string, payload: PublicationResultPayload, idempotencyKey: string) {
+  return savePublicationResult(client, targetId, "result-corrections", payload, idempotencyKey);
+}
+
 export function selectAssetCandidate(client: ApiClient, sceneId: string, candidateId: string) {
   return request<SceneAssetCandidate>(
     client,
@@ -1907,6 +2101,10 @@ function resolveApiAssetUrl(client: ApiClient, value: string | null): string | n
     return value;
   }
   return `${client.baseUrl}${value}`;
+}
+
+function resolveApiUrl(client: ApiClient, value: string): string {
+  return value.startsWith("/") ? `${client.baseUrl}${value}` : value;
 }
 
 async function parseJson(response: Response): Promise<unknown> {

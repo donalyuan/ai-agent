@@ -15,6 +15,7 @@ const apiMocks = vi.hoisted(() => ({
   restore: vi.fn(),
   remove: vi.fn(),
   handoff: vi.fn(),
+  publicationPlan: vi.fn(),
   createConversation: vi.fn(),
   sendMessage: vi.fn(),
 }));
@@ -32,6 +33,7 @@ vi.mock("../../lib/api", async (importOriginal) => ({
   restoreWork: apiMocks.restore,
   deleteWork: apiMocks.remove,
   createPublicationHandoff: apiMocks.handoff,
+  createPublicationPlan: apiMocks.publicationPlan,
   createAgentConversation: apiMocks.createConversation,
   sendAgentMessage: apiMocks.sendMessage,
 }));
@@ -203,6 +205,7 @@ describe("WorkLibraryPage", () => {
     apiMocks.list.mockResolvedValue({ items: works, archived: false });
     apiMocks.details.mockResolvedValue(details);
     apiMocks.downloads.mockResolvedValue({ work_version_id: "version-2", artifacts: [] });
+    apiMocks.publicationPlan.mockResolvedValue({ id: "plan-1" });
   });
 
   it("默认网格可切换高密度列表，并在筛选刷新后保持视图与作品选择", async () => {
@@ -314,7 +317,7 @@ describe("WorkLibraryPage", () => {
     expect(input).toHaveValue("保留这条消息");
   });
 
-  it("完成版本支持显式下载、发布交接和作品归档恢复", async () => {
+  it("完成版本支持显式下载、创建发布计划和作品归档恢复", async () => {
     apiMocks.downloads.mockResolvedValue({
       work_version_id: "version-2",
       artifacts: details.artifacts.map((artifact) => ({ artifact, integrity_status: "available" as const })),
@@ -322,7 +325,8 @@ describe("WorkLibraryPage", () => {
     apiMocks.handoff.mockResolvedValue({ id: "handoff-1", work_id: details.id, work_version_id: "version-2", final_video_artifact_id: "video-2", subtitle_artifact_id: "subtitle-2", status: "draft", payload: {}, created_at: "2026-07-22T01:00:00Z", created: true });
     apiMocks.archive.mockResolvedValue({ id: details.id, title: details.title, status: "archived", archived: true });
     apiMocks.restore.mockResolvedValue({ id: details.id, title: details.title, status: "succeeded", archived: false });
-    render(<WorkLibraryPage client={createApiClient({ baseUrl: "http://api.test" })} project={project} writesDisabled={false} />);
+    const onOpenPublicationPlan = vi.fn();
+    render(<WorkLibraryPage client={createApiClient({ baseUrl: "http://api.test" })} project={project} writesDisabled={false} onOpenPublicationPlan={onOpenPublicationPlan} />);
     fireEvent.click(await screen.findByRole("button", { name: /夏日防晒指南.*查看详情/ }));
 
     fireEvent.click(await screen.findByRole("button", { name: "下载" }));
@@ -330,9 +334,24 @@ describe("WorkLibraryPage", () => {
     expect(screen.getByRole("link", { name: "下载制作包" })).toHaveAttribute("href", "http://api.test/api/work-versions/version-2/production-package");
     fireEvent.click(screen.getByRole("button", { name: "进入发布" }));
     await waitFor(() => expect(apiMocks.handoff).toHaveBeenCalledWith(expect.anything(), "version-2", expect.any(String)));
-    expect(await screen.findByText("发布草稿已创建，未自动发布")).toBeInTheDocument();
+    await waitFor(() => expect(apiMocks.publicationPlan).toHaveBeenCalledWith(expect.anything(), "handoff-1", expect.any(String)));
+    expect(onOpenPublicationPlan).toHaveBeenCalledWith("plan-1");
 
     fireEvent.click(screen.getByRole("button", { name: "归档作品" }));
     await waitFor(() => expect(apiMocks.archive).toHaveBeenCalledWith(expect.anything(), details.id));
+  });
+
+  it("发布计划创建失败时停留在作品详情并显示明确错误", async () => {
+    apiMocks.handoff.mockResolvedValue({ id: "handoff-1", work_id: details.id, work_version_id: "version-2", final_video_artifact_id: "video-2", subtitle_artifact_id: "subtitle-2", status: "draft", payload: {}, created_at: "2026-07-22T01:00:00Z", created: true });
+    apiMocks.publicationPlan.mockRejectedValue(new Error("发布计划创建失败"));
+    const onOpenPublicationPlan = vi.fn();
+    render(<WorkLibraryPage client={createApiClient({ baseUrl: "http://api.test" })} project={project} writesDisabled={false} onOpenPublicationPlan={onOpenPublicationPlan} />);
+    fireEvent.click(await screen.findByRole("button", { name: /夏日防晒指南.*查看详情/ }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "进入发布" }));
+
+    expect(await screen.findByText("发布计划创建失败")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "夏日防晒指南" })).toBeInTheDocument();
+    expect(onOpenPublicationPlan).not.toHaveBeenCalled();
   });
 });

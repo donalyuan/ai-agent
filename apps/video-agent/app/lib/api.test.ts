@@ -56,6 +56,13 @@ import {
   archiveWork,
   confirmWorkVersionDiff,
   createPublicationHandoff,
+  createPublicationPlan,
+  getPublication,
+  generatePublicationPackage,
+  handoffPublicationTarget,
+  listPublications,
+  savePublicationTarget,
+  confirmPublicationPublished,
   deleteWork,
   deriveWorkVersion,
   getProductionPackageDownloadUrl,
@@ -1701,5 +1708,60 @@ describe("video-agent api client", () => {
     }));
     expect(getWorkArtifactDownloadUrl(client, "artifact-1")).toBe("http://api.test/api/work-artifacts/artifact-1/download");
     expect(getProductionPackageDownloadUrl(client, "version-2")).toBe("http://api.test/api/work-versions/version-2/production-package");
+  });
+
+  it("人工发布 API 使用明确计划、平台目标 revision 与幂等契约", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ id: "result", items: [] }));
+    const client = createApiClient({ baseUrl: "http://api.test", fetcher: fetchMock });
+
+    await createPublicationPlan(client, "handoff-1", "plan-key");
+    await listPublications(client);
+    await getPublication(client, "plan-1");
+    await savePublicationTarget(client, "plan-1", "douyin", {
+      expected_revision: 2,
+      title: "抖音标题",
+      body: "抖音正文",
+      tags: ["#效率"],
+      cover_artifact_id: null,
+      planned_at: "2026-07-24T02:00:00.000Z",
+    }, "target-key");
+    await generatePublicationPackage(client, "target-1", 3, "package-key");
+    await handoffPublicationTarget(client, "target-1", "handoff-target-key");
+    await confirmPublicationPublished(client, "target-1", {
+      published_url: "https://www.douyin.com/video/123",
+      published_at: "2026-07-24T03:00:00.000Z",
+    }, "published-key");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://api.test/api/publication-handoffs/handoff-1/publication", expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({ "idempotency-key": "plan-key" }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://api.test/api/publications", { headers: { accept: "application/json" } });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://api.test/api/publications/plan-1", { headers: { accept: "application/json" } });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "http://api.test/api/publications/plan-1/targets/douyin", expect.objectContaining({
+      method: "PUT",
+      headers: expect.objectContaining({ "idempotency-key": "target-key" }),
+      body: JSON.stringify({
+        expected_revision: 2,
+        title: "抖音标题",
+        body: "抖音正文",
+        tags: ["#效率"],
+        cover_artifact_id: null,
+        planned_at: "2026-07-24T02:00:00.000Z",
+      }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "http://api.test/api/publication-targets/target-1/package", expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({ "idempotency-key": "package-key" }),
+      body: JSON.stringify({ draft_revision: 3 }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(6, "http://api.test/api/publication-targets/target-1/handoff", expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({ "idempotency-key": "handoff-target-key" }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(7, "http://api.test/api/publication-targets/target-1/published", expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({ "idempotency-key": "published-key" }),
+    }));
   });
 });

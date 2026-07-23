@@ -111,6 +111,7 @@ import { SoundSubtitlePage } from "./pages/sound-subtitle/SoundSubtitlePage";
 import { WorkGenerationPage } from "./pages/work-generation/WorkGenerationPage";
 import { WorkGenerationTaskPage } from "./pages/work-generation/WorkGenerationTaskPage";
 import { WorkLibraryPage } from "./pages/work-library/WorkLibraryPage";
+import { PublicationWorkbenchPage } from "./pages/publication/PublicationWorkbenchPage";
 import { MaterialLibraryPage } from "./pages/material-library/MaterialLibraryPage";
 import {
   defaultMaterialFilters,
@@ -135,6 +136,8 @@ const productionMenuKey = "production";
 const workGenerationMenuKey = "work-generation";
 const workGenerationTaskMenuKey = "work-generation-task";
 const workLibraryMenuKey = "work-library";
+const publishingMenuKey = "publishing";
+const publishingWorkbenchMenuKey = "publish-scheduler";
 const scriptCreationMenuKey = "script-creation";
 const scriptGeneratorMenuKey = "script-generator";
 const defaultMenuKey = contentStrategyMenuKey;
@@ -420,6 +423,8 @@ export default function Home() {
           ? selectedMaterialSubMenuKey
           : selectedMenuKey === productionMenuKey
             ? selectedProductionSubMenuKey
+          : selectedMenuKey === publishingMenuKey
+            ? publishingWorkbenchMenuKey
         : null;
 
   const applyWorkspaceRouteState = useCallback((menuKey: string, subMenuKey: string | null) => {
@@ -445,12 +450,14 @@ export default function Home() {
   }, []);
 
   const navigateWorkspacePath = useCallback((routePath: string, replace = false) => {
-    const normalizedPath = normalizeWorkspacePath(routePath);
-    if (normalizeWorkspacePath(window.location.pathname) !== normalizedPath) {
+    const target = new URL(routePath, window.location.origin);
+    const normalizedPath = normalizeWorkspacePath(target.pathname);
+    const targetLocation = `${normalizedPath}${target.search}`;
+    if (`${normalizeWorkspacePath(window.location.pathname)}${window.location.search}` !== targetLocation) {
       window.history[replace ? "replaceState" : "pushState"](
         window.history.state,
         "",
-        normalizedPath,
+        targetLocation,
       );
     }
     setCurrentWorkspacePath(normalizedPath);
@@ -2589,6 +2596,22 @@ export default function Home() {
             if (!route) return;
             navigateWorkspacePath(`${route.routePath}?run_id=${encodeURIComponent(runId)}`);
             applyWorkspaceRouteState(route.menuKey, route.subMenuKey);
+          }}
+          onOpenPublicationPlan={(planId) => {
+            const route = findWorkspaceRouteByMenuKey(workspaceMenus, publishingWorkbenchMenuKey);
+            if (!route) return;
+            navigateWorkspacePath(`${route.routePath}?plan=${encodeURIComponent(planId)}`);
+            applyWorkspaceRouteState(route.menuKey, route.subMenuKey);
+          }}
+        />
+      ) : selectedMenuKey === publishingMenuKey ? (
+        <PublicationWorkbenchPage
+          client={client}
+          planId={typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("plan")}
+          writesDisabled={writesDisabled}
+          onSelectPlan={(planId) => {
+            const route = findWorkspaceRouteByMenuKey(workspaceMenus, publishingWorkbenchMenuKey);
+            if (route) navigateWorkspacePath(`${route.routePath}?plan=${encodeURIComponent(planId)}`);
           }}
         />
       ) : (

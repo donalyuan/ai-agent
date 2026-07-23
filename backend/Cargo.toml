@@ -25,6 +25,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 url = "2"
 validator = { version = "0.20", features = ["derive"] }
+zip = { version = "2", default-features = false }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

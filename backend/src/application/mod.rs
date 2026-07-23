@@ -8,6 +8,7 @@ pub mod health;
 pub mod material_upload;
 pub mod materials;
 pub mod projects;
+pub mod publication;
 pub mod scripts;
 pub mod sound_subtitle;
 pub mod topics;

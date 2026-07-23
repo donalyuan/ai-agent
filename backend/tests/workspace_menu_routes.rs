@@ -279,6 +279,27 @@ async fn workspace_menu_route_returns_visible_sorted_tree() {
     assert_eq!(production_menu["children"][2]["status"], "active");
     assert!(!body_text.contains("video-generation"));
 
+    let publishing = menus
+        .iter()
+        .find(|menu| menu["menu_key"] == "publishing")
+        .unwrap();
+    assert_eq!(publishing["is_enabled"], true);
+    assert_eq!(publishing["status"], "active");
+    assert_eq!(
+        publishing["children"][0]["menu_key"],
+        "publication-workbench"
+    );
+    assert_eq!(
+        publishing["children"][0]["route_path"],
+        "/publishing/workbench"
+    );
+    assert_eq!(
+        publishing["children"][0]["module_key"],
+        "publishing.workbench"
+    );
+    assert_eq!(publishing["children"][0]["is_enabled"], true);
+    assert!(!body_text.contains("publish-scheduler"));
+
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
     admin_pool.close().await;

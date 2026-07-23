@@ -138,6 +138,19 @@ vi.mock("./lib/api", async (importOriginal) => {
     restoreWork: vi.fn(),
     deleteWork: vi.fn(),
     createPublicationHandoff: vi.fn(),
+    createPublicationPlan: vi.fn(),
+    listPublications: vi.fn(),
+    getPublication: vi.fn(),
+    savePublicationTarget: vi.fn(),
+    generatePublicationPackage: vi.fn(),
+    getPublicationDownloads: vi.fn(),
+    auditPublicationCopy: vi.fn(),
+    auditPublicationDownload: vi.fn(),
+    handoffPublicationTarget: vi.fn(),
+    markPublicationNeedsAttention: vi.fn(),
+    cancelPublicationTarget: vi.fn(),
+    confirmPublicationPublished: vi.fn(),
+    correctPublicationResult: vi.fn(),
   };
 });
 
@@ -1152,6 +1165,7 @@ function workspaceRoutePath(menuKey: string) {
     "work-generation": "/production/generation",
     "work-generation-task": "/production/tasks",
     "work-library": "/production/library",
+    "publish-scheduler": "/publishing/workbench",
     publishing: "/publishing",
     analytics: "/analytics",
     "workflow-tasks": "/workflow-tasks",
@@ -1364,6 +1378,65 @@ describe("video-agent 视频工作台页面", () => {
     expect(await screen.findByRole("heading", { name: "作品库" })).toBeInTheDocument();
     await waitFor(() => expect(api.listWorks).toHaveBeenCalledWith(expect.anything(), project.project_id, { archived: false, query: undefined }));
     expect(screen.getByRole("button", { name: "作品库" })).toHaveClass("active");
+  });
+
+  it("根据数据库 route_path 和 plan 参数直达发布工作台明确计划", async () => {
+    mockProjects({ projects: [project] });
+    const target = {
+      id: "target-1",
+      publication_plan_id: "plan-1",
+      platform: "douyin" as const,
+      status: "draft" as const,
+      title: "抖音标题",
+      body: "抖音正文",
+      tags: [],
+      cover_artifact_id: null,
+      planned_at: null,
+      draft_revision: 1,
+      handed_off_at: null,
+      published_at: null,
+      published_url: null,
+      result_snapshot: {},
+      overdue: false,
+      created_at: "2026-07-23T00:00:00Z",
+      updated_at: "2026-07-23T00:00:00Z",
+    };
+    const plan = {
+      id: "plan-1",
+      handoff_id: "handoff-1",
+      work_id: "work-1",
+      work_version_id: "version-2",
+      final_video_artifact_id: "video-1",
+      subtitle_artifact_id: null,
+      status: "draft" as const,
+      targets: [target],
+      created_at: "2026-07-23T00:00:00Z",
+      updated_at: "2026-07-23T00:00:00Z",
+    };
+    const menus: WorkspaceMenuListResponse = {
+      menus: workspaceMenus.menus.map((menu) => menu.menu_key === "publishing" ? {
+        ...menu,
+        is_enabled: true,
+        status: "active",
+        children: [{ ...menuNode("publish-scheduler", "发布工作台", true, "active", 10), menu_type: "page", module_key: "publishing.workbench" }],
+      } : menu),
+    };
+    vi.mocked(api.listWorkspaceMenus).mockResolvedValue(menus);
+    vi.mocked(api.listPublications).mockResolvedValue({ items: [{ ...plan, work_title: "夏日防晒指南" }] });
+    vi.mocked(api.getPublication).mockResolvedValue(plan);
+    vi.mocked(api.getWork).mockResolvedValue({
+      id: "work-1", project_id: project.project_id, script_id: "script-1", title: "夏日防晒指南", status: "succeeded", archived: false, current_version_id: "version-2", versions: [], artifacts: [], timelines: [], generation_audit: [], created_at: "2026-07-23T00:00:00Z", updated_at: "2026-07-23T00:00:00Z",
+    });
+    window.history.replaceState({}, "", "/publishing/workbench?plan=plan-1");
+
+    render(<Home />);
+
+    expect(await screen.findByRole("heading", { name: "人工发布运营" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "夏日防晒指南" })).toBeInTheDocument();
+    expect(api.getPublication).toHaveBeenCalledWith(expect.anything(), "plan-1");
+    expect(screen.getByRole("button", { name: /发布运营/ })).toHaveClass("active");
+    expect(screen.getByRole("button", { name: "发布工作台" })).toHaveClass("active");
+    expect(window.location.search).toBe("?plan=plan-1");
   });
 
   it("作品详情按 v3 分组展示业务摘要、Agent 对话并折叠技术快照与历史版本", async () => {

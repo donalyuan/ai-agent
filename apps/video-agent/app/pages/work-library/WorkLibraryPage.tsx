@@ -18,6 +18,7 @@ import {
   archiveWork,
   confirmWorkVersionDiff,
   createPublicationHandoff,
+  createPublicationPlan,
   createAgentConversation,
   deleteWork,
   deriveWorkVersion,
@@ -38,6 +39,7 @@ type Props = {
   textModels?: ModelOption[];
   onRunCreated?: (runId: string) => void;
   onOpenGenerationTask?: (runId: string) => void;
+  onOpenPublicationPlan?: (planId: string) => void;
 };
 
 type LibraryView = "grid" | "list";
@@ -64,7 +66,7 @@ const artifactRoleLabels: Record<string, string> = {
   reusable_intermediate: "复用素材",
 };
 
-export function WorkLibraryPage({ client, project, writesDisabled, textModels = [], onRunCreated, onOpenGenerationTask }: Props) {
+export function WorkLibraryPage({ client, project, writesDisabled, textModels = [], onRunCreated, onOpenGenerationTask, onOpenPublicationPlan }: Props) {
   const [pageView, setPageView] = useState<PageView>("library");
   const [libraryView, setLibraryView] = useState<LibraryView>("grid");
   const [sortOrder, setSortOrder] = useState<SortOrder>("updated_desc");
@@ -266,8 +268,9 @@ export function WorkLibraryPage({ client, project, writesDisabled, textModels = 
   function handoffToPublishing() {
     if (!selectedVersion || selectedVersion.status !== "completed") return;
     void runAction(async () => {
-      await createPublicationHandoff(client, selectedVersion.id, idempotencyKey());
-      setNotice("发布草稿已创建，未自动发布");
+      const handoff = await createPublicationHandoff(client, selectedVersion.id, idempotencyKey());
+      const plan = await createPublicationPlan(client, handoff.id, idempotencyKey());
+      onOpenPublicationPlan?.(plan.id);
     });
   }
 

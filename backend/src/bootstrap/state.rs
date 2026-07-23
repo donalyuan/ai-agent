@@ -8,6 +8,7 @@ use crate::application::conversations::ConversationService;
 use crate::application::health::HealthService;
 use crate::application::materials::MaterialService;
 use crate::application::projects::ProjectService;
+use crate::application::publication::PublicationService;
 use crate::application::scripts::ScriptService;
 use crate::application::sound_subtitle::SoundSubtitleService;
 use crate::application::topics::TopicService;
@@ -20,10 +21,11 @@ use crate::model_routing::{
 };
 use crate::repositories::{
     PostgresAiModelRepository, PostgresAssetGenerationRepository, PostgresConversationRepository,
-    PostgresMaterialRepository, PostgresProjectRepository, PostgresScriptRepository,
-    PostgresSoundSubtitleRepository, PostgresTopicRepository, PostgresTosStagingToolRepository,
-    PostgresVoiceCatalogRepository, PostgresWorkGenerationRepository,
-    PostgresWorkLibraryRepository, PostgresWorkspaceMenuRepository,
+    PostgresMaterialRepository, PostgresProjectRepository, PostgresPublicationRepository,
+    PostgresScriptRepository, PostgresSoundSubtitleRepository, PostgresTopicRepository,
+    PostgresTosStagingToolRepository, PostgresVoiceCatalogRepository,
+    PostgresWorkGenerationRepository, PostgresWorkLibraryRepository,
+    PostgresWorkspaceMenuRepository,
 };
 use sqlx::PgPool;
 use std::{fmt, sync::Arc};
@@ -195,6 +197,18 @@ impl AppState {
     pub(crate) fn work_library_service(&self) -> Result<WorkLibraryService, AppStateError> {
         Ok(WorkLibraryService::new(
             PostgresWorkLibraryRepository::new(self.database_pool()?),
+            self.config.asset_storage_root.clone().into(),
+        ))
+    }
+
+    pub(crate) fn publication_service(&self) -> Result<PublicationService, AppStateError> {
+        let pool = self.database_pool()?;
+        Ok(PublicationService::new(
+            PostgresPublicationRepository::new(pool.clone()),
+            WorkLibraryService::new(
+                PostgresWorkLibraryRepository::new(pool),
+                self.config.asset_storage_root.clone().into(),
+            ),
             self.config.asset_storage_root.clone().into(),
         ))
     }
