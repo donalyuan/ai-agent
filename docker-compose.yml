@@ -130,5 +130,40 @@ services:
       ai-agent-api:
         condition: service_healthy
 
+  ai-agent-agent-runtime:
+    build:
+      context: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/services/agent-runtime
+      dockerfile: Dockerfile
+    container_name: ai-agent-agent-runtime
+    env_file:
+      - path: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/.env
+        required: false
+    ports:
+      - "18184:8082"
+    volumes:
+      - ai-agent-session-data:/data
+      - ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}:/workspace
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@biga-postgres:5432/video_agent
+      AGENT_RUNTIME_HOST: 0.0.0.0
+      AGENT_RUNTIME_PORT: 8082
+      AGENT_RUNTIME_SQLITE_PATH: /data/agent-sessions.sqlite
+      AGENT_RUNTIME_WORKSPACE_ROOT: /workspace
+      AGENT_RUNTIME_SHUTDOWN_TIMEOUT_MS: 10000
+    depends_on:
+      ai-agent-db-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8082/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
 volumes:
   ai-agent-generated-assets:
+  ai-agent-session-data:

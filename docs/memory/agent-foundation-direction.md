@@ -9,7 +9,9 @@ metadata:
 
 ## 基座执行模式
 
-- Novex Agent 基座默认采用“受控工作流型 Agent”：业务状态机、固定检查点、成本限制、权限和最终写入权由代码控制。
+- Novex 定位为本地单用户、多领域个人 AI 工作台；视频生产是首个领域应用，不建设未确认的多租户客户交付能力。
+- 新工作台的通用执行由 `services/agent-runtime` 中的 Pi Harness `0.82.0` 承担，包括 Turn、Tool Loop、SSE、steering、follow-up、abort、Session Tree 和 compaction；Runtime 使用 `toolContext + AgentHarnessTool` 契约，并保留 Novex 自有 `read/write/edit/bash` schema，避免改变既有工具 transcript。
+- 领域 Agent 默认采用“受控工作流型 Agent”：业务状态机、固定检查点、成本限制、权限和最终写入权由代码控制。
 - 自主 `Planner` 作为可选的局部能力，只在调研、开放式分析、失败诊断等授权节点中提出或执行有限子计划；不得绕过预算、权限、质量闸门、人工确认或业务状态规则。
 - 最终形态采用“受控工作流外壳 + 局部 Planner”，不以多个 Agent 自由群聊作为默认架构。
 
@@ -27,6 +29,7 @@ metadata:
 - `Memory` 只保存已确认、稳定、可复用的信息，例如账号策略、用户明确偏好、已确认反馈和长期约束；瞬时数据、未确认推断和临时对话摘要不得自动升级为长期记忆。
 - 记忆必须具备作用域、来源、置信度、状态、更新时间、失效和删除语义。模型提出的新记忆先作为候选，经过人工确认或确定性规则后才能生效。
 - 每次运行必须保存模型、Prompt、Context、Memory 和后续 Tool 调用的必要快照，以支持审计、回放和评测。
+- Pi SQLite 只保存 Session Tree、消息、工具结果、分支和 compaction；PostgreSQL 继续保存领域事实与模型配置。Pi summary 不自动写入正式长期 Memory。
 
 ## 虚拟制作团队
 
@@ -39,11 +42,11 @@ metadata:
 
 ## 实施顺序与边界
 
-1. 先提取执行内核：`AgentAdapter`、Registry、ExecutionContext、Run Recorder 和统一失败收尾。
-2. 再建设通用模型请求响应、Prompt 版本、Context Compiler 和运行快照。
-3. 在回放和评测基础上建设 Memory，然后扩展受权限控制的 Tool 与局部 Planner。
-4. 可复用基座分别归入 `novex-ai-core`、`novex-agent`、`novex-model`、`novex-memory`、`novex-tools` 和 `novex-eval`；`backend` 保留 HTTP、PostgreSQL Repository、业务 Adapter 和依赖组装。
-5. 任何落地实现必须先建立对应 OpenSpec change，并保持现有选题、脚本、声音和作品 Agent 的外部行为可回归验证。
+1. 新的通用 Agent 会话统一进入 Pi Runtime，不在 Rust Kernel 中建设第二套通用 Tool Loop。
+2. PostgreSQL `ai_models` 是唯一模型配置来源；Runtime 每轮按 `model_id` 解析并保存非敏感快照，不回退环境变量或 Pi 模型目录。
+3. `chat` profile 无本地工具；`workspace` profile 才启用固定工作目录下的 `read/write/edit/bash`。
+4. 现有视频 Conversation API、Rust Adapter、Run/Step 和领域状态保持不变；后续迁移必须以类型化领域 Tool 为前提，并在独立 change 中删除重复执行路径。
+5. 付费生成、正式发布、删除领域数据等动作继续由 Rust 领域 Gate 管理，禁止通过通用 bash 绕过。
 
 ### 已确认第一步
 

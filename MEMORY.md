@@ -24,11 +24,13 @@
 
 ### 项目定位与架构
 
-- 当前仓库是 **Novex AI Agent Foundation monorepo**；`apps/video-agent/` 是首个业务应用，`admin/` 是 Novex 平台管理后台。
+- 当前仓库是 **Novex 本地单用户个人 AI 工作台 monorepo**；`apps/video-agent/` 是首个领域应用，后续编程、知识研究等工作台复用同一基座。
 - `apps/video-agent/` 承载视频内容生产流程；`admin/` 承载用户、权限、模型、工具、MCP、任务、日志、运行状态、成本、限额和健康检查等控制面能力。
 - 后端采用 Rust + Axum + SQLx + PostgreSQL；向量库采用 Milvus Standalone；任务基础设施采用 Redis；视频生成与平台发布 Worker 采用 Python；前端采用 Next.js + TypeScript + shadcn/ui。
 - `backend/` 承担控制面 API 和业务编排入口，可复用 AI 能力放入 `crates/*`，Python sidecar/runtime 放入 `services/*`，业务应用放入 `apps/*`。
-- Agent 基座默认采用受控工作流，局部 `Planner` 作为可选能力；Video Agent 长期采用 `ProductionOrchestrator + RoleDefinition + ProductionState + PromptCompiler + Gate` 的虚拟制作团队结构，详细规则见 `docs/memory/agent-foundation-direction.md`。
+- `services/agent-runtime/` 使用 Pi `0.82.0` 承担新工作台的通用 Turn/Tool Loop/SSE/Session Tree；Runtime 已采用 `toolContext + AgentHarnessTool` Harness 契约，并保留 Novex 自有 `read/write/edit/bash` schema；Rust Kernel 保留现有视频业务 Adapter 与 Run/Step，禁止同一请求双执行。
+- Agent 领域能力默认采用受控工作流，局部 `Planner` 作为可选能力；Video Agent 长期采用 `ProductionOrchestrator + RoleDefinition + ProductionState + PromptCompiler + Gate` 的虚拟制作团队结构，详细规则见 `docs/memory/agent-foundation-direction.md`。
+- PostgreSQL `ai_models` 是模型配置唯一来源；Pi SQLite 只保存 Session，compaction 不得自动升级为正式长期 Memory。
 - 系统长期边界以 `ARCHITECTURE.md` 和仓库当前代码为准，不得用历史记忆覆盖当前仓库事实。
 
 ### 产品与开发治理
@@ -46,7 +48,8 @@
 - 环境从 `/server/docker-compose.yml` 统一编排，并 include `/server/ai-agent/docker-compose.yml`。
 - 复用 PostgreSQL 服务 `biga-postgres` 的独立数据库 `video_agent`，复用 Redis 服务 `bs-redis` 的 DB index `/2`。
 - 当前映射端口：API `18180->8080`、Video Worker `18181->8081`、Admin `18182->3000`、Video Agent `18183->3000`。
-- Compose 服务名：`ai-agent-api`、`ai-agent-video-worker`、`ai-agent-admin`、`ai-agent-video-agent`；容器内项目路径统一为 `/app`。
+- Agent Runtime 映射端口为 `18184->8082`，SQLite 使用 `ai-agent-session-data` 命名卷持久化。
+- Compose 服务名：`ai-agent-api`、`ai-agent-video-worker`、`ai-agent-admin`、`ai-agent-video-agent`、`ai-agent-agent-runtime`；既有服务项目路径为 `/app`，Runtime workspace 为 `/workspace`。
 - `apps/video-agent` 未显式配置 `NEXT_PUBLIC_API_BASE_URL` 时，根据当前页面 `hostname` 派生 `<protocol>//<hostname>:18180`。
 
 ## 记忆维护规则

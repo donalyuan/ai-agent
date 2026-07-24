@@ -11,7 +11,7 @@ metadata:
 
 ## 项目定位
 
-Novex 是可复用 AI Agent Foundation。`apps/video-agent` 是第一个业务应用，用于视频内容生产闭环。后续培训、知识库、客服、研发助手等应用必须复用同一套基座能力，而不是复制一套根级项目。
+Novex 是 local-first、本地单用户、多领域个人 AI 工作台基座。`apps/video-agent` 是第一个领域应用；后续编程、知识研究等应用复用同一套 Pi Runtime、模型配置和本地 Session 能力。
 
 ## 核心技术栈
 
@@ -31,6 +31,7 @@ Novex 是可复用 AI Agent Foundation。`apps/video-agent` 是第一个业务�
 - `crates/novex-eval`：eval runner、指标和报告
 
 ### 服务运行时
+- `services/agent-runtime`：Node.js 24 + Pi `0.82.0`，采用 `toolContext + AgentHarnessTool` Harness 契约，承担通用 Turn、Tool Loop、SSE、steering、abort 和 SQLite Session Tree；为保持既有 transcript 与工具协议，继续使用 Novex 自有 `read/write/edit/bash` schema
 - `services/video-worker`：Python/FastAPI 视频生成和平台发布 sidecar
 - 后续 parser/model/sandbox 等 runtime 统一放入 `services/*`
 
@@ -48,6 +49,7 @@ Novex 是可复用 AI Agent Foundation。`apps/video-agent` 是第一个业务�
 - Video Worker：`ai-agent-video-worker`，宿主机端口 `18181`，容器端口 `8081`
 - Admin：`ai-agent-admin`，宿主机端口 `18182`，容器端口 `3000`
 - Video Agent 工作台：`ai-agent-video-agent`，宿主机端口 `18183`，容器端口 `3000`
+- Agent Runtime：`ai-agent-agent-runtime`，宿主机端口 `18184`，容器端口 `8082`，SQLite 使用 `ai-agent-session-data` 命名卷
 - 容器内项目路径：`/app`
 - 当前已验证脚本生成链路可通过 Responses API 使用 `gpt-5.4-mini` 和 `gpt-5.5` 完成端到端生成；`gpt-5.5` 需要 Responses SSE 流式路径和 Codex-compatible `User-Agent`，同步 Responses 请求在完整脚本生成场景下会触发上游约 30 秒 502。
 
@@ -79,4 +81,4 @@ video-agent 业务仍保留以下 MVP 范围，详见 [`docs/requirements/video-
 **How to apply**:
 - 新能力先判断归属：`backend`、`apps/*`、`crates/*`、`services/*`
 - 不再把可复用 AI 基建能力直接堆进 `backend/src`
-- Python 只做 sidecar/runtime，核心控制面仍在 Rust
+- Rust 负责领域控制与视频链路；Pi Node.js 服务负责新的通用 Agent 执行，不重复实现同一 Tool Loop
