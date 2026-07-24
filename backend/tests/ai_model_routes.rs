@@ -394,8 +394,7 @@ async fn admin_crud_masks_credentials_and_options_omit_sensitive_configuration()
     )
     .await;
     assert_eq!(video_status, StatusCode::CREATED, "{video}");
-    let (options_status, options) =
-        send(&app, "GET", "/api/model-options?type=video", None).await;
+    let (options_status, options) = send(&app, "GET", "/api/model-options?type=video", None).await;
     assert_eq!(options_status, StatusCode::OK);
     let capability = &options["models"][0]["capabilities"];
     assert_eq!(capability["aspect_ratios"], json!(["16:9", "9:16"]));

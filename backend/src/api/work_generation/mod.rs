@@ -2,7 +2,10 @@ mod dto;
 mod handlers;
 
 use crate::bootstrap::AppState;
-use axum::{routing::{get, post}, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()

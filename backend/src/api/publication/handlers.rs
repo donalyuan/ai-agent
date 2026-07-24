@@ -129,8 +129,28 @@ pub(super) async fn downloads(
 ) -> Result<Json<Value>, HttpError> {
     Ok(Json(state.publication_service()?.downloads(id).await?))
 }
-pub(super) async fn audit_download(State(state):State<AppState>,Path(id):Path<Uuid>,headers:HeaderMap)->Result<StatusCode,HttpError>{state.publication_service()?.audit(id,"downloaded",key(&headers)?).await?;Ok(StatusCode::NO_CONTENT)}
-pub(super) async fn audit_copy(State(state):State<AppState>,Path(id):Path<Uuid>,headers:HeaderMap)->Result<StatusCode,HttpError>{state.publication_service()?.audit(id,"copied",key(&headers)?).await?;Ok(StatusCode::NO_CONTENT)}
+pub(super) async fn audit_download(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<StatusCode, HttpError> {
+    state
+        .publication_service()?
+        .audit(id, "downloaded", key(&headers)?)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+pub(super) async fn audit_copy(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<StatusCode, HttpError> {
+    state
+        .publication_service()?
+        .audit(id, "copied", key(&headers)?)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
 pub(super) async fn download_package(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,

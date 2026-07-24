@@ -980,9 +980,9 @@ async fn migrations_create_video_agent_core_schema() {
         ]
     );
 
-    let planned_top_level_count = sqlx::query_scalar::<_, i64>(
+    let planned_top_level_keys = sqlx::query_scalar::<_, String>(
         r#"
-        SELECT COUNT(*)
+        SELECT menu_key
         FROM video_workspace_menus
         WHERE parent_id IS NULL
           AND menu_key <> 'script-creation'
@@ -990,12 +990,16 @@ async fn migrations_create_video_agent_core_schema() {
           AND is_visible = true
           AND is_enabled = false
           AND status = 'planned'
+        ORDER BY sort_order ASC
         "#,
     )
-    .fetch_one(&test_pool)
+    .fetch_all(&test_pool)
     .await
     .expect("planned menu seed query should run");
-    assert_eq!(planned_top_level_count, 3);
+    assert_eq!(
+        planned_top_level_keys,
+        vec!["analytics".to_string(), "workflow-tasks".to_string()]
+    );
 
     let work_generation_menu = sqlx::query_as::<_, (bool, String, bool, String)>(
         r#"

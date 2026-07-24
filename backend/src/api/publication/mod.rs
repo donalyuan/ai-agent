@@ -30,8 +30,14 @@ pub(crate) fn router() -> Router<AppState> {
             "/api/publication-targets/:id/downloads",
             get(handlers::downloads),
         )
-        .route("/api/publication-targets/:id/download-audits",post(handlers::audit_download))
-        .route("/api/publication-targets/:id/copy-audits",post(handlers::audit_copy))
+        .route(
+            "/api/publication-targets/:id/download-audits",
+            post(handlers::audit_download),
+        )
+        .route(
+            "/api/publication-targets/:id/copy-audits",
+            post(handlers::audit_copy),
+        )
         .route(
             "/api/publication-packages/:id/download",
             get(handlers::download_package),

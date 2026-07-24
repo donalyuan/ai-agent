@@ -178,7 +178,7 @@ async fn manual_publication_api_is_idempotent_revision_safe_and_truthful() {
     )
     .await;
     assert_eq!(package.0, StatusCode::CREATED, "{}", package.1);
-    let manifest_text=package.1["manifest"].to_string();
+    let manifest_text = package.1["manifest"].to_string();
     assert!(!manifest_text.contains("token"));
     assert!(!manifest_text.contains("/server/") && !manifest_text.contains("?signature="));
     let archive_file =
@@ -237,8 +237,30 @@ async fn manual_publication_api_is_idempotent_revision_safe_and_truthful() {
         .0,
         StatusCode::OK
     );
-    assert_eq!(send(&app,"POST",&format!("/api/publication-targets/{target_id}/download-audits"),json!({}),Some("download-audit")).await.0,StatusCode::NO_CONTENT);
-    assert_eq!(send(&app,"POST",&format!("/api/publication-targets/{target_id}/copy-audits"),json!({}),Some("copy-audit")).await.0,StatusCode::NO_CONTENT);
+    assert_eq!(
+        send(
+            &app,
+            "POST",
+            &format!("/api/publication-targets/{target_id}/download-audits"),
+            json!({}),
+            Some("download-audit")
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        send(
+            &app,
+            "POST",
+            &format!("/api/publication-targets/{target_id}/copy-audits"),
+            json!({}),
+            Some("copy-audit")
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
     let handoff_result = send(
         &app,
         "POST",
@@ -253,12 +275,48 @@ async fn manual_publication_api_is_idempotent_revision_safe_and_truthful() {
         handoff_result.1["publication_confirmation"],
         "manual_required"
     );
-    let attention=send(&app,"POST",&format!("/api/publication-targets/{target_id}/needs-attention"),json!({}),Some("needs-fix")).await;
-    assert_eq!(attention.1["status"],"needs_attention");
-    let revised=send(&app,"PUT",&target_uri,json!({"expected_revision":2,"title":"修正版","body":"正文","tags":[]}),Some("revise-after-attention")).await;
-    assert_eq!(revised.1["draft_revision"],3);
-    assert_eq!(send(&app,"POST",&package_uri,json!({"draft_revision":3}),Some("package-three")).await.0,StatusCode::CREATED);
-    assert_eq!(send(&app,"POST",&format!("/api/publication-targets/{target_id}/handoff"),json!({}),Some("open-official-again")).await.1["target"]["status"],"handed_off");
+    let attention = send(
+        &app,
+        "POST",
+        &format!("/api/publication-targets/{target_id}/needs-attention"),
+        json!({}),
+        Some("needs-fix"),
+    )
+    .await;
+    assert_eq!(attention.1["status"], "needs_attention");
+    let revised = send(
+        &app,
+        "PUT",
+        &target_uri,
+        json!({"expected_revision":2,"title":"修正版","body":"正文","tags":[]}),
+        Some("revise-after-attention"),
+    )
+    .await;
+    assert_eq!(revised.1["draft_revision"], 3);
+    assert_eq!(
+        send(
+            &app,
+            "POST",
+            &package_uri,
+            json!({"draft_revision":3}),
+            Some("package-three")
+        )
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        send(
+            &app,
+            "POST",
+            &format!("/api/publication-targets/{target_id}/handoff"),
+            json!({}),
+            Some("open-official-again")
+        )
+        .await
+        .1["target"]["status"],
+        "handed_off"
+    );
     let publish_uri = format!("/api/publication-targets/{target_id}/published");
     assert_eq!(send(&app,"POST",&publish_uri,json!({"published_url":"https://evil.example/video/1","published_at":"2026-07-23T06:00:00Z"}),Some("bad-result")).await.0,StatusCode::BAD_REQUEST);
     let published=send(&app,"POST",&publish_uri,json!({"published_url":"https://www.douyin.com/video/1","published_at":"2026-07-23T06:00:00Z"}),Some("publish-result")).await;
@@ -277,17 +335,60 @@ async fn manual_publication_api_is_idempotent_revision_safe_and_truthful() {
         0
     );
     assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM publication_events WHERE publication_target_id=$1 AND event_type IN('published','result_corrected')").bind(Uuid::parse_str(target_id).unwrap()).fetch_one(&pool).await.unwrap(),2);
-    let red_uri=format!("/api/publications/{plan_id}/targets/xiaohongshu");
-    let red=send(&app,"PUT",&red_uri,json!({"title":"小红书","body":"正文","tags":[],"planned_at":"2026-07-22T06:00:00Z"}),Some("red-create")).await.1;
-    let red_id=red["id"].as_str().unwrap();
-    let details=send(&app,"GET",&format!("/api/publications/{plan_id}"),json!({}),None).await.1;
-    let red_view=details["targets"].as_array().unwrap().iter().find(|target|target["platform"]=="xiaohongshu").unwrap();
-    assert_eq!(red_view["overdue"],true);
-    assert_eq!(red_view["status"],"draft");
-    std::fs::write(root.join("works/final.mp4"),b"corrupt").unwrap();
-    assert_eq!(send(&app,"POST",&format!("/api/publication-targets/{red_id}/package"),json!({"draft_revision":1}),Some("red-corrupt-package")).await.0,StatusCode::CONFLICT);
-    std::fs::write(root.join("works/final.mp4"),b"video").unwrap();
-    assert_eq!(send(&app,"POST",&format!("/api/publication-targets/{red_id}/cancel"),json!({}),Some("red-cancel")).await.1["status"],"cancelled");
+    let red_uri = format!("/api/publications/{plan_id}/targets/xiaohongshu");
+    let red = send(
+        &app,
+        "PUT",
+        &red_uri,
+        json!({"title":"小红书","body":"正文","tags":[],"planned_at":"2026-07-22T06:00:00Z"}),
+        Some("red-create"),
+    )
+    .await
+    .1;
+    let red_id = red["id"].as_str().unwrap();
+    let details = send(
+        &app,
+        "GET",
+        &format!("/api/publications/{plan_id}"),
+        json!({}),
+        None,
+    )
+    .await
+    .1;
+    let red_view = details["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["platform"] == "xiaohongshu")
+        .unwrap();
+    assert_eq!(red_view["overdue"], true);
+    assert_eq!(red_view["status"], "draft");
+    std::fs::write(root.join("works/final.mp4"), b"corrupt").unwrap();
+    assert_eq!(
+        send(
+            &app,
+            "POST",
+            &format!("/api/publication-targets/{red_id}/package"),
+            json!({"draft_revision":1}),
+            Some("red-corrupt-package")
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    std::fs::write(root.join("works/final.mp4"), b"video").unwrap();
+    assert_eq!(
+        send(
+            &app,
+            "POST",
+            &format!("/api/publication-targets/{red_id}/cancel"),
+            json!({}),
+            Some("red-cancel")
+        )
+        .await
+        .1["status"],
+        "cancelled"
+    );
     pool.close().await;
     admin.close().await;
 }

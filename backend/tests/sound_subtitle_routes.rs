@@ -862,29 +862,16 @@ async fn failed_task_retry_keeps_parent_audit_and_queued_task_can_be_cancelled()
     .await
     .unwrap();
 
-    let (status, failed) = send(
-        &app,
-        "GET",
-        &format!("{base}/{failed_task_id}"),
-        None,
-        None,
-    )
-    .await;
+    let (status, failed) = send(&app, "GET", &format!("{base}/{failed_task_id}"), None, None).await;
     assert_eq!(status, StatusCode::OK, "{failed}");
     assert_eq!(failed["error_code"], "tts_http_error");
     assert_eq!(failed["error_details"]["http_status"], 403);
-    assert_eq!(
-        failed["error_details"]["provider_error_code"],
-        "45000020"
-    );
+    assert_eq!(failed["error_details"]["provider_error_code"], "45000020");
     assert_eq!(
         failed["error_details"]["provider_error_message"],
         "Permission denied"
     );
-    assert_eq!(
-        failed["upstream_log_id"],
-        "20260717150632A1B2C3D4E5F60789"
-    );
+    assert_eq!(failed["upstream_log_id"], "20260717150632A1B2C3D4E5F60789");
     assert_eq!(failed["request_id"], created["request_id"]);
     assert_eq!(failed["attempt_count"], 1);
     assert!(!failed.to_string().contains("runtime-secret"));

@@ -1,8 +1,8 @@
 //! 组合各业务 Router、跨域策略和静态素材服务，不承载具体业务 handler。
 
 use crate::api::{
-    ai_models, asset_generation, conversations, health, materials, projects, scripts,
-    publication, sound_subtitle, topics, tos_staging_tool, work_generation, work_library, workspace,
+    ai_models, asset_generation, conversations, health, materials, projects, publication, scripts,
+    sound_subtitle, topics, tos_staging_tool, work_generation, work_library, workspace,
 };
 use crate::bootstrap::AppState;
 use axum::{

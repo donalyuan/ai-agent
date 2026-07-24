@@ -352,9 +352,13 @@ impl PostgresPublicationRepository {
                 "状态 {status} 不允许执行该动作"
             )));
         }
-        if event_type=="handed_off"{
+        if event_type == "handed_off" {
             let valid=sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM publication_packages p JOIN publication_targets t ON t.id=p.publication_target_id AND t.draft_revision=p.draft_revision WHERE p.publication_target_id=$1)").bind(id).fetch_one(&mut *tx).await?;
-            if !valid{return Err(PublicationRepositoryError::Conflict("当前 revision 缺少有效发布包".into()));}
+            if !valid {
+                return Err(PublicationRepositoryError::Conflict(
+                    "当前 revision 缺少有效发布包".into(),
+                ));
+            }
         }
         let published_at = fields
             .get("published_at")
@@ -396,9 +400,20 @@ impl PostgresPublicationRepository {
         Ok(target_from_row(row))
     }
 
-    pub async fn record_event(&self,id:Uuid,event_type:&str,key:&str,payload:Value)->Result<(),PublicationRepositoryError>{
-        if !matches!(event_type,"downloaded"|"copied"){return Err(PublicationRepositoryError::Conflict("不支持的审计事件".into()));}
-        sqlx::query("INSERT INTO publication_events(publication_target_id,event_type,payload,idempotency_key)VALUES($1,$2,$3,$4) ON CONFLICT(publication_target_id,idempotency_key) DO NOTHING").bind(id).bind(event_type).bind(payload).bind(key).execute(&self.pool).await?;Ok(())
+    pub async fn record_event(
+        &self,
+        id: Uuid,
+        event_type: &str,
+        key: &str,
+        payload: Value,
+    ) -> Result<(), PublicationRepositoryError> {
+        if !matches!(event_type, "downloaded" | "copied") {
+            return Err(PublicationRepositoryError::Conflict(
+                "不支持的审计事件".into(),
+            ));
+        }
+        sqlx::query("INSERT INTO publication_events(publication_target_id,event_type,payload,idempotency_key)VALUES($1,$2,$3,$4) ON CONFLICT(publication_target_id,idempotency_key) DO NOTHING").bind(id).bind(event_type).bind(payload).bind(key).execute(&self.pool).await?;
+        Ok(())
     }
 }
 

@@ -310,7 +310,24 @@ impl PublicationService {
         }
         Ok((package, path))
     }
-    pub async fn audit(&self,id:Uuid,action:&str,key:&str)->Result<(),PublicationApplicationError>{require_key(key)?;self.repository.target(id).await?;self.repository.record_event(id,action,key,json!({"source":"manual_publication_workbench"})).await?;Ok(())}
+    pub async fn audit(
+        &self,
+        id: Uuid,
+        action: &str,
+        key: &str,
+    ) -> Result<(), PublicationApplicationError> {
+        require_key(key)?;
+        self.repository.target(id).await?;
+        self.repository
+            .record_event(
+                id,
+                action,
+                key,
+                json!({"source":"manual_publication_workbench"}),
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 async fn write_zip(
