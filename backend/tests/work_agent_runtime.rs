@@ -1,10 +1,11 @@
 use async_trait::async_trait;
+use novex_agent::{AgentInvocation, AgentRegistry};
 use novex_api::agents::{LLMClient, LLMError};
-use novex_api::application::agents::runtime::{AgentRuntime, AgentRuntimeError, AgentTurnRequest};
+use novex_api::application::agents::adapters::{AgentRuntimeError, WorkAgentAdapter};
 use novex_api::domain::conversation::{AgentMessageRole, CreateAgentConversationInput};
 use novex_api::repositories::{
     ConversationRepository, PostgresConversationRepository, PostgresProjectRepository,
-    PostgresScriptRepository, PostgresWorkLibraryRepository,
+    PostgresWorkLibraryRepository,
 };
 use novex_model::LLMPrompt;
 use serde_json::{json, Value};
@@ -12,8 +13,11 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+#[path = "support/agent_executor.rs"]
+mod agent_executor;
 mod support;
 
+use agent_executor::TestAgentExecutor;
 use support::test_database::TestDatabase;
 
 fn database_url() -> String {
@@ -131,15 +135,16 @@ impl LLMClient for ScriptedLlm {
 fn runtime(
     pool: PgPool,
     llm: Arc<ScriptedLlm>,
-) -> (AgentRuntime, Arc<PostgresConversationRepository>) {
+) -> (TestAgentExecutor, Arc<PostgresConversationRepository>) {
     let conversations = Arc::new(PostgresConversationRepository::new(pool.clone()));
-    let runtime = AgentRuntime::new(
-        conversations.clone(),
-        Arc::new(PostgresScriptRepository::new(pool.clone())),
-        Arc::new(PostgresProjectRepository::new(pool.clone())),
-        llm,
-    )
-    .with_work_library_repository(Arc::new(PostgresWorkLibraryRepository::new(pool)));
+    let mut registry = AgentRegistry::new();
+    registry
+        .register(Arc::new(WorkAgentAdapter::new(
+            Arc::new(PostgresProjectRepository::new(pool.clone())),
+            Arc::new(PostgresWorkLibraryRepository::new(pool)),
+        )))
+        .unwrap();
+    let runtime = TestAgentExecutor::new(registry, (*conversations).clone(), llm, None);
     (runtime, conversations)
 }
 
@@ -174,10 +179,12 @@ async fn work_agent_reuses_current_draft_and_returns_confirmable_diff() {
     let conversation_id = conversation(&conversations, project_id, work_id).await;
 
     let response = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id,
+        .execute(AgentInvocation {
+            session_id: conversation_id,
             user_message: "保留配音，让画面节奏更紧凑".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({}),
         })
         .await
         .unwrap();
@@ -230,10 +237,12 @@ async fn work_agent_rejects_invalid_unknown_and_empty_patches_without_writing() 
         let conversation_id = conversation(&conversations, project_id, work_id).await;
 
         let result = runtime
-            .handle_turn(AgentTurnRequest {
-                conversation_id,
+            .execute(AgentInvocation {
+                session_id: conversation_id,
                 user_message: "修改作品".to_string(),
-                supplement_of_batch_id: None,
+                user_metadata: json!({}),
+                run_input: json!({}),
+                payload: json!({}),
             })
             .await;
 
@@ -279,10 +288,12 @@ async fn work_agent_rejects_work_from_another_project_before_model_call() {
     let conversation_id = conversation(&conversations, other_project_id, work_id).await;
 
     let result = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id,
+        .execute(AgentInvocation {
+            session_id: conversation_id,
             user_message: "修改作品".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({}),
         })
         .await;
 

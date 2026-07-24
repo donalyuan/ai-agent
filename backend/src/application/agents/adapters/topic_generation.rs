@@ -6,12 +6,10 @@ use super::topic_quality::{
     TopicQualityLlmOutput,
 };
 use super::{
-    format_account_strategy_context, truncate_for_prompt, AgentRuntime, AgentRuntimeError,
+    format_account_strategy_context, record_step, truncate_for_prompt, AgentRuntimeError,
+    TopicAgentAdapter,
 };
-use crate::domain::conversation::{
-    AgentConversation, AgentMessage, AgentMessageRole, AgentRunRecord, CreateAgentMessageInput,
-    CreateAgentStepInput,
-};
+use crate::domain::conversation::{AgentMessage, AgentMessageRole, CreateAgentStepInput};
 use crate::domain::topic::{
     ContentTopic, ContentTopicSource, ContentTopicStatus, TopicGenerationBatch,
     TopicGenerationBatchStatus, TopicQualityEvaluationStatus,
@@ -20,32 +18,35 @@ use crate::repositories::{
     CreateContentTopicInput, CreateTopicGenerationBatchInput, CreateTopicQualityEvaluationInput,
     TopicRepository, UpdateTopicGenerationBatchInput,
 };
-use novex_model::{LLMJsonSchema, LLMPrompt};
+use novex_agent::{AgentOutcome, AgentSession, StepRecorder, StoredMessage};
+use novex_model::{LLMClient, LLMJsonSchema, LLMPrompt};
 use serde::Deserialize;
 use serde_json::json;
 use std::fmt;
+use std::sync::Arc;
 use uuid::Uuid;
 
-impl AgentRuntime {
+impl TopicAgentAdapter {
     pub(super) async fn handle_topic_turn(
         &self,
-        conversation: &AgentConversation,
-        user_message: &AgentMessage,
-        run: &AgentRunRecord,
+        conversation: &AgentSession,
+        user_message: &StoredMessage,
+        run_id: Uuid,
         supplement_target_batch_id: Option<Uuid>,
-    ) -> Result<AgentMessage, AgentRuntimeError> {
+        llm_client: Arc<dyn LLMClient>,
+        steps: Arc<dyn StepRecorder>,
+    ) -> Result<AgentOutcome, AgentRuntimeError> {
         let project_id = conversation
             .project_id
             .ok_or_else(|| AgentRuntimeError::Validation("选题会话缺少 project_id".to_string()))?;
-        let topic_repository = self.topic_repository.as_ref().ok_or_else(|| {
-            AgentRuntimeError::Validation("选题 Agent 未配置 topic repository".to_string())
-        })?;
+        let topic_repository = &self.topic_repository;
         let project = self.project_repository.get_project(project_id).await?;
         let account_strategy_context = format_account_strategy_context(&project);
 
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 1,
                 step_type: "read_project_context".to_string(),
                 status: "succeeded".to_string(),
@@ -56,8 +57,9 @@ impl AgentRuntime {
                     "description": project.description
                 })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         let requested_count = requested_topic_count(&user_message.content);
         let supplement_context = match supplement_target_batch_id {
@@ -88,7 +90,7 @@ impl AgentRuntime {
         let batch = topic_repository
             .create_generation_batch(CreateTopicGenerationBatchInput {
                 project_id,
-                source_run_id: Some(run.id),
+                source_run_id: Some(run_id),
                 supplement_of_batch_id,
                 prompt: user_message.content.clone(),
                 requested_count,
@@ -101,8 +103,7 @@ impl AgentRuntime {
             })
             .await?;
 
-        let raw = self
-            .llm_client
+        let raw = llm_client
             .generate_script(build_topic_generation_prompt(
                 &account_strategy_context,
                 requested_count,
@@ -121,8 +122,14 @@ impl AgentRuntime {
                         error.to_string(),
                     )
                     .await;
-                    self.add_failed_topic_step(run.id, 2, "generate_topics", error.to_string())
-                        .await;
+                    self.record_failed_topic_step(
+                        steps.as_ref(),
+                        run_id,
+                        2,
+                        "generate_topics",
+                        error.to_string(),
+                    )
+                    .await;
                     return Err(AgentRuntimeError::InvalidLlmOutput(error.to_string()));
                 }
             },
@@ -133,26 +140,33 @@ impl AgentRuntime {
                     error.to_string(),
                 )
                 .await;
-                self.add_failed_topic_step(run.id, 2, "generate_topics", error.to_string())
-                    .await;
+                self.record_failed_topic_step(
+                    steps.as_ref(),
+                    run_id,
+                    2,
+                    "generate_topics",
+                    error.to_string(),
+                )
+                .await;
                 return Err(AgentRuntimeError::Llm(error));
             }
         };
 
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 2,
                 step_type: "generate_topics".to_string(),
                 status: "succeeded".to_string(),
                 input: json!({ "message_id": user_message.id, "requested_count": requested_count }),
                 output: Some(json!({ "topic_count": candidates.len() })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
-        let raw_quality = self
-            .llm_client
+        let raw_quality = llm_client
             .generate_script(build_topic_quality_gate_prompt(
                 &account_strategy_context,
                 &user_message.content,
@@ -171,8 +185,9 @@ impl AgentRuntime {
                         message.clone(),
                     )
                     .await;
-                    self.add_failed_topic_step(
-                        run.id,
+                    self.record_failed_topic_step(
+                        steps.as_ref(),
+                        run_id,
                         3,
                         "evaluate_topic_quality",
                         message.clone(),
@@ -182,7 +197,7 @@ impl AgentRuntime {
                         topic_repository.as_ref(),
                         project_id,
                         batch.id,
-                        run.id,
+                        run_id,
                         message.clone(),
                     )
                     .await;
@@ -193,13 +208,19 @@ impl AgentRuntime {
                 let message = error.to_string();
                 self.mark_topic_batch_failed(topic_repository.as_ref(), batch.id, message.clone())
                     .await;
-                self.add_failed_topic_step(run.id, 3, "evaluate_topic_quality", message.clone())
-                    .await;
+                self.record_failed_topic_step(
+                    steps.as_ref(),
+                    run_id,
+                    3,
+                    "evaluate_topic_quality",
+                    message.clone(),
+                )
+                .await;
                 self.save_failed_topic_quality_evaluation(
                     topic_repository.as_ref(),
                     project_id,
                     batch.id,
-                    run.id,
+                    run_id,
                     message,
                 )
                 .await;
@@ -222,7 +243,7 @@ impl AgentRuntime {
             .create_topic_quality_evaluation(CreateTopicQualityEvaluationInput {
                 project_id,
                 batch_id: batch.id,
-                source_run_id: Some(run.id),
+                source_run_id: Some(run_id),
                 status: TopicQualityEvaluationStatus::Succeeded,
                 pass_count,
                 reject_count,
@@ -232,9 +253,10 @@ impl AgentRuntime {
             })
             .await?;
 
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 3,
                 step_type: "evaluate_topic_quality".to_string(),
                 status: "succeeded".to_string(),
@@ -246,8 +268,9 @@ impl AgentRuntime {
                     "rewrite_triggered": false
                 })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         let mut final_candidates = candidates;
         let mut final_quality_result = quality_result;
@@ -261,8 +284,7 @@ impl AgentRuntime {
         if topic_quality_pass_rate_is_low(final_pass_count, final_candidates.len()) {
             let rewrite_user_message =
                 build_topic_rewrite_user_message(&user_message.content, &final_quality_result);
-            let raw_rewrite = self
-                .llm_client
+            let raw_rewrite = llm_client
                 .generate_script(build_topic_generation_prompt(
                     &account_strategy_context,
                     requested_count,
@@ -280,8 +302,14 @@ impl AgentRuntime {
                             error.to_string(),
                         )
                         .await;
-                        self.add_failed_topic_step(run.id, 4, "rewrite_topics", error.to_string())
-                            .await;
+                        self.record_failed_topic_step(
+                            steps.as_ref(),
+                            run_id,
+                            4,
+                            "rewrite_topics",
+                            error.to_string(),
+                        )
+                        .await;
                         return Err(AgentRuntimeError::InvalidLlmOutput(error.to_string()));
                     }
                 },
@@ -292,14 +320,21 @@ impl AgentRuntime {
                         error.to_string(),
                     )
                     .await;
-                    self.add_failed_topic_step(run.id, 4, "rewrite_topics", error.to_string())
-                        .await;
+                    self.record_failed_topic_step(
+                        steps.as_ref(),
+                        run_id,
+                        4,
+                        "rewrite_topics",
+                        error.to_string(),
+                    )
+                    .await;
                     return Err(AgentRuntimeError::Llm(error));
                 }
             };
-            self.conversation_repository
-                .add_step(CreateAgentStepInput {
-                    agent_run_id: run.id,
+            record_step(
+                steps.as_ref(),
+                CreateAgentStepInput {
+                    agent_run_id: run_id,
                     step_order: 4,
                     step_type: "rewrite_topics".to_string(),
                     status: "succeeded".to_string(),
@@ -311,11 +346,11 @@ impl AgentRuntime {
                     }),
                     output: Some(json!({ "topic_count": rewritten_candidates.len() })),
                     error_message: None,
-                })
-                .await?;
+                },
+            )
+            .await?;
 
-            let raw_rewrite_quality = self
-                .llm_client
+            let raw_rewrite_quality = llm_client
                 .generate_script(build_topic_quality_gate_prompt(
                     &account_strategy_context,
                     &user_message.content,
@@ -335,8 +370,9 @@ impl AgentRuntime {
                                 message.clone(),
                             )
                             .await;
-                            self.add_failed_topic_step(
-                                run.id,
+                            self.record_failed_topic_step(
+                                steps.as_ref(),
+                                run_id,
                                 5,
                                 "evaluate_topic_quality",
                                 message.clone(),
@@ -346,7 +382,7 @@ impl AgentRuntime {
                                 topic_repository.as_ref(),
                                 project_id,
                                 batch.id,
-                                run.id,
+                                run_id,
                                 message.clone(),
                             )
                             .await;
@@ -362,8 +398,9 @@ impl AgentRuntime {
                         message.clone(),
                     )
                     .await;
-                    self.add_failed_topic_step(
-                        run.id,
+                    self.record_failed_topic_step(
+                        steps.as_ref(),
+                        run_id,
                         5,
                         "evaluate_topic_quality",
                         message.clone(),
@@ -373,7 +410,7 @@ impl AgentRuntime {
                         topic_repository.as_ref(),
                         project_id,
                         batch.id,
-                        run.id,
+                        run_id,
                         message,
                     )
                     .await;
@@ -396,7 +433,7 @@ impl AgentRuntime {
                 .create_topic_quality_evaluation(CreateTopicQualityEvaluationInput {
                     project_id,
                     batch_id: batch.id,
-                    source_run_id: Some(run.id),
+                    source_run_id: Some(run_id),
                     status: TopicQualityEvaluationStatus::Succeeded,
                     pass_count: rewritten_pass_count,
                     reject_count: rewritten_reject_count,
@@ -405,9 +442,10 @@ impl AgentRuntime {
                     error_message: None,
                 })
                 .await?;
-            self.conversation_repository
-                .add_step(CreateAgentStepInput {
-                    agent_run_id: run.id,
+            record_step(
+                steps.as_ref(),
+                CreateAgentStepInput {
+                    agent_run_id: run_id,
                     step_order: 5,
                     step_type: "evaluate_topic_quality".to_string(),
                     status: "succeeded".to_string(),
@@ -423,8 +461,9 @@ impl AgentRuntime {
                         "rewrite_triggered": true
                     })),
                     error_message: None,
-                })
-                .await?;
+                },
+            )
+            .await?;
 
             final_candidates = rewritten_candidates;
             final_quality_result = rewritten_quality_result;
@@ -467,7 +506,7 @@ impl AgentRuntime {
                     tags: candidate.tags,
                     source: ContentTopicSource::Agent,
                     metadata: json!({
-                        "source_run_id": run.id,
+                        "source_run_id": run_id,
                         "quality_gate": {
                             "evaluation_id": final_quality_evaluation.id,
                             "candidate_key": candidate_key,
@@ -501,9 +540,10 @@ impl AgentRuntime {
             )
             .await?;
 
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: persist_step_order,
                 step_type: "persist_topics".to_string(),
                 status: "succeeded".to_string(),
@@ -516,32 +556,28 @@ impl AgentRuntime {
                     "quality_evaluation_id": final_quality_evaluation.id
                 })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         let topic_count = created_topic_ids.len();
-        self.conversation_repository
-            .save_message(CreateAgentMessageInput {
-                conversation_id: conversation.id,
-                role: AgentMessageRole::Assistant,
-                content: format!(
-                    "已生成 {topic_count} 个候选选题，通过 {final_pass_count} 条，淘汰 {final_reject_count} 条。"
-                ),
-                metadata: json!({
-                    "intent": "generate_topics",
-                    "batch_id": batch.id,
-                    "supplement_of_batch_id": supplement_of_batch_id,
-                    "created_topic_ids": created_topic_ids,
-                    "topic_count": topic_count,
-                    "quality_evaluation_id": final_quality_evaluation.id,
-                    "quality_pass_count": final_pass_count,
-                    "quality_reject_count": final_reject_count,
-                    "quality_rewrite_triggered": rewrite_triggered,
-                    "status": ContentTopicStatus::Idea
-                }),
-            })
-            .await
-            .map_err(AgentRuntimeError::from)
+        Ok(AgentOutcome::new(
+            format!(
+                "已生成 {topic_count} 个候选选题，通过 {final_pass_count} 条，淘汰 {final_reject_count} 条。"
+            ),
+            json!({
+                "intent": "generate_topics",
+                "batch_id": batch.id,
+                "supplement_of_batch_id": supplement_of_batch_id,
+                "created_topic_ids": created_topic_ids,
+                "topic_count": topic_count,
+                "quality_evaluation_id": final_quality_evaluation.id,
+                "quality_pass_count": final_pass_count,
+                "quality_reject_count": final_reject_count,
+                "quality_rewrite_triggered": rewrite_triggered,
+                "status": ContentTopicStatus::Idea
+            }),
+        ))
     }
 
     async fn mark_topic_batch_failed(
@@ -562,16 +598,17 @@ impl AgentRuntime {
             .await;
     }
 
-    pub(super) async fn add_failed_topic_step(
+    pub(super) async fn record_failed_topic_step(
         &self,
+        steps: &dyn StepRecorder,
         run_id: Uuid,
         step_order: i32,
         step_type: &str,
         error_message: String,
     ) {
-        let _ = self
-            .conversation_repository
-            .add_step(CreateAgentStepInput {
+        let _ = record_step(
+            steps,
+            CreateAgentStepInput {
                 agent_run_id: run_id,
                 step_order,
                 step_type: step_type.to_string(),
@@ -579,8 +616,9 @@ impl AgentRuntime {
                 input: json!({}),
                 output: None,
                 error_message: Some(error_message),
-            })
-            .await;
+            },
+        )
+        .await;
     }
 }
 

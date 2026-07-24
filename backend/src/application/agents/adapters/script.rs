@@ -1,27 +1,34 @@
 //! 处理脚本首次生成与已有脚本分镜修改，保持会话绑定和 step 记录语义一致。
 
-use super::{AgentRuntime, AgentRuntimeError};
+use super::{record_step, AgentRuntimeError, ScriptAgentAdapter};
 use crate::agents::ScriptAgentService;
-use crate::domain::conversation::{
-    AgentConversation, AgentMessage, AgentMessageRole, AgentRunRecord,
-    BindAgentConversationSubjectInput, CreateAgentMessageInput, CreateAgentStepInput,
-};
+use crate::domain::conversation::{BindAgentConversationSubjectInput, CreateAgentStepInput};
 use crate::domain::script::{Scene, Script, ScriptGenerationInput, ScriptStyle};
-use novex_model::LLMPrompt;
+use novex_agent::{AgentOutcome, AgentSession, StepRecorder, StoredMessage};
+use novex_model::{LLMClient, LLMPrompt};
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::Arc;
 use uuid::Uuid;
 
-impl AgentRuntime {
+impl ScriptAgentAdapter {
     pub(super) async fn handle_script_turn(
         &self,
-        conversation: &AgentConversation,
-        user_message: &AgentMessage,
-        run: &AgentRunRecord,
-    ) -> Result<AgentMessage, AgentRuntimeError> {
+        conversation: &AgentSession,
+        user_message: &StoredMessage,
+        run_id: Uuid,
+        llm_client: Arc<dyn LLMClient>,
+        steps: Arc<dyn StepRecorder>,
+    ) -> Result<AgentOutcome, AgentRuntimeError> {
         if conversation.subject_id.is_none() && conversation.subject_type.is_none() {
             return self
-                .handle_script_generation_turn(conversation, user_message, run)
+                .handle_script_generation_turn(
+                    conversation,
+                    user_message,
+                    run_id,
+                    llm_client,
+                    steps,
+                )
                 .await;
         }
 
@@ -35,20 +42,22 @@ impl AgentRuntime {
         }
 
         let script = self.script_repository.get_script(script_id).await?;
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 1,
                 step_type: "read_script".to_string(),
                 status: "succeeded".to_string(),
                 input: json!({ "script_id": script_id }),
                 output: Some(json!({ "scene_count": script.scenes.len() })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         let prompt = build_script_scene_patch_prompt(&script, &user_message.content);
-        let raw = self.llm_client.generate_script(prompt).await?;
+        let raw = llm_client.generate_script(prompt).await?;
         let patch = ScriptScenePatch::parse(&raw)?;
         let existing_scene = script
             .scenes
@@ -60,17 +69,19 @@ impl AgentRuntime {
                 sequence: patch.scene_sequence,
             })?;
 
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 2,
                 step_type: "llm_scene_patch".to_string(),
                 status: "succeeded".to_string(),
                 input: json!({ "message_id": user_message.id }),
                 output: Some(json!({ "scene_sequence": patch.scene_sequence })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         let updated_scene = Scene {
             id: existing_scene.id,
@@ -85,17 +96,19 @@ impl AgentRuntime {
             .update_scene(script_id, updated_scene)
             .await?;
 
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 3,
                 step_type: "update_scene".to_string(),
                 status: "succeeded".to_string(),
                 input: json!({ "script_id": script_id, "scene_sequence": patch.scene_sequence }),
                 output: Some(json!({ "updated_at": updated_script.updated_at })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         let content = if patch.reply.trim().is_empty() {
             format!("已修改第 {} 镜。", patch.scene_sequence)
@@ -103,42 +116,39 @@ impl AgentRuntime {
             patch.reply
         };
 
-        self.conversation_repository
-            .save_message(CreateAgentMessageInput {
-                conversation_id: conversation.id,
-                role: AgentMessageRole::Assistant,
-                content,
-                metadata: json!({
-                    "script_id": script_id,
-                    "scene_sequence": patch.scene_sequence,
-                    "intent": "edit_script",
-                    "script_created": false,
-                    "needs_input": false,
-                    "missing_fields": [],
-                }),
-            })
-            .await
-            .map_err(AgentRuntimeError::from)
+        Ok(AgentOutcome::new(
+            content,
+            json!({
+                "script_id": script_id,
+                "scene_sequence": patch.scene_sequence,
+                "intent": "edit_script",
+                "script_created": false,
+                "needs_input": false,
+                "missing_fields": [],
+            }),
+        ))
     }
 
     async fn handle_script_generation_turn(
         &self,
-        conversation: &AgentConversation,
-        user_message: &AgentMessage,
-        run: &AgentRunRecord,
-    ) -> Result<AgentMessage, AgentRuntimeError> {
+        conversation: &AgentSession,
+        user_message: &StoredMessage,
+        run_id: Uuid,
+        llm_client: Arc<dyn LLMClient>,
+        steps: Arc<dyn StepRecorder>,
+    ) -> Result<AgentOutcome, AgentRuntimeError> {
         let project_id = conversation.project_id.ok_or_else(|| {
             AgentRuntimeError::Validation("脚本生成会话缺少 project_id".to_string())
         })?;
 
-        let raw = self
-            .llm_client
+        let raw = llm_client
             .generate_script(build_script_generation_intent_prompt(&user_message.content))
             .await?;
         let intent = ScriptGenerationIntent::parse(&raw)?;
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 1,
                 step_type: "parse_generation_intent".to_string(),
                 status: "succeeded".to_string(),
@@ -148,8 +158,9 @@ impl AgentRuntime {
                     "missing_fields": intent.missing_fields,
                 })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         if intent.needs_input() {
             let content = if intent.reply.trim().is_empty() {
@@ -157,43 +168,39 @@ impl AgentRuntime {
             } else {
                 intent.reply
             };
-            return self
-                .conversation_repository
-                .save_message(CreateAgentMessageInput {
-                    conversation_id: conversation.id,
-                    role: AgentMessageRole::Assistant,
-                    content,
-                    metadata: json!({
-                        "intent": "generate_script",
-                        "script_id": null,
-                        "script_created": false,
-                        "needs_input": true,
-                        "missing_fields": intent.missing_fields,
-                    }),
-                })
-                .await
-                .map_err(AgentRuntimeError::from);
+            return Ok(AgentOutcome::new(
+                content,
+                json!({
+                    "intent": "generate_script",
+                    "script_id": null,
+                    "script_created": false,
+                    "needs_input": true,
+                    "missing_fields": intent.missing_fields,
+                }),
+            ));
         }
 
         let reply = intent.reply.clone();
         let request = intent.into_generate_request(project_id)?;
         let service = ScriptAgentService::new(
-            self.llm_client.clone(),
+            llm_client,
             self.script_repository.clone(),
             self.project_repository.clone(),
         );
         let script = service.generate_script(request).await?;
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 2,
                 step_type: "generate_script".to_string(),
                 status: "succeeded".to_string(),
                 input: json!({ "project_id": project_id }),
                 output: Some(json!({ "script_id": script.id, "scene_count": script.scenes.len() })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         self.conversation_repository
             .bind_conversation_subject(BindAgentConversationSubjectInput {
@@ -208,21 +215,16 @@ impl AgentRuntime {
         } else {
             reply
         };
-        self.conversation_repository
-            .save_message(CreateAgentMessageInput {
-                conversation_id: conversation.id,
-                role: AgentMessageRole::Assistant,
-                content,
-                metadata: json!({
-                    "intent": "generate_script",
-                    "script_id": script.id,
-                    "script_created": true,
-                    "needs_input": false,
-                    "missing_fields": [],
-                }),
-            })
-            .await
-            .map_err(AgentRuntimeError::from)
+        Ok(AgentOutcome::new(
+            content,
+            json!({
+                "intent": "generate_script",
+                "script_id": script.id,
+                "script_created": true,
+                "needs_input": false,
+                "missing_fields": [],
+            }),
+        ))
     }
 }
 

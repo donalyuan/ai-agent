@@ -1199,10 +1199,24 @@ dependencies = [
 [[package]]
 name = "novex-agent"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "novex-ai-core",
+ "novex-model",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "novex-ai-core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "novex-api"
@@ -1213,6 +1227,8 @@ dependencies = [
  "chrono",
  "image",
  "mime_guess",
+ "novex-agent",
+ "novex-ai-core",
  "novex-model",
  "redis",
  "serde",

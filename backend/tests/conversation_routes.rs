@@ -508,6 +508,42 @@ async fn conversation_routes_create_send_and_list_messages() {
     assert_eq!(turn["assistant_message"]["role"], "assistant");
     assert_eq!(turn["assistant_message"]["metadata"]["scene_sequence"], 3);
     assert_eq!(turn["run"]["status"], "succeeded");
+    assert_eq!(turn["user_message"]["metadata"], json!({}));
+    assert_eq!(
+        turn["run"]["input"]["user_message_id"],
+        turn["user_message"]["message_id"]
+    );
+    assert_eq!(turn["run"]["input"]["conversation_id"], conversation_id);
+    assert_eq!(turn["run"]["model_id"], model_id.to_string());
+    assert_eq!(
+        turn["run"]["model_snapshot"]["model_id"],
+        model_id.to_string()
+    );
+    assert_eq!(
+        turn["run"]["model_snapshot"]["api_protocol"],
+        "openai_responses"
+    );
+    assert_eq!(
+        turn["run"]["output"]["assistant_message_id"],
+        turn["assistant_message"]["message_id"]
+    );
+
+    let step_types = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT step_type
+        FROM agent_steps
+        WHERE agent_run_id = $1
+        ORDER BY step_order
+        "#,
+    )
+    .bind(Uuid::parse_str(turn["run"]["run_id"].as_str().unwrap()).unwrap())
+    .fetch_all(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        step_types,
+        vec!["read_script", "llm_scene_patch", "update_scene"]
+    );
 
     let list_response = app
         .clone()

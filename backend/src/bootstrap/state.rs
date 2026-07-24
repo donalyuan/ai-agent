@@ -37,6 +37,7 @@ pub struct AppState {
     pub(crate) pg_pool: Option<PgPool>,
     pub(crate) redis_client: Option<redis::Client>,
     model_client_resolver: Option<Arc<dyn ModelClientResolver>>,
+    agent_registry: Option<Arc<novex_agent::AgentRegistry>>,
 }
 
 impl AppState {
@@ -46,6 +47,7 @@ impl AppState {
             pg_pool: None,
             redis_client: None,
             model_client_resolver: None,
+            agent_registry: None,
         }
     }
 
@@ -54,11 +56,13 @@ impl AppState {
         pg_pool: PgPool,
         redis_client: Option<redis::Client>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let agent_registry = crate::application::agents::kernel::build_registry(&pg_pool)?;
         Ok(Self {
             config,
             pg_pool: Some(pg_pool),
             redis_client,
             model_client_resolver: None,
+            agent_registry: Some(Arc::new(agent_registry)),
         })
     }
 
@@ -98,11 +102,13 @@ impl AppState {
             PostgresConversationRepository::new(pool.clone()),
             PostgresScriptRepository::new(pool.clone()),
             PostgresProjectRepository::new(pool.clone()),
-            PostgresTopicRepository::new(pool.clone()),
             PostgresAiModelRepository::new(pool.clone()),
             PostgresVoiceCatalogRepository::new(pool.clone()),
             PostgresWorkLibraryRepository::new(pool.clone()),
             self.text_model_resolver(pool),
+            self.agent_registry
+                .clone()
+                .ok_or(AppStateError::MissingDependency("agent registry"))?,
         ))
     }
 
@@ -112,7 +118,6 @@ impl AppState {
             PostgresProjectRepository::new(pool.clone()),
             PostgresTopicRepository::new(pool.clone()),
             PostgresConversationRepository::new(pool.clone()),
-            PostgresScriptRepository::new(pool.clone()),
             self.text_model_resolver(pool),
         ))
     }
@@ -231,12 +236,16 @@ impl AppState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppStateError {
     DatabasePoolUnavailable,
+    MissingDependency(&'static str),
 }
 
 impl fmt::Display for AppStateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DatabasePoolUnavailable => formatter.write_str("database pool is not configured"),
+            Self::MissingDependency(name) => {
+                write!(formatter, "missing required dependency: {name}")
+            }
         }
     }
 }

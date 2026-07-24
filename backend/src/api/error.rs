@@ -2,7 +2,7 @@
 
 use crate::agents::ScriptAgentError;
 use crate::application;
-use crate::application::agents::runtime::AgentRuntimeError;
+use crate::application::agents::adapters::AgentRuntimeError;
 use crate::application::asset_generation::{
     AssetGenerationApplicationError, SceneVisualManifestBlocker,
 };
@@ -159,6 +159,7 @@ impl From<ProjectApplicationError> for ScriptApiError {
             ProjectApplicationError::ConversationRepository(error) => {
                 Self::ConversationRepository(error)
             }
+            ProjectApplicationError::Runtime(error) => Self::AgentRuntime(error),
             ProjectApplicationError::ModelResolve(error) => Self::ModelResolve(error),
             ProjectApplicationError::Llm(error) => Self::StrategyDraftLlm(error),
             ProjectApplicationError::InvalidOutput(message) => Self::StrategyDraftOutput(message),
@@ -191,6 +192,7 @@ impl From<ScriptApplicationError> for ScriptApiError {
             ScriptApplicationError::ConversationRepository(error) => {
                 Self::ConversationRepository(error)
             }
+            ScriptApplicationError::Runtime(error) => Self::AgentRuntime(error),
             ScriptApplicationError::ModelResolve(error) => Self::ModelResolve(error),
             ScriptApplicationError::Serialization(message) => Self::State(message),
         }
@@ -706,5 +708,9 @@ fn agent_runtime_error_response(error: AgentRuntimeError) -> (StatusCode, Json<s
                 Json(json!({ "error": "Agent 调用模型失败", "details": other.to_string() })),
             ),
         },
+        AgentRuntimeError::Kernel(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Agent 执行失败", "details": message })),
+        ),
     }
 }

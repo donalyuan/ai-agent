@@ -1,4 +1,7 @@
-use novex_api::application::agents::runtime::{AgentRuntime, AgentTurnRequest};
+use novex_agent::{AgentInvocation, AgentRunCoordinator};
+use novex_api::application::agents::adapters::{
+    ScriptAgentAdapter, SoundAgentAdapter, TopicAgentAdapter, WorkAgentAdapter,
+};
 use novex_api::application::ai_models::AiModelService;
 use novex_api::application::asset_generation::AssetGenerationService;
 use novex_api::application::conversations::ConversationService;
@@ -16,7 +19,7 @@ use novex_api::domain::topic::{ContentTopic, ContentTopicStatus};
 fn layered_public_modules_are_available() {
     fn assert_type<T>() {}
 
-    assert_type::<AgentRuntime>();
+    assert_type::<AgentRunCoordinator>();
     assert_type::<AiModelService>();
     assert_type::<ProjectService>();
     assert_type::<MaterialService>();
@@ -25,7 +28,11 @@ fn layered_public_modules_are_available() {
     assert_type::<HealthService>();
     assert_type::<TopicService>();
     assert_type::<AssetGenerationService>();
-    assert_type::<AgentTurnRequest>();
+    assert_type::<AgentInvocation>();
+    assert_type::<ScriptAgentAdapter>();
+    assert_type::<TopicAgentAdapter>();
+    assert_type::<SoundAgentAdapter>();
+    assert_type::<WorkAgentAdapter>();
     assert_type::<AppConfig>();
     assert_type::<AppState>();
     assert_type::<AgentConversation>();
@@ -84,8 +91,8 @@ fn lower_layers_do_not_depend_on_http_api_modules() {
             include_str!("../src/agents/script_agent.rs"),
         ),
         (
-            "application/agents/runtime/mod.rs",
-            include_str!("../src/application/agents/runtime/mod.rs"),
+            "application/agents/adapters/mod.rs",
+            include_str!("../src/application/agents/adapters/mod.rs"),
         ),
         (
             "bootstrap/state.rs",
@@ -105,4 +112,73 @@ fn lower_layers_do_not_depend_on_http_api_modules() {
         !workspace_application.contains("crate::bootstrap"),
         "application/workspace.rs must receive repositories instead of AppState"
     );
+}
+
+#[test]
+fn foundation_agent_crates_do_not_depend_on_backend_or_transport_layers() {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("backend must live under the workspace root");
+
+    for crate_name in ["novex-ai-core", "novex-agent"] {
+        let crate_dir = workspace_root.join("crates").join(crate_name);
+        let manifest = std::fs::read_to_string(crate_dir.join("Cargo.toml"))
+            .expect("foundation crate manifest should be readable");
+        assert!(
+            !manifest.contains("novex-api") && !manifest.contains("backend"),
+            "{crate_name} must not depend on backend"
+        );
+        assert!(
+            !manifest.contains("axum") && !manifest.contains("sqlx"),
+            "{crate_name} must not depend on Axum or SQLx"
+        );
+
+        let mut sources = Vec::new();
+        collect_rust_sources(&crate_dir.join("src"), &mut sources);
+        for (path, source) in sources {
+            for forbidden in ["novex_api", "crate::api", "axum::", "sqlx::"] {
+                assert!(
+                    !source.contains(forbidden),
+                    "foundation source {} must not contain {forbidden}",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn agent_kernel_has_no_business_dispatch_or_legacy_runtime_path() {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("backend must live under the workspace root");
+    let kernel_source =
+        std::fs::read_to_string(workspace_root.join("crates/novex-agent/src/lib.rs"))
+            .expect("novex-agent source should be readable");
+    for forbidden in [
+        "\"script\"",
+        "\"topic\"",
+        "\"sound\"",
+        "\"work\"",
+        "match conversation.agent_type",
+    ] {
+        assert!(
+            !kernel_source.contains(forbidden),
+            "novex-agent kernel must not contain business dispatch token {forbidden}"
+        );
+    }
+
+    let legacy_path = workspace_root.join("backend/src/application/agents/runtime");
+    assert!(
+        !legacy_path.exists(),
+        "legacy Agent Runtime path must be removed"
+    );
+
+    let adapter_source = std::fs::read_to_string(
+        workspace_root.join("backend/src/application/agents/adapters/mod.rs"),
+    )
+    .expect("adapter module should be readable");
+    assert!(!adapter_source.contains("Option<Arc<dyn TopicRepository"));
+    assert!(!adapter_source.contains("Option<Arc<PostgresVoiceCatalogRepository"));
+    assert!(!adapter_source.contains("Option<Arc<PostgresWorkLibraryRepository"));
 }

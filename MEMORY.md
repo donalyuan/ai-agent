@@ -9,6 +9,7 @@
 - `docs/memory/project-memory-structure.md`：项目记忆结构规则
 - `docs/memory/frontend-design-skill-requirement.md`：前端设计约束
 - `docs/memory/project-tech-stack.md`：技术栈与架构设计
+- `docs/memory/agent-foundation-direction.md`：Agent 基座执行模式、角色分化、Context/Memory 分层和虚拟制作团队方向
 
 ### 视频工作台
 
@@ -27,6 +28,7 @@
 - `apps/video-agent/` 承载视频内容生产流程；`admin/` 承载用户、权限、模型、工具、MCP、任务、日志、运行状态、成本、限额和健康检查等控制面能力。
 - 后端采用 Rust + Axum + SQLx + PostgreSQL；向量库采用 Milvus Standalone；任务基础设施采用 Redis；视频生成与平台发布 Worker 采用 Python；前端采用 Next.js + TypeScript + shadcn/ui。
 - `backend/` 承担控制面 API 和业务编排入口，可复用 AI 能力放入 `crates/*`，Python sidecar/runtime 放入 `services/*`，业务应用放入 `apps/*`。
+- Agent 基座默认采用受控工作流，局部 `Planner` 作为可选能力；Video Agent 长期采用 `ProductionOrchestrator + RoleDefinition + ProductionState + PromptCompiler + Gate` 的虚拟制作团队结构，详细规则见 `docs/memory/agent-foundation-direction.md`。
 - 系统长期边界以 `ARCHITECTURE.md` 和仓库当前代码为准，不得用历史记忆覆盖当前仓库事实。
 
 ### 产品与开发治理

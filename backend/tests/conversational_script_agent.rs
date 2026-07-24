@@ -1,13 +1,14 @@
 use async_trait::async_trait;
+use novex_agent::{AgentInvocation, AgentRegistry};
 use novex_api::agents::{LLMClient, LLMError};
-use novex_api::application::agents::runtime::{AgentRuntime, AgentTurnRequest};
+use novex_api::application::agents::adapters::ScriptAgentAdapter;
 use novex_api::domain::conversation::{
     AgentConversationStatus, AgentMessageRole, CreateAgentConversationInput,
 };
 use novex_api::domain::script::ScriptListFilter;
 use novex_api::repositories::{
     ConversationRepository, PostgresConversationRepository, PostgresProjectRepository,
-    ScriptRepository,
+    ProjectRepository, ScriptRepository,
 };
 use novex_model::LLMPrompt;
 use serde_json::json;
@@ -15,8 +16,11 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+#[path = "support/agent_executor.rs"]
+mod agent_executor;
 mod support;
 
+use agent_executor::TestAgentExecutor;
 use support::test_database::TestDatabase;
 
 fn database_url() -> String {
@@ -205,6 +209,28 @@ impl LLMClient for ScriptedLLMClient {
     }
 }
 
+fn script_executor(
+    conversation_repository: Arc<PostgresConversationRepository>,
+    script_repository: Arc<dyn ScriptRepository>,
+    project_repository: Arc<dyn ProjectRepository>,
+    llm_client: Arc<dyn LLMClient>,
+) -> TestAgentExecutor {
+    let mut registry = AgentRegistry::new();
+    registry
+        .register(Arc::new(ScriptAgentAdapter::new(
+            conversation_repository.clone(),
+            script_repository,
+            project_repository,
+        )))
+        .unwrap();
+    TestAgentExecutor::new(
+        registry,
+        (*conversation_repository).clone(),
+        llm_client,
+        None,
+    )
+}
+
 #[tokio::test]
 async fn script_agent_dialogue_updates_target_scene_and_records_messages() {
     let (admin_pool, test_pool, database_name) = migrated_pool().await;
@@ -223,7 +249,7 @@ async fn script_agent_dialogue_updates_target_scene_and_records_messages() {
         "duration_sec": 10,
         "reply": "已把第 3 镜改成深夜上线前的冲突场景，强化紧迫感和人工验证。"
     })));
-    let runtime = AgentRuntime::new(
+    let runtime = script_executor(
         conversation_repository.clone(),
         script_repository.clone(),
         project_repository,
@@ -243,10 +269,12 @@ async fn script_agent_dialogue_updates_target_scene_and_records_messages() {
     assert_eq!(conversation.status, AgentConversationStatus::Active);
 
     let response = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "把第 3 镜改得更有冲突感，画面换成办公室深夜加班".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({}),
         })
         .await
         .unwrap();
@@ -337,7 +365,7 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
             ]
         }),
     ]));
-    let runtime = AgentRuntime::new(
+    let runtime = script_executor(
         conversation_repository.clone(),
         script_repository.clone(),
         project_repository,
@@ -356,10 +384,12 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
         .unwrap();
 
     let response = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "帮我生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({}),
         })
         .await
         .unwrap();
@@ -432,7 +462,7 @@ async fn script_agent_dialogue_asks_for_missing_generation_fields_without_creati
         "reply": "请补充选题、风格和分镜数，例如：生成一个关于 AI 工作流的 6 镜知识科普脚本。",
         "missing_fields": ["topic", "style", "scene_count"]
     })));
-    let runtime = AgentRuntime::new(
+    let runtime = script_executor(
         conversation_repository.clone(),
         script_repository.clone(),
         project_repository,
@@ -451,10 +481,12 @@ async fn script_agent_dialogue_asks_for_missing_generation_fields_without_creati
         .unwrap();
 
     let response = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "帮我生成脚本".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({}),
         })
         .await
         .unwrap();
@@ -503,7 +535,7 @@ async fn script_agent_dialogue_records_failed_run_when_generation_llm_fails() {
     ));
     let project_repository = Arc::new(PostgresProjectRepository::new(test_pool.clone()));
     let llm_client = Arc::new(ScriptedLLMClient::failing(LLMError::Timeout));
-    let runtime = AgentRuntime::new(
+    let runtime = script_executor(
         conversation_repository.clone(),
         script_repository.clone(),
         project_repository,
@@ -522,10 +554,12 @@ async fn script_agent_dialogue_records_failed_run_when_generation_llm_fails() {
         .unwrap();
 
     let error = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "帮我生成一个关于 ChatGPT 工作流的 3 镜知识科普脚本".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({}),
         })
         .await
         .unwrap_err();

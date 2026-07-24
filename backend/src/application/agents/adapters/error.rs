@@ -5,6 +5,7 @@ use crate::repositories::{
     ConversationRepositoryError, ProjectRepositoryError, ScriptRepositoryError,
     TopicRepositoryError, VoiceCatalogRepositoryError, WorkLibraryRepositoryError,
 };
+use novex_agent::BoxError;
 use novex_model::LLMError;
 use std::fmt;
 use uuid::Uuid;
@@ -23,6 +24,16 @@ pub enum AgentRuntimeError {
     WorkLibraryRepository(WorkLibraryRepositoryError),
     ScriptAgent(ScriptAgentError),
     Llm(LLMError),
+    Kernel(String),
+}
+
+impl AgentRuntimeError {
+    pub fn from_boxed(error: BoxError) -> Self {
+        match error.downcast::<Self>() {
+            Ok(error) => *error,
+            Err(error) => Self::Kernel(error.to_string()),
+        }
+    }
 }
 
 impl From<ConversationRepositoryError> for AgentRuntimeError {
@@ -100,6 +111,7 @@ impl fmt::Display for AgentRuntimeError {
             Self::WorkLibraryRepository(error) => write!(formatter, "{error}"),
             Self::ScriptAgent(error) => write!(formatter, "{error}"),
             Self::Llm(error) => write!(formatter, "{error}"),
+            Self::Kernel(message) => write!(formatter, "agent kernel error: {message}"),
         }
     }
 }

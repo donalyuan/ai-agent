@@ -1,17 +1,21 @@
 use async_trait::async_trait;
+use novex_agent::{AgentInvocation, AgentRegistry, RunRecorder, StepRecorder};
 use novex_api::agents::{LLMClient, LLMError};
-use novex_api::application::agents::runtime::{AgentRuntime, AgentRuntimeError, AgentTurnRequest};
+use novex_api::application::agents::adapters::{
+    AgentRuntimeError, AgentTurnResponse, TopicAgentAdapter,
+};
+use novex_api::application::agents::kernel::PostgresAgentKernelStore;
 use novex_api::domain::conversation::{
     AgentMessageRole, CreateAgentConversationInput, CreateAgentMessageInput,
 };
 use novex_api::domain::topic::{
     ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatchStatus,
-    TopicQualityEvaluationStatus, TopicReviewPriority, TopicReviewRiskFlag,
+    TopicQualityEvaluationStatus, TopicReviewPriority, TopicReviewRiskFlag, TopicReviewSnapshot,
 };
 use novex_api::repositories::{
     ConversationRepository, CreateContentTopicInput, CreateTopicGenerationBatchInput,
-    PostgresConversationRepository, PostgresProjectRepository, PostgresScriptRepository,
-    PostgresTopicRepository, TopicRepository,
+    PostgresConversationRepository, PostgresProjectRepository, PostgresTopicRepository,
+    TopicRepository,
 };
 use novex_model::LLMPrompt;
 use serde_json::json;
@@ -19,8 +23,11 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+#[path = "support/agent_executor.rs"]
+mod agent_executor;
 mod support;
 
+use agent_executor::TestAgentExecutor;
 use support::test_database::TestDatabase;
 
 fn database_url() -> String {
@@ -197,25 +204,75 @@ impl LLMClient for ScriptedLLMClient {
     }
 }
 
+struct TopicTestRuntime {
+    executor: TestAgentExecutor,
+    adapter: Arc<TopicAgentAdapter>,
+    llm_client: Arc<ScriptedLLMClient>,
+    runs: Arc<dyn RunRecorder>,
+    steps: Arc<dyn StepRecorder>,
+}
+
+impl TopicTestRuntime {
+    async fn execute(
+        &self,
+        invocation: AgentInvocation,
+    ) -> Result<AgentTurnResponse, AgentRuntimeError> {
+        self.executor.execute(invocation).await
+    }
+
+    async fn review_topic_group(
+        &self,
+        project_id: Uuid,
+        root_batch_id: Uuid,
+    ) -> Result<TopicReviewSnapshot, AgentRuntimeError> {
+        self.adapter
+            .review_topic_group(
+                project_id,
+                root_batch_id,
+                self.llm_client.clone(),
+                None,
+                self.runs.clone(),
+                self.steps.clone(),
+            )
+            .await
+    }
+}
+
 fn build_topic_runtime(
     pool: PgPool,
     llm_client: Arc<ScriptedLLMClient>,
 ) -> (
-    AgentRuntime,
+    TopicTestRuntime,
     Arc<PostgresConversationRepository>,
     Arc<PostgresTopicRepository>,
 ) {
     let conversation_repository = Arc::new(PostgresConversationRepository::new(pool.clone()));
-    let script_repository = Arc::new(PostgresScriptRepository::new(pool.clone()));
     let project_repository = Arc::new(PostgresProjectRepository::new(pool.clone()));
     let topic_repository = Arc::new(PostgresTopicRepository::new(pool));
-    let runtime = AgentRuntime::new(
+    let adapter = Arc::new(TopicAgentAdapter::new(
         conversation_repository.clone(),
-        script_repository,
         project_repository,
+        topic_repository.clone(),
+    ));
+    let mut registry = AgentRegistry::new();
+    registry.register(adapter.clone()).unwrap();
+    let store = Arc::new(PostgresAgentKernelStore::new(
+        (*conversation_repository).clone(),
+    ));
+    let runs: Arc<dyn RunRecorder> = store.clone();
+    let steps: Arc<dyn StepRecorder> = store;
+    let runtime = TopicTestRuntime {
+        executor: TestAgentExecutor::new(
+            registry,
+            (*conversation_repository).clone(),
+            llm_client.clone(),
+            None,
+        ),
+        adapter,
         llm_client,
-    )
-    .with_topic_repository(topic_repository.clone());
+        runs,
+        steps,
+    };
 
     (runtime, conversation_repository, topic_repository)
 }
@@ -287,10 +344,12 @@ async fn account_strategy_context_is_injected_into_topic_generation_and_quality_
         .unwrap();
 
     runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "生成 1 个 AI 工具教程选题".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({"supplement_of_batch_id": null}),
         })
         .await
         .unwrap();
@@ -817,10 +876,12 @@ async fn topic_agent_generates_topics_persists_batch_and_records_steps() {
         .unwrap();
 
     let response = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "本周 AI 工具方向，生成 2 个选题".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({"supplement_of_batch_id": null}),
         })
         .await
         .unwrap();
@@ -978,10 +1039,12 @@ async fn topic_agent_filters_candidates_through_quality_gate_before_persisting()
         .unwrap();
 
     let response = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "本周 AI 工具方向，生成 3 个选题".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({"supplement_of_batch_id": null}),
         })
         .await
         .unwrap();
@@ -1216,10 +1279,12 @@ async fn topic_agent_rewrites_once_when_first_quality_pass_rate_is_low() {
         .unwrap();
 
     let response = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "本周 AI 工具方向，生成 3 个选题".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({"supplement_of_batch_id": null}),
         })
         .await
         .unwrap();
@@ -1330,10 +1395,12 @@ async fn topic_agent_quality_evaluation_failure_marks_batch_failed_without_topic
         .unwrap();
 
     let error = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "本周 AI 工具方向，生成 1 个选题".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({"supplement_of_batch_id": null}),
         })
         .await
         .unwrap_err();
@@ -1455,10 +1522,12 @@ async fn topic_agent_marks_batch_failed_when_rewrite_has_no_passed_candidates() 
         .unwrap();
 
     let error = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "本周 AI 工具方向，生成 1 个选题".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({"supplement_of_batch_id": null}),
         })
         .await
         .unwrap_err();
@@ -1563,10 +1632,12 @@ async fn topic_agent_generates_supplement_batch_without_mutating_original_batch(
         .unwrap();
 
     let response = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "围绕遗漏的 AI 工作流角度补充 1 个选题".to_string(),
-            supplement_of_batch_id: Some(original_batch.id),
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({"supplement_of_batch_id": Some(original_batch.id)}),
         })
         .await
         .unwrap();
@@ -1740,10 +1811,12 @@ async fn topic_agent_includes_topic_context_when_generating_supplement_batch() {
         .unwrap();
 
     runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "继续补充 1 个复盘角度".to_string(),
-            supplement_of_batch_id: Some(existing_supplement_batch.id),
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({"supplement_of_batch_id": Some(existing_supplement_batch.id)}),
         })
         .await
         .unwrap();
@@ -1892,10 +1965,12 @@ async fn topic_agent_rejects_unusable_supplement_targets_before_llm_call() {
 
     for (target_batch_id, label, expected_error) in cases {
         let error = runtime
-            .handle_turn(AgentTurnRequest {
-                conversation_id: conversation.id,
+            .execute(AgentInvocation {
+                session_id: conversation.id,
                 user_message: format!("{label}: 补充 1 个选题"),
-                supplement_of_batch_id: Some(target_batch_id),
+                user_metadata: json!({}),
+                run_input: json!({}),
+                payload: json!({"supplement_of_batch_id": Some(target_batch_id)}),
             })
             .await
             .unwrap_err();
@@ -1961,10 +2036,12 @@ async fn topic_agent_rejects_invalid_llm_output_without_partial_topics() {
         .unwrap();
 
     let error = runtime
-        .handle_turn(AgentTurnRequest {
-            conversation_id: conversation.id,
+        .execute(AgentInvocation {
+            session_id: conversation.id,
             user_message: "生成 1 个 AI 工具方向选题".to_string(),
-            supplement_of_batch_id: None,
+            user_metadata: json!({}),
+            run_input: json!({}),
+            payload: json!({"supplement_of_batch_id": null}),
         })
         .await
         .unwrap_err();
@@ -2072,10 +2149,12 @@ async fn topic_agent_rejects_empty_invalid_out_of_range_and_llm_failure_outputs(
             .unwrap();
 
         let error = runtime
-            .handle_turn(AgentTurnRequest {
-                conversation_id: conversation.id,
+            .execute(AgentInvocation {
+                session_id: conversation.id,
                 user_message: "生成 1 个 AI 工具方向选题".to_string(),
-                supplement_of_batch_id: None,
+                user_metadata: json!({}),
+                run_input: json!({}),
+                payload: json!({"supplement_of_batch_id": null}),
             })
             .await
             .unwrap_err();

@@ -1,36 +1,34 @@
-use super::{AgentRuntime, AgentRuntimeError, SoundAgentContext};
-use crate::domain::conversation::{
-    AgentConversation, AgentMessage, AgentMessageRole, AgentRunRecord, CreateAgentMessageInput,
-    CreateAgentStepInput,
-};
+use super::{record_step, AgentRuntimeError, SoundAgentAdapter, SoundAgentContext};
+use crate::domain::conversation::CreateAgentStepInput;
 use crate::repositories::VoiceCatalogEntry;
-use novex_model::LLMPrompt;
+use novex_agent::{AgentOutcome, AgentSession, StepRecorder, StoredMessage};
+use novex_model::{LLMClient, LLMPrompt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use uuid::Uuid;
 
-impl AgentRuntime {
+impl SoundAgentAdapter {
     pub(super) async fn handle_sound_turn(
         &self,
-        conversation: &AgentConversation,
-        user_message: &AgentMessage,
-        run: &AgentRunRecord,
+        conversation: &AgentSession,
+        user_message: &StoredMessage,
+        run_id: Uuid,
         sound_context: &SoundAgentContext,
-    ) -> Result<AgentMessage, AgentRuntimeError> {
+        llm_client: Arc<dyn LLMClient>,
+        steps: Arc<dyn StepRecorder>,
+    ) -> Result<AgentOutcome, AgentRuntimeError> {
         let model_id = speech_model_id(conversation)?;
-        let repository = self.voice_catalog_repository.as_ref().ok_or_else(|| {
-            AgentRuntimeError::Validation("声音 Agent 未配置音色目录 repository".to_string())
-        })?;
+        let repository = self.voice_catalog_repository.as_ref();
         let catalog = repository.catalog(model_id, false).await?;
         if catalog.voices.is_empty() {
             return Err(AgentRuntimeError::Validation(
                 "当前 TTS 模型没有可用音色，请先同步目录".to_string(),
             ));
         }
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(steps.as_ref(), CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 1,
                 step_type: "read_voice_catalog".to_string(),
                 status: "succeeded".to_string(),
@@ -44,8 +42,7 @@ impl AgentRuntime {
             })
             .await?;
 
-        let raw = self
-            .llm_client
+        let raw = llm_client
             .generate_script(sound_recommendation_prompt(
                 &user_message.content,
                 sound_context,
@@ -62,9 +59,10 @@ impl AgentRuntime {
                 AgentRuntimeError::InvalidLlmOutput("声音 Agent 推荐了目录外音色".to_string())
             })?;
         validate_recommendation(&recommendation, voice, &catalog.model_settings)?;
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 2,
                 step_type: "recommend_sound".to_string(),
                 status: "succeeded".to_string(),
@@ -77,28 +75,24 @@ impl AgentRuntime {
                     "requires_confirmation": true,
                 })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
-        self.conversation_repository
-            .save_message(CreateAgentMessageInput {
-                conversation_id: conversation.id,
-                role: AgentMessageRole::Assistant,
-                content: recommendation.reply,
-                metadata: json!({
-                    "intent": "recommend_sound",
-                    "speech_model_id": model_id,
-                    "recommended_voice_type": recommendation.recommended_voice_type,
-                    "language": recommendation.language,
-                    "tts_text": recommendation.tts_text,
-                    "subtitle_segments": recommendation.subtitle_segments,
-                    "parameters": recommendation.parameters,
-                    "requires_confirmation": true,
-                    "tool_execution": false,
-                }),
-            })
-            .await
-            .map_err(AgentRuntimeError::from)
+        Ok(AgentOutcome::new(
+            recommendation.reply,
+            json!({
+                "intent": "recommend_sound",
+                "speech_model_id": model_id,
+                "recommended_voice_type": recommendation.recommended_voice_type,
+                "language": recommendation.language,
+                "tts_text": recommendation.tts_text,
+                "subtitle_segments": recommendation.subtitle_segments,
+                "parameters": recommendation.parameters,
+                "requires_confirmation": true,
+                "tool_execution": false,
+            }),
+        ))
     }
 }
 
@@ -153,7 +147,7 @@ impl SoundRecommendation {
     }
 }
 
-fn speech_model_id(conversation: &AgentConversation) -> Result<Uuid, AgentRuntimeError> {
+fn speech_model_id(conversation: &AgentSession) -> Result<Uuid, AgentRuntimeError> {
     conversation
         .metadata
         .get("speech_model_id")

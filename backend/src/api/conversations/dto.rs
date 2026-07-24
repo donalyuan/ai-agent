@@ -1,4 +1,4 @@
-use crate::application::agents::runtime::SoundAgentContext;
+use crate::application::agents::adapters::SoundAgentContext;
 use crate::application::conversations::CreateConversationCommand;
 use crate::domain::conversation::{
     AgentConversation, AgentConversationStatus, AgentMessage, AgentMessageRole, AgentRunRecord,

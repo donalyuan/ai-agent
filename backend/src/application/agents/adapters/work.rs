@@ -1,13 +1,13 @@
 //! 作品 Agent adapter：把自然语言意图转换为受约束快照补丁，并原子生成待确认差异。
 
-use super::{AgentRuntime, AgentRuntimeError};
-use crate::domain::conversation::{
-    AgentConversation, AgentMessage, AgentMessageRole, AgentRunRecord, CreateAgentMessageInput,
-    CreateAgentStepInput,
-};
-use novex_model::LLMPrompt;
+use super::{record_step, AgentRuntimeError, WorkAgentAdapter};
+use crate::domain::conversation::CreateAgentStepInput;
+use novex_agent::{AgentOutcome, AgentSession, StepRecorder, StoredMessage};
+use novex_model::{LLMClient, LLMPrompt};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -59,13 +59,15 @@ impl WorkAgentOutput {
     }
 }
 
-impl AgentRuntime {
+impl WorkAgentAdapter {
     pub(super) async fn handle_work_turn(
         &self,
-        conversation: &AgentConversation,
-        user_message: &AgentMessage,
-        run: &AgentRunRecord,
-    ) -> Result<AgentMessage, AgentRuntimeError> {
+        conversation: &AgentSession,
+        user_message: &StoredMessage,
+        run_id: Uuid,
+        llm_client: Arc<dyn LLMClient>,
+        steps: Arc<dyn StepRecorder>,
+    ) -> Result<AgentOutcome, AgentRuntimeError> {
         let project_id = conversation
             .project_id
             .ok_or_else(|| AgentRuntimeError::Validation("作品会话必须绑定项目".to_string()))?;
@@ -75,9 +77,10 @@ impl AgentRuntime {
                     "作品会话绑定项目不存在".to_string(),
                 ));
             }
-            self.conversation_repository
-                .add_step(CreateAgentStepInput {
-                    agent_run_id: run.id,
+            record_step(
+                steps.as_ref(),
+                CreateAgentStepInput {
+                    agent_run_id: run_id,
                     step_order: 1,
                     step_type: "recommend_work_plan".into(),
                     status: "succeeded".into(),
@@ -86,24 +89,21 @@ impl AgentRuntime {
                         json!({"requires_confirmation": true, "downstream_called": false}),
                     ),
                     error_message: None,
-                })
-                .await?;
-            let reply = self.llm_client.generate_script(LLMPrompt {
+                },
+            )
+            .await?;
+            let reply = llm_client.generate_script(LLMPrompt {
                 system: "你是作品生成 Agent。只提供可见的全片方案、分段提示词和模型建议，不调用视频模型；必须等待用户确认后才生成。".into(),
                 user: user_message.content.clone(),
                 max_output_tokens: Some(1200),
                 output_schema: None,
             }).await?;
-            return self.conversation_repository.save_message(CreateAgentMessageInput {
-                conversation_id: conversation.id,
-                role: AgentMessageRole::Assistant,
-                content: reply.trim().to_string(),
-                metadata: json!({"intent": "recommend_work_plan", "requires_confirmation": true, "downstream_called": false}),
-            }).await.map_err(AgentRuntimeError::from);
+            return Ok(AgentOutcome::new(
+                reply.trim(),
+                json!({"intent": "recommend_work_plan", "requires_confirmation": true, "downstream_called": false}),
+            ));
         };
-        let repository = self.work_library_repository.as_ref().ok_or_else(|| {
-            AgentRuntimeError::Validation("作品 Agent 缺少作品库仓储".to_string())
-        })?;
+        let repository = self.work_library_repository.as_ref();
         if conversation.subject_type.as_deref() != Some("work") {
             return Err(AgentRuntimeError::Validation(
                 "作品会话 subject_type 必须为 work".to_string(),
@@ -113,9 +113,8 @@ impl AgentRuntime {
             .work_agent_context(work_id, project_id)
             .await
             .map_err(|error| AgentRuntimeError::Validation(error.to_string()))?;
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(steps.as_ref(), CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 1,
                 step_type: "read_work_manifest".into(),
                 status: "succeeded".into(),
@@ -134,7 +133,7 @@ impl AgentRuntime {
             max_output_tokens: Some(1800),
             output_schema: None,
         };
-        let raw = self.llm_client.generate_script(prompt).await?;
+        let raw = llm_client.generate_script(prompt).await?;
         let output: WorkAgentOutput = serde_json::from_str(raw.trim()).map_err(|error| {
             AgentRuntimeError::InvalidLlmOutput(format!("作品补丁 JSON 无效: {error}"))
         })?;
@@ -142,9 +141,8 @@ impl AgentRuntime {
         let (draft, diff) = repository
             .apply_agent_edit(work_id, project_id, output.patches())
             .await?;
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
-                agent_run_id: run.id,
+        record_step(steps.as_ref(), CreateAgentStepInput {
+                agent_run_id: run_id,
                 step_order: 2,
                 step_type: "apply_work_patch".into(),
                 status: "succeeded".into(),
@@ -153,21 +151,16 @@ impl AgentRuntime {
                 error_message: None,
             })
             .await?;
-        self.conversation_repository
-            .save_message(CreateAgentMessageInput {
-                conversation_id: conversation.id,
-                role: AgentMessageRole::Assistant,
-                content: output.assistant_message.trim().to_string(),
-                metadata: json!({
-                    "intent": "edit_work_draft",
-                    "draft_version_id": draft.id,
-                    "version_no": draft.version_no,
-                    "diff": diff,
-                    "requires_confirmation": true,
-                    "downstream_called": false,
-                }),
-            })
-            .await
-            .map_err(AgentRuntimeError::from)
+        Ok(AgentOutcome::new(
+            output.assistant_message.trim(),
+            json!({
+                "intent": "edit_work_draft",
+                "draft_version_id": draft.id,
+                "version_no": draft.version_no,
+                "diff": diff,
+                "requires_confirmation": true,
+                "downstream_called": false,
+            }),
+        ))
     }
 }

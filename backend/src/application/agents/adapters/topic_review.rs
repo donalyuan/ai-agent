@@ -1,29 +1,36 @@
 //! 评审完整主题组并保存快照；评审结果只辅助决策，不改变选题生命周期状态。
 
 use super::{
-    format_account_strategy_context, truncate_for_prompt, AgentRuntime, AgentRuntimeError,
+    format_account_strategy_context, record_step, truncate_for_prompt, AgentRuntimeError,
+    TopicAgentAdapter,
 };
-use crate::domain::conversation::{CreateAgentRunInput, CreateAgentStepInput, FinishAgentRunInput};
+use crate::application::agents::kernel::run_lifecycle_error;
+use crate::domain::conversation::CreateAgentStepInput;
 use crate::domain::topic::{
     ContentTopic, TopicGenerationBatch, TopicReviewItem, TopicReviewResult, TopicReviewSnapshot,
     TopicReviewSnapshotStatus,
 };
 use crate::repositories::{CreateTopicReviewSnapshotInput, TopicRepository, TopicRepositoryError};
-use novex_model::{LLMJsonSchema, LLMPrompt};
+use novex_agent::{RunLifecycleCoordinator, RunRecorder, StartRun, StepRecorder};
+use novex_ai_core::AgentKey;
+use novex_model::{LLMClient, LLMJsonSchema, LLMPrompt, ModelExecutionSnapshot};
 use serde::Deserialize;
 use serde_json::json;
 use std::fmt;
+use std::sync::Arc;
 use uuid::Uuid;
 
-impl AgentRuntime {
+impl TopicAgentAdapter {
     pub async fn review_topic_group(
         &self,
         project_id: Uuid,
         root_batch_id: Uuid,
+        llm_client: Arc<dyn LLMClient>,
+        model_execution: Option<ModelExecutionSnapshot>,
+        runs: Arc<dyn RunRecorder>,
+        steps: Arc<dyn StepRecorder>,
     ) -> Result<TopicReviewSnapshot, AgentRuntimeError> {
-        let topic_repository = self.topic_repository.as_ref().ok_or_else(|| {
-            AgentRuntimeError::Validation("选题 Agent 未配置 topic repository".to_string())
-        })?;
+        let topic_repository = &self.topic_repository;
         let project = self.project_repository.get_project(project_id).await?;
         let root_batch = topic_repository.get_generation_batch(root_batch_id).await?;
         if root_batch.project_id != project_id || root_batch.supplement_of_batch_id.is_some() {
@@ -39,63 +46,39 @@ impl AgentRuntime {
                 "主题组没有可评审选题".to_string(),
             ));
         }
+        let account_strategy_context = format_account_strategy_context(&project);
 
-        let run = self
-            .conversation_repository
-            .create_run(CreateAgentRunInput {
-                conversation_id: root_batch_id,
-                project_id: Some(project_id),
-                agent_type: "topic".to_string(),
-                input: json!({
-                    "intent": "review_topic_group",
-                    "root_batch_id": root_batch_id
-                }),
-                model_id: self
-                    .model_execution
-                    .as_ref()
-                    .map(|snapshot| snapshot.model_id),
-                model_snapshot: self
-                    .model_execution
-                    .as_ref()
-                    .and_then(|snapshot| serde_json::to_value(snapshot).ok()),
-            })
-            .await?;
-
-        let result = self
-            .review_topic_group_with_run(
-                topic_repository.as_ref(),
-                &format_account_strategy_context(&project),
-                &root_batch,
-                &topics,
-                run.id,
+        RunLifecycleCoordinator::new(runs)
+            .execute(
+                StartRun {
+                    session_id: root_batch_id,
+                    project_id: Some(project_id),
+                    agent_key: AgentKey::new("topic").expect("topic is a valid static AgentKey"),
+                    input: json!({
+                        "intent": "review_topic_group",
+                        "root_batch_id": root_batch_id
+                    }),
+                    model_id: model_execution.as_ref().map(|snapshot| snapshot.model_id),
+                    model_snapshot: model_execution
+                        .as_ref()
+                        .and_then(|snapshot| serde_json::to_value(snapshot).ok()),
+                },
+                |run_id| {
+                    self.review_topic_group_with_run(
+                        topic_repository.as_ref(),
+                        &account_strategy_context,
+                        &root_batch,
+                        &topics,
+                        run_id,
+                        llm_client,
+                        steps,
+                    )
+                },
+                |snapshot| Some(json!({ "topic_review_snapshot_id": snapshot.id })),
+                |error| error.to_string(),
             )
-            .await;
-
-        match result {
-            Ok(snapshot) => {
-                self.conversation_repository
-                    .finish_run(FinishAgentRunInput {
-                        agent_run_id: run.id,
-                        status: "succeeded".to_string(),
-                        output: Some(json!({ "topic_review_snapshot_id": snapshot.id })),
-                        error_message: None,
-                    })
-                    .await?;
-                Ok(snapshot)
-            }
-            Err(error) => {
-                let _ = self
-                    .conversation_repository
-                    .finish_run(FinishAgentRunInput {
-                        agent_run_id: run.id,
-                        status: "failed".to_string(),
-                        output: None,
-                        error_message: Some(error.to_string()),
-                    })
-                    .await;
-                Err(error)
-            }
-        }
+            .await
+            .map_err(run_lifecycle_error)
     }
 
     async fn review_topic_group_with_run(
@@ -105,9 +88,12 @@ impl AgentRuntime {
         root_batch: &TopicGenerationBatch,
         topics: &[ContentTopic],
         run_id: Uuid,
+        llm_client: Arc<dyn LLMClient>,
+        steps: Arc<dyn StepRecorder>,
     ) -> Result<TopicReviewSnapshot, AgentRuntimeError> {
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
                 agent_run_id: run_id,
                 step_order: 1,
                 step_type: "read_topic_group".to_string(),
@@ -115,18 +101,25 @@ impl AgentRuntime {
                 input: json!({ "root_batch_id": root_batch.id }),
                 output: Some(json!({ "topic_count": topics.len() })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         let prompt = build_topic_group_review_prompt(account_strategy_context, root_batch, topics);
-        let raw = self.llm_client.generate_script(prompt).await;
+        let raw = llm_client.generate_script(prompt).await;
         let review_output = match raw {
             Ok(raw) => match TopicReviewLlmOutput::parse_and_validate(&raw, topics) {
                 Ok(output) => output,
                 Err(error) => {
                     let message = error.to_string();
-                    self.add_failed_topic_step(run_id, 2, "review_topic_group", message.clone())
-                        .await;
+                    self.record_failed_topic_step(
+                        steps.as_ref(),
+                        run_id,
+                        2,
+                        "review_topic_group",
+                        message.clone(),
+                    )
+                    .await;
                     self.save_failed_topic_review_snapshot(
                         topic_repository,
                         root_batch.project_id,
@@ -140,8 +133,14 @@ impl AgentRuntime {
             },
             Err(error) => {
                 let message = error.to_string();
-                self.add_failed_topic_step(run_id, 2, "review_topic_group", message.clone())
-                    .await;
+                self.record_failed_topic_step(
+                    steps.as_ref(),
+                    run_id,
+                    2,
+                    "review_topic_group",
+                    message.clone(),
+                )
+                .await;
                 self.save_failed_topic_review_snapshot(
                     topic_repository,
                     root_batch.project_id,
@@ -154,8 +153,9 @@ impl AgentRuntime {
             }
         };
 
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
                 agent_run_id: run_id,
                 step_order: 2,
                 step_type: "review_topic_group".to_string(),
@@ -165,8 +165,9 @@ impl AgentRuntime {
                     "topic_review_count": review_output.topic_reviews.len()
                 })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         let review_summary = review_output.review_summary.clone();
         let review_result = review_output.result();
@@ -183,8 +184,9 @@ impl AgentRuntime {
             })
             .await?;
 
-        self.conversation_repository
-            .add_step(CreateAgentStepInput {
+        record_step(
+            steps.as_ref(),
+            CreateAgentStepInput {
                 agent_run_id: run_id,
                 step_order: 3,
                 step_type: "persist_topic_review_snapshot".to_string(),
@@ -192,8 +194,9 @@ impl AgentRuntime {
                 input: json!({ "root_batch_id": root_batch.id }),
                 output: Some(json!({ "topic_review_snapshot_id": snapshot.id })),
                 error_message: None,
-            })
-            .await?;
+            },
+        )
+        .await?;
         Ok(snapshot)
     }
 

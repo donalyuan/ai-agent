@@ -3,7 +3,7 @@
 use super::topic_generation::{
     format_existing_topic_context, TopicLlmOutput, TopicSupplementPromptContext,
 };
-use super::{truncate_for_prompt, AgentRuntime};
+use super::{truncate_for_prompt, TopicAgentAdapter};
 use crate::domain::topic::{
     TopicQualityDecision, TopicQualityEvaluationStatus, TopicQualityFlag, TopicQualityGateItem,
     TopicQualityGateResult,
@@ -15,7 +15,7 @@ use serde_json::json;
 use std::fmt;
 use uuid::Uuid;
 
-impl AgentRuntime {
+impl TopicAgentAdapter {
     pub(super) async fn save_failed_topic_quality_evaluation(
         &self,
         topic_repository: &dyn TopicRepository,

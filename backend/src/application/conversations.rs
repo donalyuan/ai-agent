@@ -1,20 +1,22 @@
 //! 连续对话用例，负责会话绑定规则、模型选择和统一 Runtime 组装。
 
 use crate::agents::ScriptAgentError;
-use crate::application::agents::runtime::{
-    AgentRuntime, AgentRuntimeError, AgentTurnRequest, AgentTurnResponse,
+use crate::application::agents::adapters::{
+    AgentRuntimeError, AgentTurnResponse, SoundAgentContext,
 };
+use crate::application::agents::kernel::AgentExecutor;
 use crate::domain::conversation::{AgentConversation, AgentMessage, CreateAgentConversationInput};
 use crate::model_routing::{ModelClientResolver, ModelResolveError};
 use crate::repositories::AiModelRepository;
 use crate::repositories::{
     ConversationRepository, ConversationRepositoryError, PostgresAiModelRepository,
     PostgresConversationRepository, PostgresProjectRepository, PostgresScriptRepository,
-    PostgresTopicRepository, PostgresVoiceCatalogRepository, PostgresWorkLibraryRepository,
-    ProjectRepository, ProjectRepositoryError, ScriptRepository,
+    PostgresVoiceCatalogRepository, PostgresWorkLibraryRepository, ProjectRepository,
+    ProjectRepositoryError, ScriptRepository,
 };
+use novex_agent::{AgentInvocation, ModelExecutionRef};
 use novex_model::{ApiProtocol, ModelType};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{fmt, sync::Arc};
 use uuid::Uuid;
 
@@ -24,11 +26,11 @@ pub struct ConversationService {
     conversation_repository: PostgresConversationRepository,
     script_repository: PostgresScriptRepository,
     project_repository: PostgresProjectRepository,
-    topic_repository: PostgresTopicRepository,
     ai_model_repository: PostgresAiModelRepository,
     voice_catalog_repository: PostgresVoiceCatalogRepository,
     work_library_repository: PostgresWorkLibraryRepository,
     model_resolver: Arc<dyn ModelClientResolver>,
+    agent_executor: AgentExecutor,
 }
 
 impl ConversationService {
@@ -36,21 +38,22 @@ impl ConversationService {
         conversation_repository: PostgresConversationRepository,
         script_repository: PostgresScriptRepository,
         project_repository: PostgresProjectRepository,
-        topic_repository: PostgresTopicRepository,
         ai_model_repository: PostgresAiModelRepository,
         voice_catalog_repository: PostgresVoiceCatalogRepository,
         work_library_repository: PostgresWorkLibraryRepository,
         model_resolver: Arc<dyn ModelClientResolver>,
+        agent_registry: Arc<novex_agent::AgentRegistry>,
     ) -> Self {
+        let agent_executor = AgentExecutor::new(agent_registry, conversation_repository.clone());
         Self {
             conversation_repository,
             script_repository,
             project_repository,
-            topic_repository,
             ai_model_repository,
             voice_catalog_repository,
             work_library_repository,
             model_resolver,
+            agent_executor,
         }
     }
 
@@ -173,17 +176,31 @@ impl ConversationService {
         model_id: Uuid,
         content: String,
         supplement_of_batch_id: Option<Uuid>,
-        sound_context: Option<crate::application::agents::runtime::SoundAgentContext>,
+        sound_context: Option<SoundAgentContext>,
     ) -> Result<AgentTurnResponse, ConversationApplicationError> {
         let resolved = self.model_resolver.text_client(model_id).await?;
-        self.runtime(resolved.client, resolved.snapshot)
-            .handle_turn_with_sound_context(
-                AgentTurnRequest {
-                    conversation_id,
+        let conversation = self
+            .conversation_repository
+            .get_conversation(conversation_id)
+            .await?;
+        let (user_metadata, run_input, payload) = invocation_payload(
+            &conversation.agent_type,
+            supplement_of_batch_id,
+            sound_context,
+        )?;
+        self.agent_executor
+            .execute(
+                AgentInvocation {
+                    session_id: conversation_id,
                     user_message: content,
-                    supplement_of_batch_id,
+                    user_metadata,
+                    run_input,
+                    payload,
                 },
-                sound_context,
+                ModelExecutionRef {
+                    client: resolved.client,
+                    snapshot: Some(resolved.snapshot),
+                },
             )
             .await
             .map_err(Into::into)
@@ -199,23 +216,37 @@ impl ConversationService {
             Err(ScriptAgentError::ProjectNotFound(project_id).into())
         }
     }
+}
 
-    fn runtime(
-        &self,
-        llm_client: Arc<dyn novex_model::LLMClient>,
-        model_execution: novex_model::ModelExecutionSnapshot,
-    ) -> AgentRuntime {
-        AgentRuntime::new(
-            Arc::new(self.conversation_repository.clone()),
-            Arc::new(self.script_repository.clone()),
-            Arc::new(self.project_repository.clone()),
-            llm_client,
-        )
-        .with_model_execution(model_execution)
-        .with_topic_repository(Arc::new(self.topic_repository.clone()))
-        .with_voice_catalog_repository(Arc::new(self.voice_catalog_repository.clone()))
-        .with_work_library_repository(Arc::new(self.work_library_repository.clone()))
+fn invocation_payload(
+    agent_type: &str,
+    supplement_of_batch_id: Option<Uuid>,
+    sound_context: Option<SoundAgentContext>,
+) -> Result<(Value, Value, Value), ConversationApplicationError> {
+    if agent_type != "sound" && sound_context.is_some() {
+        return Err(ConversationApplicationError::Runtime(
+            AgentRuntimeError::Validation("非声音会话不能携带声音上下文".to_string()),
+        ));
     }
+    if agent_type == "sound" {
+        let context = sound_context.ok_or_else(|| {
+            ConversationApplicationError::Runtime(AgentRuntimeError::Validation(
+                "声音消息缺少当前编辑上下文".to_string(),
+            ))
+        })?;
+        let metadata = json!({"sound_context": &context});
+        return Ok((
+            metadata.clone(),
+            metadata.clone(),
+            json!({"sound_context": context}),
+        ));
+    }
+    let payload = if agent_type == "topic" {
+        json!({"supplement_of_batch_id": supplement_of_batch_id})
+    } else {
+        json!({})
+    };
+    Ok((json!({}), json!({}), payload))
 }
 
 #[derive(Clone, Debug, PartialEq)]

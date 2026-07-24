@@ -1,12 +1,15 @@
 //! 项目与账号策略用例，集中处理仓储协作、模型调用和运行记录。
 
-use crate::domain::conversation::{CreateAgentRunInput, FinishAgentRunInput};
+use crate::application::agents::adapters::AgentRuntimeError;
+use crate::application::agents::kernel::{run_lifecycle, run_lifecycle_error};
 use crate::model_routing::{ModelClientResolver, ModelResolveError};
 use crate::repositories::{
-    AccountStrategyProfile, ConversationRepository, ConversationRepositoryError,
-    CreateProjectInput, PostgresConversationRepository, PostgresProjectRepository, Project,
-    ProjectRepository, ProjectRepositoryError, UpdateProjectStrategyProfileInput,
+    AccountStrategyProfile, ConversationRepositoryError, CreateProjectInput,
+    PostgresConversationRepository, PostgresProjectRepository, Project, ProjectRepository,
+    ProjectRepositoryError, UpdateProjectStrategyProfileInput,
 };
+use novex_agent::StartRun;
+use novex_ai_core::AgentKey;
 use novex_model::{LLMClient, LLMError, LLMJsonSchema, LLMPrompt};
 use serde::Deserialize;
 use serde_json::json;
@@ -75,78 +78,30 @@ impl ProjectService {
     ) -> Result<StrategyProfileDraft, ProjectApplicationError> {
         let project = self.project_repository.get_project(project_id).await?;
         let resolved = self.model_resolver.text_client(model_id).await?;
-        let run = self
-            .create_run(
-                project_id,
-                model_id,
-                serde_json::to_value(&resolved.snapshot)
-                    .map_err(|error| ProjectApplicationError::Serialization(error.to_string()))?,
+        let model_snapshot = serde_json::to_value(&resolved.snapshot)
+            .map_err(|error| ProjectApplicationError::Serialization(error.to_string()))?;
+        let prompt = build_strategy_profile_draft_prompt(&project, direction_notes);
+        run_lifecycle(self.conversation_repository.clone())
+            .execute(
+                StartRun {
+                    session_id: project_id,
+                    project_id: Some(project_id),
+                    agent_key: AgentKey::new("topic").expect("topic is a valid static AgentKey"),
+                    input: json!({ "intent": "strategy_profile_draft" }),
+                    model_id: Some(model_id),
+                    model_snapshot: Some(model_snapshot),
+                },
+                |_| async move {
+                    generate_strategy_profile_draft_with_retry(resolved.client.as_ref(), prompt)
+                        .await
+                        .map_err(ProjectApplicationError::Llm)
+                        .and_then(|raw| parse_strategy_profile_draft(&raw))
+                },
+                |_| Some(json!({ "draft_generated": true })),
+                |error| format!("{error:?}"),
             )
-            .await?;
-
-        let result = generate_strategy_profile_draft_with_retry(
-            resolved.client.as_ref(),
-            build_strategy_profile_draft_prompt(&project, direction_notes),
-        )
-        .await
-        .map_err(ProjectApplicationError::Llm)
-        .and_then(|raw| parse_strategy_profile_draft(&raw));
-
-        match result {
-            Ok(output) => {
-                self.finish_run(
-                    run.id,
-                    "succeeded",
-                    Some(json!({ "draft_generated": true })),
-                    None,
-                )
-                .await?;
-                Ok(output)
-            }
-            Err(error) => {
-                self.finish_run(run.id, "failed", None, Some(format!("{error:?}")))
-                    .await?;
-                Err(error)
-            }
-        }
-    }
-
-    async fn create_run(
-        &self,
-        project_id: Uuid,
-        model_id: Uuid,
-        model_snapshot: serde_json::Value,
-    ) -> Result<crate::domain::conversation::AgentRunRecord, ProjectApplicationError> {
-        self.conversation_repository
-            .create_run(CreateAgentRunInput {
-                conversation_id: project_id,
-                project_id: Some(project_id),
-                agent_type: "topic".to_string(),
-                input: json!({ "intent": "strategy_profile_draft" }),
-                model_id: Some(model_id),
-                model_snapshot: Some(model_snapshot),
-            })
             .await
-            .map_err(Into::into)
-    }
-
-    async fn finish_run(
-        &self,
-        run_id: Uuid,
-        status: &str,
-        output: Option<serde_json::Value>,
-        error_message: Option<String>,
-    ) -> Result<(), ProjectApplicationError> {
-        self.conversation_repository
-            .finish_run(FinishAgentRunInput {
-                agent_run_id: run_id,
-                status: status.to_string(),
-                output,
-                error_message,
-            })
-            .await
-            .map(|_| ())
-            .map_err(Into::into)
+            .map_err(run_lifecycle_error)
     }
 }
 
@@ -160,6 +115,7 @@ pub struct StrategyProfileDraft {
 pub enum ProjectApplicationError {
     ProjectRepository(ProjectRepositoryError),
     ConversationRepository(ConversationRepositoryError),
+    Runtime(AgentRuntimeError),
     ModelResolve(ModelResolveError),
     Llm(LLMError),
     InvalidOutput(String),
@@ -178,6 +134,12 @@ impl From<ConversationRepositoryError> for ProjectApplicationError {
     }
 }
 
+impl From<AgentRuntimeError> for ProjectApplicationError {
+    fn from(error: AgentRuntimeError) -> Self {
+        Self::Runtime(error)
+    }
+}
+
 impl From<ModelResolveError> for ProjectApplicationError {
     fn from(error: ModelResolveError) -> Self {
         Self::ModelResolve(error)
@@ -189,6 +151,7 @@ impl fmt::Display for ProjectApplicationError {
         match self {
             Self::ProjectRepository(error) => write!(formatter, "{error}"),
             Self::ConversationRepository(error) => write!(formatter, "{error}"),
+            Self::Runtime(error) => write!(formatter, "{error}"),
             Self::ModelResolve(error) => write!(formatter, "{error}"),
             Self::Llm(error) => write!(formatter, "{error}"),
             Self::InvalidOutput(message) | Self::Serialization(message) => {

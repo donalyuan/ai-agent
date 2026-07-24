@@ -1,7 +1,8 @@
 //! 选题用例，维护项目边界、状态规则、主题组归一和评审编排。
 
 use crate::agents::ScriptAgentError;
-use crate::application::agents::runtime::{AgentRuntime, AgentRuntimeError};
+use crate::application::agents::adapters::{AgentRuntimeError, TopicAgentAdapter};
+use crate::application::agents::kernel::PostgresAgentKernelStore;
 use crate::domain::script::ScriptStyle;
 use crate::domain::topic::{
     ContentTopic, ContentTopicFilter, ContentTopicStatus, TopicGenerationBatchSummary,
@@ -10,8 +11,8 @@ use crate::domain::topic::{
 use crate::model_routing::{ModelClientResolver, ModelResolveError};
 use crate::repositories::{
     CreateContentTopicInput, PostgresConversationRepository, PostgresProjectRepository,
-    PostgresScriptRepository, PostgresTopicRepository, ProjectRepository, ProjectRepositoryError,
-    TopicRepository, TopicRepositoryError, UpdateContentTopicInput,
+    PostgresTopicRepository, ProjectRepository, ProjectRepositoryError, TopicRepository,
+    TopicRepositoryError, UpdateContentTopicInput,
 };
 use serde_json::Value;
 use std::{fmt, sync::Arc};
@@ -23,7 +24,6 @@ pub struct TopicService {
     project_repository: PostgresProjectRepository,
     topic_repository: PostgresTopicRepository,
     conversation_repository: PostgresConversationRepository,
-    script_repository: PostgresScriptRepository,
     model_resolver: Arc<dyn ModelClientResolver>,
 }
 
@@ -32,14 +32,12 @@ impl TopicService {
         project_repository: PostgresProjectRepository,
         topic_repository: PostgresTopicRepository,
         conversation_repository: PostgresConversationRepository,
-        script_repository: PostgresScriptRepository,
         model_resolver: Arc<dyn ModelClientResolver>,
     ) -> Self {
         Self {
             project_repository,
             topic_repository,
             conversation_repository,
-            script_repository,
             model_resolver,
         }
     }
@@ -105,8 +103,18 @@ impl TopicService {
             .resolve_group_project_id(root_batch_id, requested_project_id)
             .await?;
         let resolved = self.model_resolver.text_client(model_id).await?;
-        self.runtime(resolved.client, resolved.snapshot)
-            .review_topic_group(project_id, root_batch_id)
+        let store = Arc::new(PostgresAgentKernelStore::new(
+            self.conversation_repository.clone(),
+        ));
+        self.topic_adapter()
+            .review_topic_group(
+                project_id,
+                root_batch_id,
+                resolved.client,
+                Some(resolved.snapshot),
+                store.clone(),
+                store,
+            )
             .await
             .map_err(Into::into)
     }
@@ -230,19 +238,12 @@ impl TopicService {
         Ok(batch.project_id)
     }
 
-    fn runtime(
-        &self,
-        llm_client: Arc<dyn novex_model::LLMClient>,
-        model_execution: novex_model::ModelExecutionSnapshot,
-    ) -> AgentRuntime {
-        AgentRuntime::new(
+    fn topic_adapter(&self) -> TopicAgentAdapter {
+        TopicAgentAdapter::new(
             Arc::new(self.conversation_repository.clone()),
-            Arc::new(self.script_repository.clone()),
             Arc::new(self.project_repository.clone()),
-            llm_client,
+            Arc::new(self.topic_repository.clone()),
         )
-        .with_model_execution(model_execution)
-        .with_topic_repository(Arc::new(self.topic_repository.clone()))
     }
 }
 
