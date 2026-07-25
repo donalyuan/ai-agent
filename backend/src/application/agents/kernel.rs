@@ -13,6 +13,56 @@ use novex_agent::{
 };
 use novex_ai_core::AgentKey;
 use std::sync::Arc;
+use uuid::Uuid;
+
+/// Resolves the active Rust-owned Definition into the immutable binding stored with a Run/Conversation.
+pub fn active_rust_definition_binding(
+    registry: &novex_ai_core::DefinitionRegistry,
+    agent_key: &str,
+) -> Result<crate::domain::conversation::AgentConversationDefinitionBindingInput, String> {
+    let agent = registry
+        .active_agent(agent_key)
+        .map_err(|error| error.to_string())?;
+    if agent.executor_owner != novex_ai_core::ExecutorOwner::Rust {
+        return Err("definition owner must be rust".into());
+    }
+    let mut prompts = serde_json::Map::new();
+    for (node_key, reference) in &agent.nodes {
+        let prompt = registry
+            .prompts()
+            .iter()
+            .find(|prompt| {
+                prompt.prompt_key == reference.key && prompt.version == reference.version
+            })
+            .ok_or_else(|| {
+                format!(
+                    "prompt definition not found: {}@{}",
+                    reference.key, reference.version
+                )
+            })?;
+        prompts.insert(
+            node_key.clone(),
+            serde_json::json!({
+                "key": reference.key,
+                "version": reference.version,
+                "digest": novex_ai_core::definition_digest(prompt)
+                    .map_err(|error| error.to_string())?
+            }),
+        );
+    }
+    Ok(
+        crate::domain::conversation::AgentConversationDefinitionBindingInput {
+            agent_key: agent.agent_key.clone(),
+            agent_version: agent.version.clone(),
+            agent_digest: novex_ai_core::definition_digest(agent)
+                .map_err(|error| error.to_string())?,
+            prompt_bindings: serde_json::Value::Object(prompts),
+            registry_digest: registry.digest().into(),
+            migration_source: None,
+            parent_conversation_id: None,
+        },
+    )
+}
 
 pub fn build_registry(
     pool: &sqlx::PgPool,
@@ -178,7 +228,7 @@ impl RunRecorder for PostgresAgentKernelStore {
 
 #[async_trait]
 impl StepRecorder for PostgresAgentKernelStore {
-    async fn record_step(&self, step: AgentStep) -> Result<(), BoxError> {
+    async fn record_step(&self, step: AgentStep) -> Result<Uuid, BoxError> {
         self.repository
             .add_step(CreateAgentStepInput {
                 agent_run_id: step.run_id,
@@ -190,8 +240,7 @@ impl StepRecorder for PostgresAgentKernelStore {
                 error_message: step.error_message,
             })
             .await
-            .map_err(AgentRuntimeError::from)?;
-        Ok(())
+            .map_err(|error| Box::new(AgentRuntimeError::from(error)) as BoxError)
     }
 }
 

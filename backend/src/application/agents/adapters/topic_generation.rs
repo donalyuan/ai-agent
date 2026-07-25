@@ -18,10 +18,14 @@ use crate::repositories::{
     CreateContentTopicInput, CreateTopicGenerationBatchInput, CreateTopicQualityEvaluationInput,
     TopicRepository, UpdateTopicGenerationBatchInput,
 };
-use novex_agent::{AgentOutcome, AgentSession, StepRecorder, StoredMessage};
-use novex_model::{LLMClient, LLMJsonSchema, LLMPrompt};
+use novex_agent::{
+    AgentOutcome, AgentSession, AuditedCallOwner, AuditedExecutionBinding, AuditedModelError,
+    AuditedModelRequest, ModelExecutionRef, StepRecorder, StoredMessage,
+};
+use novex_ai_core::{DynamicFragment, PromptCompileInput, TrustLevel};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -33,7 +37,7 @@ impl TopicAgentAdapter {
         user_message: &StoredMessage,
         run_id: Uuid,
         supplement_target_batch_id: Option<Uuid>,
-        llm_client: Arc<dyn LLMClient>,
+        model: ModelExecutionRef,
         steps: Arc<dyn StepRecorder>,
     ) -> Result<AgentOutcome, AgentRuntimeError> {
         let project_id = conversation
@@ -42,6 +46,9 @@ impl TopicAgentAdapter {
         let topic_repository = &self.topic_repository;
         let project = self.project_repository.get_project(project_id).await?;
         let account_strategy_context = format_account_strategy_context(&project);
+        let audited = model.audited.as_ref().ok_or_else(|| {
+            AgentRuntimeError::Kernel("audited model execution is required".into())
+        })?;
 
         record_step(
             steps.as_ref(),
@@ -103,36 +110,62 @@ impl TopicAgentAdapter {
             })
             .await?;
 
-        let raw = llm_client
-            .generate_script(build_topic_generation_prompt(
-                &account_strategy_context,
-                requested_count,
-                &user_message.content,
-                supplement_context.as_ref(),
-            ))
-            .await;
+        let generation_prompt = build_topic_generation_prompt(
+            &account_strategy_context,
+            requested_count,
+            &user_message.content,
+            supplement_context.as_ref(),
+        );
+        let fragment_id = format!("topic-batch:{}:generation", batch.id);
+        let node_key = if supplement_context.is_some() {
+            "topic.supplement"
+        } else {
+            "topic.generate"
+        };
+        let generated = audited
+            .executor
+            .execute_parsed(
+                AuditedModelRequest {
+                    owner: AuditedCallOwner::AgentRun(run_id),
+                    step_id: None,
+                    root_call_id: None,
+                    parent_call_id: None,
+                    attempt: 1,
+                    agent_key: audited.agent_key.clone(),
+                    agent_version: audited.agent_version.clone(),
+                    node_key: node_key.into(),
+                    compile_input: PromptCompileInput {
+                        schema_version: "1".into(),
+                        variables: BTreeMap::new(),
+                        fragments: vec![DynamicFragment {
+                            id: fragment_id.clone(),
+                            trust: TrustLevel::Reference,
+                            source: "topic_generation_context".into(),
+                            content: Some(generation_prompt.clone()),
+                            asset: None,
+                        }],
+                    },
+                    tool_profile: "chat".into(),
+                    tool_schema: None,
+                    binding: audited.binding.clone(),
+                    context_sources: topic_generation_context_sources(
+                        &fragment_id,
+                        project_id,
+                        user_message.id,
+                        supplement_context.as_ref(),
+                    ),
+                    memory_sources: json!([]),
+                    parameters: json!({ "max_output_tokens": 2000 }),
+                    asset_references: json!([]),
+                },
+                |raw| TopicLlmOutput::parse_and_validate(raw).map_err(|error| error.to_string()),
+            )
+            .await
+            .map(|response| (response.output, response.model_call_id))
+            .map_err(audited_topic_error);
 
-        let candidates = match raw {
-            Ok(raw) => match TopicLlmOutput::parse_and_validate(&raw) {
-                Ok(candidates) => candidates,
-                Err(error) => {
-                    self.mark_topic_batch_failed(
-                        topic_repository.as_ref(),
-                        batch.id,
-                        error.to_string(),
-                    )
-                    .await;
-                    self.record_failed_topic_step(
-                        steps.as_ref(),
-                        run_id,
-                        2,
-                        "generate_topics",
-                        error.to_string(),
-                    )
-                    .await;
-                    return Err(AgentRuntimeError::InvalidLlmOutput(error.to_string()));
-                }
-            },
+        let (candidates, generation_model_call_id) = match generated {
+            Ok(generated) => generated,
             Err(error) => {
                 self.mark_topic_batch_failed(
                     topic_repository.as_ref(),
@@ -148,11 +181,11 @@ impl TopicAgentAdapter {
                     error.to_string(),
                 )
                 .await;
-                return Err(AgentRuntimeError::Llm(error));
+                return Err(error);
             }
         };
 
-        record_step(
+        let generation_step_id = record_step(
             steps.as_ref(),
             CreateAgentStepInput {
                 agent_run_id: run_id,
@@ -165,45 +198,45 @@ impl TopicAgentAdapter {
             },
         )
         .await?;
+        audited
+            .executor
+            .associate_step(generation_model_call_id, generation_step_id)
+            .await
+            .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
 
-        let raw_quality = llm_client
-            .generate_script(build_topic_quality_gate_prompt(
-                &account_strategy_context,
-                &user_message.content,
-                &candidates,
-                supplement_context.as_ref(),
-            ))
-            .await;
-        let quality_result = match raw_quality {
-            Ok(raw) => match TopicQualityLlmOutput::parse_and_validate(&raw, &candidates) {
-                Ok(output) => output.result(),
-                Err(error) => {
-                    let message = error.to_string();
-                    self.mark_topic_batch_failed(
-                        topic_repository.as_ref(),
-                        batch.id,
-                        message.clone(),
-                    )
-                    .await;
-                    self.record_failed_topic_step(
-                        steps.as_ref(),
+        let quality_prompt = build_topic_quality_gate_prompt(
+            &account_strategy_context,
+            &user_message.content,
+            &candidates,
+            supplement_context.as_ref(),
+        );
+        let quality = audited
+            .executor
+            .execute_parsed(
+                    topic_model_request(
+                        audited,
                         run_id,
-                        3,
-                        "evaluate_topic_quality",
-                        message.clone(),
-                    )
-                    .await;
-                    self.save_failed_topic_quality_evaluation(
-                        topic_repository.as_ref(),
-                        project_id,
-                        batch.id,
-                        run_id,
-                        message.clone(),
-                    )
-                    .await;
-                    return Err(AgentRuntimeError::InvalidLlmOutput(message));
-                }
-            },
+                        "topic.quality_review",
+                        format!("topic-batch:{}:quality-review", batch.id),
+                        "topic_quality_candidates",
+                        TrustLevel::Candidate,
+                        quality_prompt.clone(),
+                        json!([
+                            {"id": format!("project:{project_id}:account-strategy"), "trust": "confirmed_fact", "source": "project_account_strategy"},
+                            {"id": format!("topic-batch:{}:candidates", batch.id), "trust": "candidate", "source": "topic_generation_candidates"}
+                        ]),
+                    ),
+                    |raw| {
+                        TopicQualityLlmOutput::parse_and_validate(raw, &candidates)
+                            .map(|output| output.result())
+                            .map_err(|error| error.to_string())
+                    },
+                )
+            .await
+            .map(|response| (response.output, response.model_call_id))
+            .map_err(audited_topic_error);
+        let (quality_result, quality_model_call_id) = match quality {
+            Ok(quality) => quality,
             Err(error) => {
                 let message = error.to_string();
                 self.mark_topic_batch_failed(topic_repository.as_ref(), batch.id, message.clone())
@@ -224,7 +257,7 @@ impl TopicAgentAdapter {
                     message,
                 )
                 .await;
-                return Err(AgentRuntimeError::Llm(error));
+                return Err(error);
             }
         };
         let initial_quality_items_by_key = quality_items_by_key(&quality_result);
@@ -253,7 +286,7 @@ impl TopicAgentAdapter {
             })
             .await?;
 
-        record_step(
+        let quality_step_id = record_step(
             steps.as_ref(),
             CreateAgentStepInput {
                 agent_run_id: run_id,
@@ -271,6 +304,11 @@ impl TopicAgentAdapter {
             },
         )
         .await?;
+        audited
+            .executor
+            .associate_step(quality_model_call_id, quality_step_id)
+            .await
+            .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
 
         let mut final_candidates = candidates;
         let mut final_quality_result = quality_result;
@@ -284,35 +322,35 @@ impl TopicAgentAdapter {
         if topic_quality_pass_rate_is_low(final_pass_count, final_candidates.len()) {
             let rewrite_user_message =
                 build_topic_rewrite_user_message(&user_message.content, &final_quality_result);
-            let raw_rewrite = llm_client
-                .generate_script(build_topic_generation_prompt(
-                    &account_strategy_context,
-                    requested_count,
-                    &rewrite_user_message,
-                    supplement_context.as_ref(),
-                ))
-                .await;
-            let rewritten_candidates = match raw_rewrite {
-                Ok(raw) => match TopicLlmOutput::parse_and_validate(&raw) {
-                    Ok(candidates) => candidates,
-                    Err(error) => {
-                        self.mark_topic_batch_failed(
-                            topic_repository.as_ref(),
-                            batch.id,
-                            error.to_string(),
-                        )
-                        .await;
-                        self.record_failed_topic_step(
-                            steps.as_ref(),
+            let rewrite_prompt = build_topic_generation_prompt(
+                &account_strategy_context,
+                requested_count,
+                &rewrite_user_message,
+                supplement_context.as_ref(),
+            );
+            let rewrite = audited
+                .executor
+                .execute_parsed(
+                        topic_model_request(
+                            audited,
                             run_id,
-                            4,
-                            "rewrite_topics",
-                            error.to_string(),
-                        )
-                        .await;
-                        return Err(AgentRuntimeError::InvalidLlmOutput(error.to_string()));
-                    }
-                },
+                            "topic.rewrite",
+                            format!("topic-batch:{}:rewrite", batch.id),
+                            "topic_quality_rewrite",
+                            TrustLevel::Candidate,
+                            rewrite_prompt.clone(),
+                            json!([
+                                {"id": format!("project:{project_id}:account-strategy"), "trust": "confirmed_fact", "source": "project_account_strategy"},
+                                {"id": format!("topic-batch:{}:quality-result", batch.id), "trust": "candidate", "source": "topic_quality_result"}
+                            ]),
+                        ),
+                        |raw| TopicLlmOutput::parse_and_validate(raw).map_err(|error| error.to_string()),
+                    )
+                .await
+                .map(|response| (response.output, response.model_call_id))
+                .map_err(audited_topic_error);
+            let (rewritten_candidates, rewrite_model_call_id) = match rewrite {
+                Ok(rewrite) => rewrite,
                 Err(error) => {
                     self.mark_topic_batch_failed(
                         topic_repository.as_ref(),
@@ -328,10 +366,10 @@ impl TopicAgentAdapter {
                         error.to_string(),
                     )
                     .await;
-                    return Err(AgentRuntimeError::Llm(error));
+                    return Err(error);
                 }
             };
-            record_step(
+            let rewrite_step_id = record_step(
                 steps.as_ref(),
                 CreateAgentStepInput {
                     agent_run_id: run_id,
@@ -349,47 +387,45 @@ impl TopicAgentAdapter {
                 },
             )
             .await?;
+            audited
+                .executor
+                .associate_step(rewrite_model_call_id, rewrite_step_id)
+                .await
+                .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
 
-            let raw_rewrite_quality = llm_client
-                .generate_script(build_topic_quality_gate_prompt(
-                    &account_strategy_context,
-                    &user_message.content,
-                    &rewritten_candidates,
-                    supplement_context.as_ref(),
-                ))
-                .await;
-            let rewritten_quality_result = match raw_rewrite_quality {
-                Ok(raw) => {
-                    match TopicQualityLlmOutput::parse_and_validate(&raw, &rewritten_candidates) {
-                        Ok(output) => output.result(),
-                        Err(error) => {
-                            let message = error.to_string();
-                            self.mark_topic_batch_failed(
-                                topic_repository.as_ref(),
-                                batch.id,
-                                message.clone(),
-                            )
-                            .await;
-                            self.record_failed_topic_step(
-                                steps.as_ref(),
-                                run_id,
-                                5,
-                                "evaluate_topic_quality",
-                                message.clone(),
-                            )
-                            .await;
-                            self.save_failed_topic_quality_evaluation(
-                                topic_repository.as_ref(),
-                                project_id,
-                                batch.id,
-                                run_id,
-                                message.clone(),
-                            )
-                            .await;
-                            return Err(AgentRuntimeError::InvalidLlmOutput(message));
-                        }
-                    }
-                }
+            let rewrite_quality_prompt = build_topic_quality_gate_prompt(
+                &account_strategy_context,
+                &user_message.content,
+                &rewritten_candidates,
+                supplement_context.as_ref(),
+            );
+            let rewrite_quality = audited
+                .executor
+                .execute_parsed(
+                        topic_model_request(
+                            audited,
+                            run_id,
+                            "topic.quality_review",
+                            format!("topic-batch:{}:rewrite-quality", batch.id),
+                            "topic_rewrite_candidates",
+                            TrustLevel::Candidate,
+                            rewrite_quality_prompt.clone(),
+                            json!([
+                                {"id": format!("project:{project_id}:account-strategy"), "trust": "confirmed_fact", "source": "project_account_strategy"},
+                                {"id": format!("topic-batch:{}:rewritten-candidates", batch.id), "trust": "candidate", "source": "topic_rewrite_candidates"}
+                            ]),
+                        ),
+                        |raw| {
+                            TopicQualityLlmOutput::parse_and_validate(raw, &rewritten_candidates)
+                                .map(|output| output.result())
+                                .map_err(|error| error.to_string())
+                        },
+                    )
+                .await
+                .map(|response| (response.output, response.model_call_id))
+                .map_err(audited_topic_error);
+            let (rewritten_quality_result, rewrite_quality_model_call_id) = match rewrite_quality {
+                Ok(quality) => quality,
                 Err(error) => {
                     let message = error.to_string();
                     self.mark_topic_batch_failed(
@@ -414,7 +450,7 @@ impl TopicAgentAdapter {
                         message,
                     )
                     .await;
-                    return Err(AgentRuntimeError::Llm(error));
+                    return Err(error);
                 }
             };
             let rewritten_items_by_key = quality_items_by_key(&rewritten_quality_result);
@@ -442,7 +478,7 @@ impl TopicAgentAdapter {
                     error_message: None,
                 })
                 .await?;
-            record_step(
+            let rewrite_quality_step_id = record_step(
                 steps.as_ref(),
                 CreateAgentStepInput {
                     agent_run_id: run_id,
@@ -464,6 +500,11 @@ impl TopicAgentAdapter {
                 },
             )
             .await?;
+            audited
+                .executor
+                .associate_step(rewrite_quality_model_call_id, rewrite_quality_step_id)
+                .await
+                .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
 
             final_candidates = rewritten_candidates;
             final_quality_result = rewritten_quality_result;
@@ -622,6 +663,97 @@ impl TopicAgentAdapter {
     }
 }
 
+fn audited_topic_error(error: AuditedModelError) -> AgentRuntimeError {
+    match error {
+        AuditedModelError::Provider { source, .. } => AgentRuntimeError::Llm(source),
+        AuditedModelError::StructuredParse { message, .. } => {
+            AgentRuntimeError::InvalidLlmOutput(message)
+        }
+        error => AgentRuntimeError::Kernel(error.to_string()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn topic_model_request(
+    audited: &AuditedExecutionBinding,
+    run_id: Uuid,
+    node_key: &str,
+    fragment_id: String,
+    fragment_source: &str,
+    trust: TrustLevel,
+    content: String,
+    context_sources: Value,
+) -> AuditedModelRequest {
+    AuditedModelRequest {
+        owner: AuditedCallOwner::AgentRun(run_id),
+        step_id: None,
+        root_call_id: None,
+        parent_call_id: None,
+        attempt: 1,
+        agent_key: audited.agent_key.clone(),
+        agent_version: audited.agent_version.clone(),
+        node_key: node_key.into(),
+        compile_input: PromptCompileInput {
+            schema_version: "1".into(),
+            variables: BTreeMap::new(),
+            fragments: vec![DynamicFragment {
+                id: fragment_id,
+                trust,
+                source: fragment_source.into(),
+                content: Some(content),
+                asset: None,
+            }],
+        },
+        tool_profile: "chat".into(),
+        tool_schema: None,
+        binding: audited.binding.clone(),
+        context_sources,
+        memory_sources: json!([]),
+        parameters: json!({ "max_output_tokens": 2000 }),
+        asset_references: json!([]),
+    }
+}
+
+fn topic_generation_context_sources(
+    compiled_fragment_id: &str,
+    project_id: Uuid,
+    user_message_id: Uuid,
+    supplement_context: Option<&TopicSupplementPromptContext>,
+) -> Value {
+    let mut sources = vec![
+        json!({
+            "id": compiled_fragment_id,
+            "trust": "reference",
+            "source": "topic_generation_context"
+        }),
+        json!({
+            "id": format!("project:{project_id}:account-strategy"),
+            "trust": "confirmed_fact",
+            "source": "project_account_strategy"
+        }),
+        json!({
+            "id": format!("message:{user_message_id}"),
+            "trust": "user_instruction",
+            "source": "conversation_user_message"
+        }),
+    ];
+    if let Some(context) = supplement_context {
+        sources.push(json!({
+            "id": format!("topic-batch:{}:existing-topics", context.root_batch.id),
+            "trust": "reference",
+            "source": "topic_batch_group"
+        }));
+        for message in &context.history_messages {
+            sources.push(json!({
+                "id": format!("message:{}", message.id),
+                "trust": "reference",
+                "source": "conversation_history"
+            }));
+        }
+    }
+    Value::Array(sources)
+}
+
 #[derive(Debug, Deserialize)]
 struct TopicLlmOutputEnvelope {
     topics: Vec<TopicLlmOutput>,
@@ -774,15 +906,12 @@ pub(super) fn build_topic_generation_prompt(
     requested_count: i32,
     user_message: &str,
     supplement_context: Option<&TopicSupplementPromptContext>,
-) -> LLMPrompt {
+) -> String {
     let supplement_context_text = supplement_context
         .map(format_topic_supplement_context)
         .unwrap_or_default();
-    LLMPrompt {
-        system: "你是短视频内容策略选题 Agent。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。"
-            .to_string(),
-        user: format!(
-            r#"请基于项目定位和用户补充要求生成 {requested_count} 个候选选题。
+    format!(
+        r#"请基于项目定位和用户补充要求生成 {requested_count} 个候选选题。
 
 账号策略资料：
 {account_strategy_context}
@@ -813,14 +942,11 @@ JSON Schema：
     }}
   ]
 }}"#,
-            requested_count = requested_count,
-            account_strategy_context = account_strategy_context,
-            user_message = user_message,
-            supplement_context_text = supplement_context_text
-        ),
-        max_output_tokens: Some(2_000),
-        output_schema: Some(topic_generation_output_schema()),
-    }
+        requested_count = requested_count,
+        account_strategy_context = account_strategy_context,
+        user_message = user_message,
+        supplement_context_text = supplement_context_text
+    )
 }
 
 fn format_topic_supplement_context(context: &TopicSupplementPromptContext) -> String {
@@ -905,48 +1031,6 @@ fn agent_message_role_label(role: &AgentMessageRole) -> &'static str {
         AgentMessageRole::User => "user",
         AgentMessageRole::Assistant => "assistant",
         AgentMessageRole::Tool => "tool",
-    }
-}
-
-fn topic_generation_output_schema() -> LLMJsonSchema {
-    LLMJsonSchema {
-        name: "topic_generation_batch".to_string(),
-        strict: true,
-        schema: json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["topics"],
-            "properties": {
-                "topics": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": [
-                            "title", "angle", "target_audience", "hook_points",
-                            "content_type", "score", "score_reason", "tags"
-                        ],
-                        "properties": {
-                            "title": { "type": "string", "minLength": 1 },
-                            "angle": { "type": "string", "minLength": 1 },
-                            "target_audience": { "type": "string", "minLength": 1 },
-                            "hook_points": {
-                                "type": "array", "minItems": 1,
-                                "items": { "type": "string", "minLength": 1 }
-                            },
-                            "content_type": { "type": "string", "minLength": 1 },
-                            "score": { "type": "number", "minimum": 0, "maximum": 100 },
-                            "score_reason": { "type": "string", "minLength": 1 },
-                            "tags": {
-                                "type": "array", "minItems": 1,
-                                "items": { "type": "string", "minLength": 1 }
-                            }
-                        }
-                    }
-                }
-            }
-        }),
     }
 }
 

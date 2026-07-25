@@ -3,6 +3,23 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
+mod audit;
+mod definitions;
+
+pub use audit::{
+    redact_audit_value, validate_asset_references, validate_audit_payload, AuditValidationError,
+    AUDIT_REDACTED, MODEL_CALL_SCHEMA_VERSION,
+};
+
+pub use definitions::{
+    behavior_fingerprint, canonical_json, definition_digest, sha256_hex,
+    validate_model_capabilities, ActivationEvidence, AgentDefinition, AssetReference,
+    DefinitionError, DefinitionKind, DefinitionRegistry, DefinitionReleaseEvidence,
+    DefinitionStatus, DynamicFragment, ExecutorOwner, ModelBehavior, ModelCapabilities,
+    ModelRequirements, PromptCompileInput, PromptCompiler, PromptDefinition, PromptSnapshot,
+    TrustLevel,
+};
+
 pub const CRATE_PURPOSE: &str = "novex-ai-core";
 
 /// Stable, transport-independent identifier used to register an Agent capability.

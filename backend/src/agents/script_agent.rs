@@ -1,5 +1,5 @@
 use crate::agents::llm::{
-    LLMOutputError, ScriptLLMOutput, ScriptLLMScene, ScriptMetadataLLMOutput, ScriptPromptBuilder,
+    ScriptLLMOutput, ScriptLLMScene, ScriptMetadataLLMOutput, ScriptNodeInputBuilder,
     ScriptSceneLLMOutput,
 };
 use crate::domain::script::{
@@ -11,10 +11,16 @@ use crate::repositories::{
     TopicRepository, TopicRepositoryError,
 };
 use chrono::Utc;
-use novex_model::{LLMClient, LLMError, LLMPrompt};
+use novex_agent::{
+    AuditedCallOwner, AuditedModelError, AuditedModelExecutor, AuditedModelRequest,
+    FixedModelBinding,
+};
+use novex_ai_core::{DynamicFragment, PromptCompileInput, TrustLevel};
+use novex_model::LLMError;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 use validator::Validate;
 
@@ -23,7 +29,7 @@ const MAX_LLM_PROVIDER_ATTEMPTS: usize = 3;
 
 #[derive(Clone)]
 pub struct ScriptAgentService {
-    llm_client: Arc<dyn LLMClient>,
+    model_executor: Arc<dyn ScriptModelExecutor>,
     script_repository: Arc<dyn ScriptRepository>,
     project_repository: Arc<dyn ProjectRepository>,
     topic_repository: Option<Arc<dyn TopicRepository>>,
@@ -38,12 +44,12 @@ pub enum ScriptGenerationMode {
 
 impl ScriptAgentService {
     pub fn new(
-        llm_client: Arc<dyn LLMClient>,
+        model_executor: Arc<dyn ScriptModelExecutor>,
         script_repository: Arc<dyn ScriptRepository>,
         project_repository: Arc<dyn ProjectRepository>,
     ) -> Self {
         Self {
-            llm_client,
+            model_executor,
             script_repository,
             project_repository,
             topic_repository: None,
@@ -61,7 +67,7 @@ impl ScriptAgentService {
         self
     }
 
-    pub async fn generate_script(
+    pub async fn generate(
         &self,
         request: ScriptGenerationInput,
     ) -> Result<Script, ScriptAgentError> {
@@ -71,14 +77,31 @@ impl ScriptAgentService {
 
         let (request, topic_context) = self.prepare_generate_request(request).await?;
 
-        let prompt: LLMPrompt = ScriptPromptBuilder::build(&request).into();
+        let node_input = ScriptNodeInputBuilder::build(&request);
         let scene_count = request.scene_count_or_default();
-        let mut last_parse_error: Option<LLMOutputError> = None;
+        let mut last_parse_error: Option<String> = None;
         let mut retry_count = 0;
+        let mut call_sequence = ScriptCallSequence::new();
 
         for _ in 0..MAX_LLM_PARSE_ATTEMPTS {
-            let (raw, provider_retry_count) =
-                self.generate_raw_with_retries(prompt.clone()).await?;
+            let generated = self
+                .generate_raw_with_retries(
+                    "script.complete",
+                    node_input.content.clone(),
+                    ScriptOutputContract::Complete { scene_count },
+                    BTreeMap::from([("scene_count".into(), json!(scene_count))]),
+                    &mut call_sequence,
+                )
+                .await;
+            let (raw, provider_retry_count) = match generated {
+                Ok(value) => value,
+                Err(ScriptAgentError::ParseError(message)) => {
+                    last_parse_error = Some(message);
+                    retry_count += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             retry_count += provider_retry_count;
 
             match ScriptLLMOutput::parse_and_validate(&raw, scene_count) {
@@ -93,7 +116,7 @@ impl ScriptAgentService {
                     return self.save_script_and_update_topic(script).await;
                 }
                 Err(error) => {
-                    last_parse_error = Some(error);
+                    last_parse_error = Some(error.to_string());
                     retry_count += 1;
                 }
             }
@@ -245,19 +268,36 @@ impl ScriptAgentService {
         &self,
         request: &ScriptGenerationInput,
     ) -> Result<(ScriptMetadataLLMOutput, usize), ScriptAgentError> {
-        let prompt: LLMPrompt = ScriptPromptBuilder::build_metadata(request).into();
-        let mut last_parse_error: Option<LLMOutputError> = None;
+        let node_input = ScriptNodeInputBuilder::build_metadata(request);
+        let mut last_parse_error: Option<String> = None;
         let mut retry_count = 0;
+        let mut call_sequence = ScriptCallSequence::new();
 
         for _ in 0..MAX_LLM_PARSE_ATTEMPTS {
-            let (raw, provider_retry_count) =
-                self.generate_raw_with_retries(prompt.clone()).await?;
+            let generated = self
+                .generate_raw_with_retries(
+                    "script.metadata",
+                    node_input.content.clone(),
+                    ScriptOutputContract::Metadata,
+                    BTreeMap::new(),
+                    &mut call_sequence,
+                )
+                .await;
+            let (raw, provider_retry_count) = match generated {
+                Ok(value) => value,
+                Err(ScriptAgentError::ParseError(message)) => {
+                    last_parse_error = Some(message);
+                    retry_count += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             retry_count += provider_retry_count;
 
             match ScriptMetadataLLMOutput::parse_and_validate(&raw) {
                 Ok(output) => return Ok((output, retry_count)),
                 Err(error) => {
-                    last_parse_error = Some(error);
+                    last_parse_error = Some(error.to_string());
                     retry_count += 1;
                 }
             }
@@ -275,19 +315,36 @@ impl ScriptAgentService {
         request: &ScriptGenerationInput,
         sequence: u8,
     ) -> Result<(ScriptLLMScene, usize), ScriptAgentError> {
-        let prompt: LLMPrompt = ScriptPromptBuilder::build_single_scene(request, sequence).into();
-        let mut last_parse_error: Option<LLMOutputError> = None;
+        let node_input = ScriptNodeInputBuilder::build_single_scene(request, sequence);
+        let mut last_parse_error: Option<String> = None;
         let mut retry_count = 0;
+        let mut call_sequence = ScriptCallSequence::new();
 
         for _ in 0..MAX_LLM_PARSE_ATTEMPTS {
-            let (raw, provider_retry_count) =
-                self.generate_raw_with_retries(prompt.clone()).await?;
+            let generated = self
+                .generate_raw_with_retries(
+                    "script.single_scene",
+                    node_input.content.clone(),
+                    ScriptOutputContract::SingleScene { sequence },
+                    BTreeMap::new(),
+                    &mut call_sequence,
+                )
+                .await;
+            let (raw, provider_retry_count) = match generated {
+                Ok(value) => value,
+                Err(ScriptAgentError::ParseError(message)) => {
+                    last_parse_error = Some(message);
+                    retry_count += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             retry_count += provider_retry_count;
 
             match ScriptSceneLLMOutput::parse_and_validate(&raw, sequence) {
                 Ok(output) => return Ok((output.scene, retry_count)),
                 Err(error) => {
-                    last_parse_error = Some(error);
+                    last_parse_error = Some(error.to_string());
                     retry_count += 1;
                 }
             }
@@ -317,20 +374,57 @@ impl ScriptAgentService {
 
     async fn generate_raw_with_retries(
         &self,
-        prompt: LLMPrompt,
+        node_key: &str,
+        content: String,
+        contract: ScriptOutputContract,
+        variables: BTreeMap<String, serde_json::Value>,
+        call_sequence: &mut ScriptCallSequence,
     ) -> Result<(String, usize), ScriptAgentError> {
         let mut retry_count = 0;
 
         for attempt_index in 0..MAX_LLM_PROVIDER_ATTEMPTS {
-            match self.llm_client.generate_script(prompt.clone()).await {
-                Ok(raw) => return Ok((raw, retry_count)),
-                Err(error)
-                    if attempt_index + 1 < MAX_LLM_PROVIDER_ATTEMPTS
-                        && is_retryable_llm_error(&error) =>
+            let attempt = call_sequence.next_attempt;
+            call_sequence.next_attempt += 1;
+            let result = self
+                .model_executor
+                .execute(ScriptModelCall {
+                    node_key: node_key.into(),
+                    content: content.clone(),
+                    contract,
+                    variables: variables.clone(),
+                    root_call_id: call_sequence.root_call_id,
+                    attempt,
+                })
+                .await;
+            match result {
+                Ok(response) => {
+                    call_sequence.remember_root(response.model_call_id);
+                    return Ok((response.output, retry_count));
+                }
+                Err(ScriptModelExecutionError::Provider {
+                    model_call_id,
+                    source,
+                }) if attempt_index + 1 < MAX_LLM_PROVIDER_ATTEMPTS
+                    && is_retryable_llm_error(&source) =>
                 {
+                    if let Some(model_call_id) = model_call_id {
+                        call_sequence.remember_root(model_call_id);
+                    }
                     retry_count += 1;
                 }
-                Err(error) => return Err(ScriptAgentError::from(error)),
+                Err(ScriptModelExecutionError::Provider { source, .. }) => {
+                    return Err(ScriptAgentError::from(source));
+                }
+                Err(ScriptModelExecutionError::StructuredParse {
+                    model_call_id,
+                    message,
+                }) => {
+                    call_sequence.remember_root(model_call_id);
+                    return Err(ScriptAgentError::ParseError(message));
+                }
+                Err(ScriptModelExecutionError::Execution(message)) => {
+                    return Err(ScriptAgentError::LLMError(message));
+                }
             }
         }
 
@@ -404,6 +498,223 @@ impl ScriptAgentService {
                 .await?;
         }
         Ok(saved)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ScriptOutputContract {
+    Complete { scene_count: u8 },
+    Metadata,
+    SingleScene { sequence: u8 },
+}
+
+pub struct ScriptModelCall {
+    node_key: String,
+    content: String,
+    contract: ScriptOutputContract,
+    variables: BTreeMap<String, serde_json::Value>,
+    root_call_id: Option<Uuid>,
+    attempt: i32,
+}
+
+pub struct ScriptModelResponse {
+    model_call_id: Uuid,
+    output: String,
+}
+
+pub enum ScriptModelExecutionError {
+    Provider {
+        model_call_id: Option<Uuid>,
+        source: LLMError,
+    },
+    StructuredParse {
+        model_call_id: Uuid,
+        message: String,
+    },
+    Execution(String),
+}
+
+#[async_trait::async_trait]
+pub trait ScriptModelExecutor: Send + Sync {
+    async fn execute(
+        &self,
+        call: ScriptModelCall,
+    ) -> Result<ScriptModelResponse, ScriptModelExecutionError>;
+}
+
+impl ScriptModelCall {
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+}
+
+impl ScriptModelResponse {
+    pub fn new(output: impl Into<String>) -> Self {
+        Self {
+            model_call_id: Uuid::new_v4(),
+            output: output.into(),
+        }
+    }
+}
+
+impl ScriptModelExecutionError {
+    pub fn provider(source: LLMError) -> Self {
+        Self::Provider {
+            model_call_id: None,
+            source,
+        }
+    }
+}
+
+pub struct AuditedScriptModelExecutor {
+    executor: Arc<AuditedModelExecutor>,
+    owner: AuditedCallOwner,
+    agent_key: String,
+    agent_version: String,
+    binding: FixedModelBinding,
+    call_ids: Option<Arc<Mutex<Vec<Uuid>>>>,
+}
+
+impl AuditedScriptModelExecutor {
+    pub fn new(
+        executor: Arc<AuditedModelExecutor>,
+        owner: AuditedCallOwner,
+        agent_key: String,
+        agent_version: String,
+        binding: FixedModelBinding,
+    ) -> Self {
+        Self {
+            executor,
+            owner,
+            agent_key,
+            agent_version,
+            binding,
+            call_ids: None,
+        }
+    }
+
+    /// Exposes call IDs to the conversation adapter so it can link terminal calls to the existing Step.
+    pub fn with_call_ids(mut self, call_ids: Arc<Mutex<Vec<Uuid>>>) -> Self {
+        self.call_ids = Some(call_ids);
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl ScriptModelExecutor for AuditedScriptModelExecutor {
+    async fn execute(
+        &self,
+        call: ScriptModelCall,
+    ) -> Result<ScriptModelResponse, ScriptModelExecutionError> {
+        let fragment_id = format!("{}:attempt:{}", call.node_key, call.attempt);
+        let fragment = DynamicFragment {
+            id: fragment_id.clone(),
+            trust: TrustLevel::UserInstruction,
+            source: "script_generation_request".into(),
+            content: Some(call.content),
+            asset: None,
+        };
+        let contract = call.contract;
+        let result = self
+            .executor
+            .execute_parsed(
+                AuditedModelRequest {
+                    owner: self.owner,
+                    step_id: None,
+                    root_call_id: call.root_call_id,
+                    parent_call_id: None,
+                    attempt: call.attempt,
+                    agent_key: self.agent_key.clone(),
+                    agent_version: self.agent_version.clone(),
+                    node_key: call.node_key,
+                    compile_input: PromptCompileInput {
+                        schema_version: "1".into(),
+                        variables: call.variables,
+                        fragments: vec![fragment],
+                    },
+                    tool_profile: "chat".into(),
+                    tool_schema: None,
+                    binding: self.binding.clone(),
+                    context_sources: json!([{
+                        "id": fragment_id,
+                        "trust": "user_instruction",
+                        "source": "script_generation_request"
+                    }]),
+                    memory_sources: json!([]),
+                    parameters: json!({}),
+                    asset_references: json!([]),
+                },
+                move |raw| validate_script_output(raw, contract).map(|()| raw.to_string()),
+            )
+            .await;
+        match result {
+            Ok(response) => {
+                if let Some(call_ids) = &self.call_ids {
+                    call_ids
+                        .lock()
+                        .map_err(|_| {
+                            ScriptModelExecutionError::Execution(
+                                "audited call IDs lock poisoned".into(),
+                            )
+                        })?
+                        .push(response.model_call_id);
+                }
+                Ok(ScriptModelResponse {
+                    model_call_id: response.model_call_id,
+                    output: response.output,
+                })
+            }
+            Err(AuditedModelError::Provider {
+                model_call_id,
+                source,
+            }) => Err(ScriptModelExecutionError::Provider {
+                model_call_id: Some(model_call_id),
+                source,
+            }),
+            Err(AuditedModelError::StructuredParse {
+                model_call_id,
+                message,
+            }) => Err(ScriptModelExecutionError::StructuredParse {
+                model_call_id,
+                message,
+            }),
+            Err(error) => Err(ScriptModelExecutionError::Execution(error.to_string())),
+        }
+    }
+}
+
+fn validate_script_output(raw: &str, contract: ScriptOutputContract) -> Result<(), String> {
+    match contract {
+        ScriptOutputContract::Complete { scene_count } => {
+            ScriptLLMOutput::parse_and_validate(raw, scene_count).map(|_| ())
+        }
+        ScriptOutputContract::Metadata => {
+            ScriptMetadataLLMOutput::parse_and_validate(raw).map(|_| ())
+        }
+        ScriptOutputContract::SingleScene { sequence } => {
+            ScriptSceneLLMOutput::parse_and_validate(raw, sequence).map(|_| ())
+        }
+    }
+    .map_err(|error| error.to_string())
+}
+
+struct ScriptCallSequence {
+    root_call_id: Option<Uuid>,
+    next_attempt: i32,
+}
+
+impl ScriptCallSequence {
+    fn new() -> Self {
+        Self {
+            root_call_id: None,
+            next_attempt: 1,
+        }
+    }
+
+    fn remember_root(&mut self, model_call_id: Uuid) {
+        if self.root_call_id.is_none() {
+            self.root_call_id = Some(model_call_id);
+        }
     }
 }
 

@@ -21,9 +21,9 @@ use crate::model_routing::{
 };
 use crate::repositories::{
     PostgresAiModelRepository, PostgresAssetGenerationRepository, PostgresConversationRepository,
-    PostgresMaterialRepository, PostgresProjectRepository, PostgresPublicationRepository,
-    PostgresScriptRepository, PostgresSoundSubtitleRepository, PostgresTopicRepository,
-    PostgresTosStagingToolRepository, PostgresVoiceCatalogRepository,
+    PostgresMaterialRepository, PostgresModelCallRepository, PostgresProjectRepository,
+    PostgresPublicationRepository, PostgresScriptRepository, PostgresSoundSubtitleRepository,
+    PostgresTopicRepository, PostgresTosStagingToolRepository, PostgresVoiceCatalogRepository,
     PostgresWorkGenerationRepository, PostgresWorkLibraryRepository,
     PostgresWorkspaceMenuRepository,
 };
@@ -38,6 +38,7 @@ pub struct AppState {
     pub(crate) redis_client: Option<redis::Client>,
     model_client_resolver: Option<Arc<dyn ModelClientResolver>>,
     agent_registry: Option<Arc<novex_agent::AgentRegistry>>,
+    definition_registry: Option<Arc<novex_ai_core::DefinitionRegistry>>,
 }
 
 impl AppState {
@@ -48,6 +49,7 @@ impl AppState {
             redis_client: None,
             model_client_resolver: None,
             agent_registry: None,
+            definition_registry: None,
         }
     }
 
@@ -56,6 +58,9 @@ impl AppState {
         pg_pool: PgPool,
         redis_client: Option<redis::Client>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let definition_registry = Arc::new(novex_ai_core::DefinitionRegistry::load(
+            config.agent_definitions_dir(),
+        )?);
         let agent_registry = crate::application::agents::kernel::build_registry(&pg_pool)?;
         Ok(Self {
             config,
@@ -63,7 +68,35 @@ impl AppState {
             redis_client,
             model_client_resolver: None,
             agent_registry: Some(Arc::new(agent_registry)),
+            definition_registry: Some(definition_registry),
         })
+    }
+
+    pub(crate) fn definition_registry(
+        &self,
+    ) -> Result<Arc<novex_ai_core::DefinitionRegistry>, AppStateError> {
+        self.definition_registry
+            .clone()
+            .ok_or(AppStateError::MissingDependency("definition registry"))
+    }
+
+    pub(crate) fn model_call_repository(
+        &self,
+    ) -> Result<PostgresModelCallRepository, AppStateError> {
+        Ok(PostgresModelCallRepository::new(self.database_pool()?))
+    }
+
+    fn audited_model_executor(
+        &self,
+        pool: PgPool,
+    ) -> Result<Arc<novex_agent::AuditedModelExecutor>, AppStateError> {
+        let resolver = self.text_model_resolver(pool.clone());
+        let bound_resolver: Arc<dyn novex_agent::BoundModelResolver> = resolver;
+        Ok(Arc::new(novex_agent::AuditedModelExecutor::new(
+            self.definition_registry()?,
+            bound_resolver,
+            Arc::new(PostgresModelCallRepository::new(pool)),
+        )))
     }
 
     pub fn with_llm_client(mut self, llm_client: Arc<dyn LLMClient>) -> Self {
@@ -83,7 +116,9 @@ impl AppState {
             PostgresProjectRepository::new(pool.clone()),
             PostgresTopicRepository::new(pool.clone()),
             PostgresConversationRepository::new(pool.clone()),
-            self.text_model_resolver(pool),
+            self.text_model_resolver(pool.clone()),
+            self.definition_registry()?,
+            self.audited_model_executor(pool)?,
         ))
     }
 
@@ -92,7 +127,9 @@ impl AppState {
         Ok(ProjectService::new(
             PostgresProjectRepository::new(pool.clone()),
             PostgresConversationRepository::new(pool.clone()),
-            self.text_model_resolver(pool),
+            self.text_model_resolver(pool.clone()),
+            self.definition_registry()?,
+            self.audited_model_executor(pool)?,
         ))
     }
 
@@ -105,10 +142,12 @@ impl AppState {
             PostgresAiModelRepository::new(pool.clone()),
             PostgresVoiceCatalogRepository::new(pool.clone()),
             PostgresWorkLibraryRepository::new(pool.clone()),
-            self.text_model_resolver(pool),
+            self.text_model_resolver(pool.clone()),
             self.agent_registry
                 .clone()
                 .ok_or(AppStateError::MissingDependency("agent registry"))?,
+            self.definition_registry()?,
+            self.audited_model_executor(pool)?,
         ))
     }
 
@@ -118,7 +157,9 @@ impl AppState {
             PostgresProjectRepository::new(pool.clone()),
             PostgresTopicRepository::new(pool.clone()),
             PostgresConversationRepository::new(pool.clone()),
-            self.text_model_resolver(pool),
+            self.text_model_resolver(pool.clone()),
+            self.definition_registry()?,
+            self.audited_model_executor(pool)?,
         ))
     }
 

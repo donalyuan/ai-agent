@@ -209,7 +209,8 @@ impl LLMClient for ScriptedLLMClient {
     }
 }
 
-fn script_executor(
+async fn script_executor(
+    pool: PgPool,
     conversation_repository: Arc<PostgresConversationRepository>,
     script_repository: Arc<dyn ScriptRepository>,
     project_repository: Arc<dyn ProjectRepository>,
@@ -226,9 +227,11 @@ fn script_executor(
     TestAgentExecutor::new(
         registry,
         (*conversation_repository).clone(),
+        pool,
         llm_client,
-        None,
+        "video.script",
     )
+    .await
 }
 
 #[tokio::test]
@@ -250,11 +253,13 @@ async fn script_agent_dialogue_updates_target_scene_and_records_messages() {
         "reply": "已把第 3 镜改成深夜上线前的冲突场景，强化紧迫感和人工验证。"
     })));
     let runtime = script_executor(
+        test_pool.clone(),
         conversation_repository.clone(),
         script_repository.clone(),
         project_repository,
         llm_client.clone(),
-    );
+    )
+    .await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),
@@ -366,11 +371,13 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
         }),
     ]));
     let runtime = script_executor(
+        test_pool.clone(),
         conversation_repository.clone(),
         script_repository.clone(),
         project_repository,
         llm_client.clone(),
-    );
+    )
+    .await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),
@@ -463,11 +470,13 @@ async fn script_agent_dialogue_asks_for_missing_generation_fields_without_creati
         "missing_fields": ["topic", "style", "scene_count"]
     })));
     let runtime = script_executor(
+        test_pool.clone(),
         conversation_repository.clone(),
         script_repository.clone(),
         project_repository,
         llm_client.clone(),
-    );
+    )
+    .await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),
@@ -536,11 +545,13 @@ async fn script_agent_dialogue_records_failed_run_when_generation_llm_fails() {
     let project_repository = Arc::new(PostgresProjectRepository::new(test_pool.clone()));
     let llm_client = Arc::new(ScriptedLLMClient::failing(LLMError::Timeout));
     let runtime = script_executor(
+        test_pool.clone(),
         conversation_repository.clone(),
         script_repository.clone(),
         project_repository,
         llm_client,
-    );
+    )
+    .await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),

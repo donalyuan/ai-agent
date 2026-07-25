@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://novex.local/schemas/release-index.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "registry_digest", "releases"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "registry_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "releases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "definition_kind",
+          "definition_key",
+          "definition_version",
+          "definition_digest",
+          "activation_evidence"
+        ],
+        "properties": {
+          "definition_kind": { "enum": ["agent", "prompt"] },
+          "definition_key": { "type": "string", "minLength": 1 },
+          "definition_version": { "type": "string", "minLength": 1 },
+          "definition_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "activation_evidence": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "reference", "sha256"],
+                "properties": {
+                  "type": { "const": "golden_baseline" },
+                  "reference": { "type": "string", "minLength": 1 },
+                  "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "report_id"],
+                "properties": {
+                  "type": { "const": "eval_report" },
+                  "report_id": { "type": "string", "format": "uuid" }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

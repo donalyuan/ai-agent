@@ -1,10 +1,10 @@
 use axum::{response::IntoResponse, routing::post, Router};
+use novex_agent::BoundModelResolver;
 use novex_api::model_routing::{
     ModelClientResolver, ModelResolveError, PostgresModelClientResolver,
 };
 use novex_api::repositories::{
-    AiModelRepository, AiModelStatus, ChangeAiModelStatusInput, CreateAiModelInput,
-    PostgresAiModelRepository,
+    AiModelRepository, AiModelStatus, CreateAiModelInput, PostgresAiModelRepository,
 };
 use novex_model::{ApiProtocol, AuthScheme, LLMPrompt, ModelType};
 use serde_json::json;
@@ -66,7 +66,7 @@ fn model_input(base_url: String, model_type: ModelType) -> CreateAiModelInput {
     let (api_protocol, settings, reasoning_effort, max_output_tokens) = match model_type {
         ModelType::Text => (
             ApiProtocol::OpenAiResponses,
-            json!({}),
+            json!({"context_window": 128000}),
             Some("high".to_string()),
             Some(2048),
         ),
@@ -102,6 +102,53 @@ fn model_input(base_url: String, model_type: ModelType) -> CreateAiModelInput {
         source: "admin".to_string(),
         source_key: None,
     }
+}
+
+#[tokio::test]
+async fn audited_resolver_reloads_credentials_and_behavior_from_ai_models() {
+    let (admin_pool, pool, database_name) = migrated_pool().await;
+    let repository = PostgresAiModelRepository::new(pool.clone());
+    let model = repository
+        .create(model_input(
+            "https://example.invalid/v1".to_string(),
+            ModelType::Text,
+        ))
+        .await
+        .unwrap();
+    let resolver = PostgresModelClientResolver::new(repository);
+
+    let initial = BoundModelResolver::resolve(&resolver, model.id)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE ai_models SET api_key = 'rotated-secret-key' WHERE id = $1")
+        .bind(model.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let rotated = BoundModelResolver::resolve(&resolver, model.id)
+        .await
+        .unwrap();
+
+    assert_eq!(initial.behavior_fingerprint, rotated.behavior_fingerprint);
+    assert_eq!(initial.capabilities, rotated.capabilities);
+    assert_eq!(rotated.known_secrets, vec!["rotated-secret-key"]);
+    assert!(!serde_json::to_string(&rotated.model_snapshot)
+        .unwrap()
+        .contains("rotated-secret-key"));
+
+    sqlx::query("UPDATE ai_models SET upstream_model = 'behavior-drifted' WHERE id = $1")
+        .bind(model.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let drifted = BoundModelResolver::resolve(&resolver, model.id)
+        .await
+        .unwrap();
+    assert_ne!(rotated.behavior_fingerprint, drifted.behavior_fingerprint);
+
+    pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
 }
 
 #[tokio::test]
@@ -170,6 +217,13 @@ async fn resolver_rejects_disabled_and_non_text_models_before_client_creation() 
         ))
         .await
         .unwrap();
+    let deleted = repository
+        .create(model_input(
+            "https://example.invalid/v1".to_string(),
+            ModelType::Text,
+        ))
+        .await
+        .unwrap();
     let image = repository
         .create(model_input(
             "https://example.invalid/v1".to_string(),
@@ -177,16 +231,18 @@ async fn resolver_rejects_disabled_and_non_text_models_before_client_creation() 
         ))
         .await
         .unwrap();
-    repository
-        .change_status(ChangeAiModelStatusInput {
-            id: text.id,
-            version: text.version,
-            status: AiModelStatus::Disabled,
-            replacement_model_id: None,
-            allow_no_default: true,
-        })
+    sqlx::query("UPDATE ai_models SET status = 'disabled', is_default = FALSE WHERE id = $1")
+        .bind(text.id)
+        .execute(&pool)
         .await
         .unwrap();
+    sqlx::query(
+        "UPDATE ai_models SET status = 'deleted', deleted_at = NOW(), is_default = FALSE WHERE id = $1",
+    )
+    .bind(deleted.id)
+    .execute(&pool)
+    .await
+    .unwrap();
     let resolver = PostgresModelClientResolver::new(repository);
 
     assert!(matches!(
@@ -196,6 +252,10 @@ async fn resolver_rejects_disabled_and_non_text_models_before_client_creation() 
     assert!(matches!(
         resolver.text_client(image.id).await,
         Err(ModelResolveError::TypeMismatch { id, .. }) if id == image.id
+    ));
+    assert!(matches!(
+        resolver.text_client(deleted.id).await,
+        Err(ModelResolveError::NotFound(id) | ModelResolveError::Disabled(id)) if id == deleted.id
     ));
 
     pool.close().await;

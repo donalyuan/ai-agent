@@ -3,13 +3,22 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use novex_ai_core::AgentKey;
-use novex_model::{LLMClient, ModelExecutionSnapshot};
+use novex_model::ModelExecutionSnapshot;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
 use uuid::Uuid;
+
+mod audited_model;
+
+pub use audited_model::{
+    AuditedCallOwner, AuditedModelError, AuditedModelExecutor, AuditedModelRequest,
+    AuditedModelResponse, AuditedParsedModelResponse, AuditedTerminalStatus, BoundModelResolver,
+    FinishAuditedCall, FixedModelBinding, ModelCallAuditStore, PrepareAuditedCall,
+    ResolvedBoundModel,
+};
 
 pub const CRATE_PURPOSE: &str = "novex-agent";
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -119,8 +128,16 @@ pub struct AgentInvocation {
 
 #[derive(Clone)]
 pub struct ModelExecutionRef {
-    pub client: Arc<dyn LLMClient>,
     pub snapshot: Option<ModelExecutionSnapshot>,
+    pub audited: Option<AuditedExecutionBinding>,
+}
+
+#[derive(Clone)]
+pub struct AuditedExecutionBinding {
+    pub executor: Arc<AuditedModelExecutor>,
+    pub agent_key: String,
+    pub agent_version: String,
+    pub binding: FixedModelBinding,
 }
 
 #[derive(Clone)]
@@ -242,7 +259,7 @@ pub trait RunRecorder: Send + Sync {
 
 #[async_trait]
 pub trait StepRecorder: Send + Sync {
-    async fn record_step(&self, step: AgentStep) -> Result<(), BoxError>;
+    async fn record_step(&self, step: AgentStep) -> Result<Uuid, BoxError>;
 }
 
 #[derive(Debug)]

@@ -9,6 +9,7 @@ export interface RuntimeConfig {
   sqlitePath: string;
   workspaceRoot: string;
   shutdownTimeoutMs: number;
+  definitionsDir: string;
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -56,6 +57,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig 
       env.AGENT_RUNTIME_SHUTDOWN_TIMEOUT_MS,
       10_000,
       "AGENT_RUNTIME_SHUTDOWN_TIMEOUT_MS",
+    ),
+    definitionsDir: absolutePath(
+      env.NOVEX_AGENT_DEFINITIONS_DIR?.trim() || "/app/agent-definitions",
+      "NOVEX_AGENT_DEFINITIONS_DIR",
     ),
   };
 }

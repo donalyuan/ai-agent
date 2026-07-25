@@ -4,9 +4,10 @@ import type { AddressInfo } from "node:net";
 
 import type { Pool } from "pg";
 
-import { SessionCoordinator, type TextModelResolver } from "./coordinator.js";
+import { SessionCoordinator, type TextModelResolver, type UpgradeForkInput } from "./coordinator.js";
 import { normalizeError, publicError, RuntimeError } from "./errors.js";
 import { redactUnknown, safeJson } from "./redaction.js";
+import type { ModelCallListFilter } from "./persistence.js";
 import type { SessionStore, ToolProfile } from "./sessions.js";
 
 const MAX_BODY_BYTES = 1_048_576;
@@ -63,9 +64,92 @@ function optionalString(body: Record<string, unknown>, key: string): string | un
   return value.trim() || undefined;
 }
 
+function rejectUnknownFields(body: Record<string, unknown>, allowed: readonly string[]): void {
+  const known = new Set(allowed);
+  const unknown = Object.keys(body).find((key) => !known.has(key));
+  if (unknown) throw new RuntimeError("bad_request", 400, `不支持字段 ${unknown}`);
+}
+
+function objectField(body: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const value = body[key];
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new RuntimeError("bad_request", 400, `${key} 必须是 JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
 function sessionId(value: string): string {
   if (!UUID.test(value)) throw new RuntimeError("bad_request", 400, "session_id 格式无效");
   return value;
+}
+
+function modelCallListQuery(url: URL, fixedSessionId?: string): {
+  filter: ModelCallListFilter;
+  limit: number;
+  offset: number;
+} {
+  const offset = Number(url.searchParams.get("offset") ?? "0");
+  const limit = Number(url.searchParams.get("limit") ?? "100");
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw new RuntimeError("bad_request", 400, "ModelCall 分页参数无效");
+  }
+  const ownerType = url.searchParams.get("owner_type");
+  const ownerId = url.searchParams.get("owner_id");
+  let owner: string | undefined = fixedSessionId;
+  if (fixedSessionId !== undefined) {
+    if ((ownerType !== null && ownerType !== "session") || (ownerId !== null && ownerId !== fixedSessionId)) {
+      throw new RuntimeError("bad_request", 400, "Session ModelCall owner 筛选冲突");
+    }
+  } else if (ownerType === null && ownerId === null) {
+    owner = undefined;
+  } else if (ownerType === "session" && ownerId !== null && UUID.test(ownerId)) {
+    owner = ownerId;
+  } else {
+    throw new RuntimeError("bad_request", 400, "owner_type 与 owner_id 必须成对且类型有效");
+  }
+  const status = url.searchParams.get("status");
+  if (status !== null && !["prepared", "succeeded", "failed", "aborted"].includes(status)) {
+    throw new RuntimeError("bad_request", 400, "status 无效");
+  }
+  const modelId = url.searchParams.get("model_id") ?? undefined;
+  if (modelId !== undefined && !UUID.test(modelId)) throw new RuntimeError("bad_request", 400, "model_id 格式无效");
+  const timestamp = (key: string): string | undefined => {
+    const value = url.searchParams.get(key);
+    if (value === null) return undefined;
+    const parsed = new Date(value);
+    if (!Number.isFinite(parsed.getTime())) throw new RuntimeError("bad_request", 400, `${key} 格式无效`);
+    return parsed.toISOString();
+  };
+  const preparedFrom = timestamp("prepared_from");
+  const preparedTo = timestamp("prepared_to");
+  if (preparedFrom !== undefined && preparedTo !== undefined && preparedFrom > preparedTo) {
+    throw new RuntimeError("bad_request", 400, "prepared_from 不得晚于 prepared_to");
+  }
+  const text = (key: string): string | undefined => url.searchParams.get(key)?.trim() || undefined;
+  const filter: ModelCallListFilter = {};
+  if (owner !== undefined) filter.sessionId = owner;
+  const nodeKey = text("node_key");
+  const agentKey = text("agent_key");
+  const agentVersion = text("agent_version");
+  const promptKey = text("prompt_key");
+  const promptVersion = text("prompt_version");
+  if (nodeKey !== undefined) filter.nodeKey = nodeKey;
+  if (agentKey !== undefined) filter.agentKey = agentKey;
+  if (agentVersion !== undefined) filter.agentVersion = agentVersion;
+  if (promptKey !== undefined) filter.promptKey = promptKey;
+  if (promptVersion !== undefined) filter.promptVersion = promptVersion;
+  if (modelId !== undefined) filter.modelId = modelId;
+  if (status === "prepared" || status === "succeeded" || status === "failed" || status === "aborted") {
+    filter.status = status;
+  }
+  if (preparedFrom !== undefined) filter.preparedFrom = preparedFrom;
+  if (preparedTo !== undefined) filter.preparedTo = preparedTo;
+  return {
+    filter,
+    limit,
+    offset,
+  };
 }
 
 async function writeSse(response: ServerResponse, event: string, data: unknown): Promise<void> {
@@ -144,36 +228,75 @@ export class RuntimeHttpServer {
       writeJson(response, 200, { service: "novex-agent-runtime", status: "ready", postgresql: "ok", sqlite: "ok" });
       return;
     }
+    if (segments[0] === "model-calls") {
+      if (segments.length === 1 && method === "GET") {
+        const query = modelCallListQuery(url);
+        const page = await this.dependencies.coordinator.listModelCalls(query.filter, query.limit, query.offset);
+        writeJson(response, 200, {
+          schema_version: "1",
+          source_runtime: "pi",
+          ...page,
+          limit: query.limit,
+          offset: query.offset,
+        });
+        return;
+      }
+      const callId = segments[1];
+      if (!callId || !UUID.test(callId)) throw new RuntimeError("bad_request", 400, "model_call_id 格式无效");
+      if (segments.length === 2 && method === "GET") {
+        writeJson(response, 200, this.dependencies.coordinator.modelCall(callId));
+        return;
+      }
+      if (segments[2] === "export" && segments.length === 3 && method === "GET") {
+        writeJson(response, 200, this.dependencies.coordinator.exportModelCall(callId));
+        return;
+      }
+      if (segments[2] === "replay" && segments.length === 3 && method === "POST") {
+        const body = await readJson(request);
+        rejectUnknownFields(body, ["mode"]);
+        if (body.mode !== undefined && body.mode !== "dry_run") {
+          throw new RuntimeError("bad_request", 400, "replay 仅支持 dry_run；真实对比必须创建 EvalRun");
+        }
+        writeJson(response, 200, this.dependencies.coordinator.dryRunReplay(callId));
+        return;
+      }
+      throw new RuntimeError("not_found", 404, "路由不存在");
+    }
+    if (segments[0] === "migration" && segments[1] === "plan" && segments.length === 2 && method === "GET") {
+      writeJson(response, 200, await this.dependencies.coordinator.legacyMigrationPlan());
+      return;
+    }
     if (segments[0] !== "sessions") throw new RuntimeError("not_found", 404, "路由不存在");
 
     if (segments.length === 1 && method === "POST") {
       const body = await readJson(request);
+      rejectUnknownFields(body, ["agent_key", "model_id", "tool_profile", "source"]);
+      const agentKey = nonEmptyString(body, "agent_key");
       const modelId = nonEmptyString(body, "model_id");
       if (!UUID.test(modelId)) throw new RuntimeError("bad_request", 400, "model_id 格式无效");
       const profile = body.tool_profile;
       if (profile !== "chat" && profile !== "workspace") {
         throw new RuntimeError("bad_request", 400, "tool_profile 必须是 chat 或 workspace");
       }
-      const systemPrompt = optionalString(body, "system_prompt");
       const source = optionalString(body, "source") ?? "local_api";
       const created = await this.dependencies.coordinator.createSession({
+        agentKey,
         modelId,
         toolProfile: profile satisfies ToolProfile,
         source,
-        ...(systemPrompt ? { systemPrompt } : {}),
       });
       writeJson(response, 201, created);
       return;
     }
     if (segments.length === 1 && method === "GET") {
-      writeJson(response, 200, { sessions: await this.dependencies.sessions.list() });
+      writeJson(response, 200, { sessions: await this.dependencies.coordinator.listSessions() });
       return;
     }
 
     const id = sessionId(segments[1] ?? "");
     const command = segments[2];
     if (segments.length === 2 && method === "GET") {
-      writeJson(response, 200, await this.dependencies.sessions.view(id));
+      writeJson(response, 200, await this.dependencies.coordinator.sessionView(id));
       return;
     }
     if (segments.length === 2 && method === "DELETE") {
@@ -187,7 +310,19 @@ export class RuntimeHttpServer {
       if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
         throw new RuntimeError("bad_request", 400, "entries 游标或 limit 无效");
       }
-      writeJson(response, 200, { entries: await this.dependencies.sessions.entries(id, after, limit) });
+      writeJson(response, 200, { entries: await this.dependencies.coordinator.sessionEntries(id, after, limit) });
+      return;
+    }
+    if (command === "model-calls" && method === "GET") {
+      const query = modelCallListQuery(url, id);
+      const page = await this.dependencies.coordinator.listModelCalls(query.filter, query.limit, query.offset);
+      writeJson(response, 200, {
+        schema_version: "1",
+        source_runtime: "pi",
+        ...page,
+        limit: query.limit,
+        offset: query.offset,
+      });
       return;
     }
     if (command === "prompt" && method === "POST") {
@@ -233,12 +368,35 @@ export class RuntimeHttpServer {
     }
     if (command === "fork" && method === "POST") {
       const body = await readJson(request);
+      rejectUnknownFields(body, ["entry_id", "position", "upgrade"]);
       const entryId = optionalString(body, "entry_id");
       const position = body.position ?? "at";
       if (position !== "at" && position !== "before") {
         throw new RuntimeError("bad_request", 400, "position 必须是 at 或 before");
       }
-      writeJson(response, 201, await this.dependencies.coordinator.forkSession(id, entryId, position));
+      const rawUpgrade = objectField(body, "upgrade");
+      let upgrade: UpgradeForkInput | undefined;
+      if (rawUpgrade) {
+        rejectUnknownFields(rawUpgrade, ["agent_key", "agent_version", "model_id", "tool_profile", "legacy_prompt_disposition"]);
+        const modelId = nonEmptyString(rawUpgrade, "model_id");
+        if (!UUID.test(modelId)) throw new RuntimeError("bad_request", 400, "upgrade.model_id 格式无效");
+        const profile = rawUpgrade.tool_profile;
+        if (profile !== "chat" && profile !== "workspace") {
+          throw new RuntimeError("bad_request", 400, "upgrade.tool_profile 必须是 chat 或 workspace");
+        }
+        const disposition = rawUpgrade.legacy_prompt_disposition;
+        if (disposition !== undefined && disposition !== "discard" && disposition !== "user_instruction") {
+          throw new RuntimeError("bad_request", 400, "upgrade.legacy_prompt_disposition 必须是 discard 或 user_instruction");
+        }
+        upgrade = {
+          agentKey: nonEmptyString(rawUpgrade, "agent_key"),
+          agentVersion: nonEmptyString(rawUpgrade, "agent_version"),
+          modelId,
+          toolProfile: profile,
+          ...(disposition ? { legacyPromptDisposition: disposition } : {}),
+        };
+      }
+      writeJson(response, 201, await this.dependencies.coordinator.forkSession(id, entryId, position, upgrade));
       return;
     }
     throw new RuntimeError("not_found", 404, "路由不存在");

@@ -328,18 +328,49 @@ async fn script_routes_generate_read_list_and_update_status() {
     let script_id = generated["script_id"].as_str().unwrap();
     assert_eq!(generated["project_id"], project_id.to_string());
     assert_eq!(generated["scenes"].as_array().unwrap().len(), 5);
-    let run = sqlx::query_as::<_, (String, Option<Uuid>, Value)>(
-        "SELECT status, model_id, model_snapshot FROM agent_runs WHERE project_id = $1",
+    let run = sqlx::query_as::<_, (Uuid, String, Option<Uuid>, Value)>(
+        "SELECT id, status, model_id, model_snapshot FROM agent_runs WHERE project_id = $1",
     )
     .bind(project_id)
     .fetch_one(&test_pool)
     .await
     .unwrap();
-    assert_eq!(run.0, "succeeded");
-    assert_eq!(run.1, Some(model_id));
-    assert_eq!(run.2["model_id"], model_id.to_string());
-    assert!(run.2.get("api_key").is_none());
-    assert!(run.2.get("api_secret").is_none());
+    assert_eq!(run.1, "succeeded");
+    assert_eq!(run.2, Some(model_id));
+    assert_eq!(run.3["model_id"], model_id.to_string());
+    assert!(run.3.get("api_key").is_none());
+    assert!(run.3.get("api_secret").is_none());
+    let call = sqlx::query_as::<_, (String, String, i32, Value, Value, Option<String>)>(
+        "SELECT node_key,status,attempt,prompt_snapshot,context_sources,structured_parse_status FROM model_calls WHERE agent_run_id=$1",
+    )
+    .bind(run.0)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (call.0.as_str(), call.1.as_str(), call.2),
+        ("script.complete", "succeeded", 1)
+    );
+    assert_eq!(call.3["system"], "你是专业的短视频脚本创作者，擅长创作15-60秒的抖音/小红书短视频脚本。你必须只输出合法 JSON，不要输出解释、Markdown 或额外文本。");
+    assert_eq!(
+        call.3["output_schema"]["schema"]["properties"]["scenes"]["minItems"],
+        5
+    );
+    assert_eq!(
+        call.3["output_schema"]["schema"]["properties"]["scenes"]["maxItems"],
+        5
+    );
+    assert_eq!(call.4[0]["source"], "script_generation_request");
+    assert_eq!(call.5.as_deref(), Some("succeeded"));
+    let binding_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM agent_run_bindings WHERE agent_run_id=$1 AND agent_key='video.script' AND model_id=$2",
+    )
+    .bind(run.0)
+    .bind(model_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(binding_count, 1);
 
     let get_response = app
         .clone()
@@ -482,6 +513,30 @@ async fn generate_route_uses_stepwise_single_scene_mode_for_xhigh() {
     assert_eq!(generate_response.status(), StatusCode::OK);
     let generated = response_json(generate_response).await;
     assert_eq!(generated["scenes"].as_array().unwrap().len(), 3);
+
+    let calls = sqlx::query_as::<_, (String, String, i32, Value)>(
+        r#"
+        SELECT mc.node_key,mc.status,mc.attempt,mc.prompt_snapshot
+        FROM model_calls mc
+        JOIN agent_runs ar ON ar.id=mc.agent_run_id
+        WHERE ar.project_id=$1
+        ORDER BY mc.prepared_at,mc.id
+        "#,
+    )
+    .bind(project_id)
+    .fetch_all(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0].0, "script.metadata");
+    assert!(calls[1..]
+        .iter()
+        .all(|call| call.0 == "script.single_scene"));
+    assert!(calls
+        .iter()
+        .all(|call| call.1 == "succeeded" && call.2 == 1));
+    assert_eq!(calls[0].3["output_schema"]["name"], "script_metadata");
+    assert_eq!(calls[1].3["output_schema"]["name"], "script_scene");
 
     {
         let requests = requests.lock().unwrap();

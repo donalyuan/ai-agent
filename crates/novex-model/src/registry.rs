@@ -172,7 +172,9 @@ impl FromStr for ApiProtocol {
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct TextModelSettings {}
+pub struct TextModelSettings {
+    pub context_window: u64,
+}
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -285,7 +287,14 @@ impl ModelSettings {
 
     fn validate(&self) -> Result<(), ModelSettingsError> {
         match self {
-            Self::Text(_) => Ok(()),
+            Self::Text(settings) => {
+                if settings.context_window == 0 {
+                    return Err(ModelSettingsError::InvalidSettings(
+                        "text context_window must be positive".to_string(),
+                    ));
+                }
+                Ok(())
+            }
             Self::Image(settings) => {
                 if let Some(maximum) = settings.max_images_per_request {
                     if !(1..=48).contains(&maximum) {

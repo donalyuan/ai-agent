@@ -2,16 +2,19 @@ use async_trait::async_trait;
 use novex_agent::{AgentInvocation, AgentRegistry, RunRecorder, StepRecorder};
 use novex_api::agents::{LLMClient, LLMError};
 use novex_api::application::agents::adapters::{
-    AgentRuntimeError, AgentTurnResponse, TopicAgentAdapter,
+    AgentRuntimeError, AgentTurnResponse, AuditedTopicReviewExecution, TopicAgentAdapter,
 };
-use novex_api::application::agents::kernel::PostgresAgentKernelStore;
+use novex_api::application::agents::kernel::{
+    active_rust_definition_binding, PostgresAgentKernelStore,
+};
 use novex_api::domain::conversation::{
-    AgentMessageRole, CreateAgentConversationInput, CreateAgentMessageInput,
+    AgentMessageRole, CreateAgentConversationInput, CreateAgentMessageInput, ModelBindingEvidence,
 };
 use novex_api::domain::topic::{
     ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatchStatus,
     TopicQualityEvaluationStatus, TopicReviewPriority, TopicReviewRiskFlag, TopicReviewSnapshot,
 };
+use novex_api::model_routing::model_behavior_evidence;
 use novex_api::repositories::{
     ConversationRepository, CreateContentTopicInput, CreateTopicGenerationBatchInput,
     PostgresConversationRepository, PostgresProjectRepository, PostgresTopicRepository,
@@ -207,7 +210,7 @@ impl LLMClient for ScriptedLLMClient {
 struct TopicTestRuntime {
     executor: TestAgentExecutor,
     adapter: Arc<TopicAgentAdapter>,
-    llm_client: Arc<ScriptedLLMClient>,
+    run_repository: PostgresConversationRepository,
     runs: Arc<dyn RunRecorder>,
     steps: Arc<dyn StepRecorder>,
 }
@@ -225,12 +228,27 @@ impl TopicTestRuntime {
         project_id: Uuid,
         root_batch_id: Uuid,
     ) -> Result<TopicReviewSnapshot, AgentRuntimeError> {
+        let model = self.executor.model();
+        let snapshot = model.snapshot.clone().unwrap();
+        let evidence = model_behavior_evidence(&snapshot)
+            .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
+        let definition = active_rust_definition_binding(self.executor.definitions(), "video.topic")
+            .map_err(AgentRuntimeError::Kernel)?;
         self.adapter
-            .review_topic_group(
+            .review_topic_group_audited(
                 project_id,
                 root_batch_id,
-                self.llm_client.clone(),
-                None,
+                snapshot.clone(),
+                AuditedTopicReviewExecution {
+                    definition,
+                    model_binding: ModelBindingEvidence {
+                        model_id: snapshot.model_id,
+                        behavior_fingerprint: evidence.behavior_fingerprint,
+                        model_capabilities: serde_json::to_value(evidence.capabilities).unwrap(),
+                    },
+                    audited: model.audited.clone().unwrap(),
+                },
+                self.run_repository.clone(),
                 self.runs.clone(),
                 self.steps.clone(),
             )
@@ -238,7 +256,7 @@ impl TopicTestRuntime {
     }
 }
 
-fn build_topic_runtime(
+async fn build_topic_runtime(
     pool: PgPool,
     llm_client: Arc<ScriptedLLMClient>,
 ) -> (
@@ -248,7 +266,7 @@ fn build_topic_runtime(
 ) {
     let conversation_repository = Arc::new(PostgresConversationRepository::new(pool.clone()));
     let project_repository = Arc::new(PostgresProjectRepository::new(pool.clone()));
-    let topic_repository = Arc::new(PostgresTopicRepository::new(pool));
+    let topic_repository = Arc::new(PostgresTopicRepository::new(pool.clone()));
     let adapter = Arc::new(TopicAgentAdapter::new(
         conversation_repository.clone(),
         project_repository,
@@ -265,11 +283,13 @@ fn build_topic_runtime(
         executor: TestAgentExecutor::new(
             registry,
             (*conversation_repository).clone(),
+            pool,
             llm_client.clone(),
-            None,
-        ),
+            "video.topic",
+        )
+        .await,
         adapter,
-        llm_client,
+        run_repository: (*conversation_repository).clone(),
         runs,
         steps,
     };
@@ -330,7 +350,7 @@ async fn account_strategy_context_is_injected_into_topic_generation_and_quality_
         Ok(generation.to_string()),
     ]));
     let (runtime, conversation_repository, _topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client.clone());
+        build_topic_runtime(test_pool.clone(), llm_client.clone()).await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),
@@ -381,7 +401,7 @@ async fn account_strategy_context_is_injected_into_topic_group_review_prompt() {
     let project_id = insert_project_with_strategy_profile(&test_pool).await;
     let llm_client = Arc::new(ScriptedLLMClient::returning_raw("{}"));
     let (_runtime, _conversation_repository, topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client);
+        build_topic_runtime(test_pool.clone(), llm_client).await;
     let original_batch = topic_repository
         .create_generation_batch(CreateTopicGenerationBatchInput {
             project_id,
@@ -416,7 +436,7 @@ async fn account_strategy_context_is_injected_into_topic_group_review_prompt() {
         ]
     })));
     let (runtime, _conversation_repository, _topic_repository) =
-        build_topic_runtime(test_pool.clone(), review_llm_client.clone());
+        build_topic_runtime(test_pool.clone(), review_llm_client.clone()).await;
 
     runtime
         .review_topic_group(project_id, original_batch.id)
@@ -450,7 +470,8 @@ async fn topic_group_review_persists_snapshot_records_steps_and_preserves_topic_
     let (_runtime, _conversation_repository, topic_repository) = build_topic_runtime(
         test_pool.clone(),
         Arc::new(ScriptedLLMClient::returning_raw("{}")),
-    );
+    )
+    .await;
     let original_batch = topic_repository
         .create_generation_batch(CreateTopicGenerationBatchInput {
             project_id,
@@ -509,7 +530,7 @@ async fn topic_group_review_persists_snapshot_records_steps_and_preserves_topic_
         ]
     })));
     let (runtime, _conversation_repository, topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client.clone());
+        build_topic_runtime(test_pool.clone(), llm_client.clone()).await;
 
     let snapshot = runtime
         .review_topic_group(project_id, original_batch.id)
@@ -679,7 +700,7 @@ async fn topic_group_review_rejects_invalid_output_without_changing_topic_status
         }
         let llm_client = Arc::new(ScriptedLLMClient::returning(payload));
         let (runtime, _conversation_repository, topic_repository) =
-            build_topic_runtime(test_pool.clone(), llm_client);
+            build_topic_runtime(test_pool.clone(), llm_client).await;
 
         let error = runtime
             .review_topic_group(project_id, original_batch.id)
@@ -783,7 +804,7 @@ async fn topic_group_review_rejects_invalid_json_missing_fields_and_llm_failure(
             FailureKind::LlmTimeout => ScriptedLLMClient::failing(LLMError::Timeout),
         };
         let (runtime, _conversation_repository, topic_repository) =
-            build_topic_runtime(test_pool.clone(), Arc::new(llm_client));
+            build_topic_runtime(test_pool.clone(), Arc::new(llm_client)).await;
 
         let error = runtime
             .review_topic_group(project_id, original_batch.id)
@@ -862,7 +883,7 @@ async fn topic_agent_generates_topics_persists_batch_and_records_steps() {
         Ok(generation.to_string()),
     ]));
     let (runtime, conversation_repository, topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client.clone());
+        build_topic_runtime(test_pool.clone(), llm_client.clone()).await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),
@@ -1025,7 +1046,7 @@ async fn topic_agent_filters_candidates_through_quality_gate_before_persisting()
         Ok(generation.to_string()),
     ]));
     let (runtime, conversation_repository, topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client.clone());
+        build_topic_runtime(test_pool.clone(), llm_client.clone()).await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),
@@ -1265,7 +1286,7 @@ async fn topic_agent_rewrites_once_when_first_quality_pass_rate_is_low() {
         Ok(first_generation.to_string()),
     ]));
     let (runtime, conversation_repository, topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client.clone());
+        build_topic_runtime(test_pool.clone(), llm_client.clone()).await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),
@@ -1381,7 +1402,7 @@ async fn topic_agent_quality_evaluation_failure_marks_batch_failed_without_topic
         Ok(generation.to_string()),
     ]));
     let (runtime, conversation_repository, topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client);
+        build_topic_runtime(test_pool.clone(), llm_client).await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),
@@ -1508,7 +1529,7 @@ async fn topic_agent_marks_batch_failed_when_rewrite_has_no_passed_candidates() 
         Ok(first_generation.to_string()),
     ]));
     let (runtime, conversation_repository, topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client);
+        build_topic_runtime(test_pool.clone(), llm_client).await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),
@@ -1601,7 +1622,7 @@ async fn topic_agent_generates_supplement_batch_without_mutating_original_batch(
         Ok(generation.to_string()),
     ]));
     let (runtime, conversation_repository, topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client);
+        build_topic_runtime(test_pool.clone(), llm_client).await;
     let original_batch = topic_repository
         .create_generation_batch(CreateTopicGenerationBatchInput {
             project_id,
@@ -1723,7 +1744,7 @@ async fn topic_agent_includes_topic_context_when_generating_supplement_batch() {
         Ok(generation.to_string()),
     ]));
     let (runtime, conversation_repository, topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client.clone());
+        build_topic_runtime(test_pool.clone(), llm_client.clone()).await;
     let original_batch = topic_repository
         .create_generation_batch(CreateTopicGenerationBatchInput {
             project_id,
@@ -1866,7 +1887,7 @@ async fn topic_agent_rejects_unusable_supplement_targets_before_llm_call() {
         ]
     })));
     let (runtime, conversation_repository, topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client.clone());
+        build_topic_runtime(test_pool.clone(), llm_client.clone()).await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),
@@ -2022,7 +2043,7 @@ async fn topic_agent_rejects_invalid_llm_output_without_partial_topics() {
         ]
     })));
     let (runtime, conversation_repository, topic_repository) =
-        build_topic_runtime(test_pool.clone(), llm_client);
+        build_topic_runtime(test_pool.clone(), llm_client).await;
     let conversation = conversation_repository
         .create_conversation(CreateAgentConversationInput {
             project_id: Some(project_id),
@@ -2135,7 +2156,7 @@ async fn topic_agent_rejects_empty_invalid_out_of_range_and_llm_failure_outputs(
         let (admin_pool, test_pool, database_name) = migrated_pool().await;
         let project_id = insert_project(&test_pool).await;
         let (runtime, conversation_repository, topic_repository) =
-            build_topic_runtime(test_pool.clone(), Arc::new(llm_client));
+            build_topic_runtime(test_pool.clone(), Arc::new(llm_client)).await;
         let conversation = conversation_repository
             .create_conversation(CreateAgentConversationInput {
                 project_id: Some(project_id),

@@ -1,6 +1,8 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import {
   createModels,
@@ -11,12 +13,17 @@ import {
   type FauxProviderHandle,
   type Model,
 } from "@earendil-works/pi-ai";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { createNodeSqliteFactory, SqliteSessionRepo } from "@earendil-works/pi-storage-sqlite-node";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SessionCoordinator, type TextModelResolver } from "../src/coordinator.js";
+import { behaviorFingerprint, loadDefinitionRegistry } from "../src/definitions.js";
 import type { PiModelRuntime, ResolvedTextModel } from "../src/models.js";
+import { RuntimeError } from "../src/errors.js";
 import { RuntimeHttpServer } from "../src/server.js";
-import { SessionStore } from "../src/sessions.js";
+import { cleanupSession, SessionStore } from "../src/sessions.js";
+import { createAuditedModels } from "../src/audited-models.js";
 
 const MODEL_ID = "11111111-1111-4111-8111-111111111111";
 const SECRET = "runtime-test-secret";
@@ -26,6 +33,10 @@ interface Fixture {
   faux: FauxProviderHandle;
   server: RuntimeHttpServer;
   baseUrl: string;
+  sessions: SessionStore;
+  resolverCalls: () => number;
+  updateModel: (patch: Partial<ResolvedTextModel>) => void;
+  failModelResolution: (error?: RuntimeError) => void;
 }
 
 const fixtures: Fixture[] = [];
@@ -37,7 +48,7 @@ afterEach(async () => {
 async function fixture(tokensPerSecond?: number): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), "novex-runtime-"));
   const sessions = new SessionStore(join(root, "sessions.sqlite"), root);
-  const resolved: ResolvedTextModel = {
+  let resolved: ResolvedTextModel = {
     id: MODEL_ID,
     providerName: "faux",
     protocol: "openai_responses",
@@ -47,35 +58,57 @@ async function fixture(tokensPerSecond?: number): Promise<Fixture> {
     timeoutMs: 10_000,
     maxOutputTokens: 4096,
     contextWindow: 128000,
+    settings: {},
   };
+  let resolveCalls = 0;
+  let resolveError: RuntimeError | undefined;
   const resolver: TextModelResolver = {
-    resolveEnabledText: async () => resolved,
+    resolveEnabledText: async () => {
+      resolveCalls += 1;
+      if (resolveError) throw resolveError;
+      return resolved;
+    },
     ping: async () => undefined,
   };
   const faux = fauxProvider({
     provider: `faux-${Date.now()}-${Math.random()}`,
     ...(tokensPerSecond === undefined ? {} : { tokensPerSecond }),
   });
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const runtime: PiModelRuntime = {
-    models,
-    model: faux.getModel() as Model<Api>,
-    streamOptions: { timeoutMs: 10_000 },
-    thinkingLevel: "off",
-    snapshot: {
-      model_id: MODEL_ID,
-      provider: "faux",
-      protocol: "openai_responses",
-      request_base_url: "http://localhost:0",
-      upstream_model: "faux-1",
-      reasoning_effort: null,
-      max_output_tokens: 4096,
-      timeout_seconds: 10,
-    },
-    secrets: [SECRET],
+  const runtimeFor = (config: ResolvedTextModel): PiModelRuntime => {
+    const models = createAuditedModels(createModels());
+    models.setProvider(faux.provider);
+    const fingerprint = behaviorFingerprint({
+      protocol: config.protocol,
+      request_base_url: config.requestBaseUrl,
+      upstream_model: config.upstreamModel,
+      reasoning_effort: config.reasoningEffort ?? null,
+      max_output_tokens: config.maxOutputTokens,
+      context_window: config.contextWindow,
+      settings: config.settings,
+    });
+    return {
+      models,
+      model: faux.getModel() as Model<Api>,
+      streamOptions: { timeoutMs: config.timeoutMs, maxRetries: 0 },
+      thinkingLevel: "off",
+      snapshot: {
+        model_id: config.id,
+        provider: config.providerName,
+        protocol: config.protocol,
+        request_base_url: config.requestBaseUrl,
+        upstream_model: config.upstreamModel,
+        reasoning_effort: config.reasoningEffort ?? null,
+        max_output_tokens: config.maxOutputTokens,
+        timeout_seconds: config.timeoutMs / 1000,
+        context_window: config.contextWindow,
+        behavior_settings: fingerprint.normalized.settings,
+        behavior_fingerprint: fingerprint.digest,
+      },
+      secrets: [config.apiKey],
+    };
   };
-  const coordinator = new SessionCoordinator(sessions, resolver, () => runtime);
+  const definitions = await loadDefinitionRegistry(resolve(import.meta.dirname, "../../../agent-definitions"));
+  const coordinator = new SessionCoordinator(sessions, resolver, runtimeFor, definitions);
   const server = new RuntimeHttpServer({
     sessions,
     coordinator,
@@ -83,7 +116,20 @@ async function fixture(tokensPerSecond?: number): Promise<Fixture> {
     pool: { end: async () => undefined },
   });
   await server.listen("127.0.0.1", 0);
-  const created = { root, faux, server, baseUrl: `http://127.0.0.1:${server.port}` };
+  const created: Fixture = {
+    root,
+    faux,
+    server,
+    baseUrl: `http://127.0.0.1:${server.port}`,
+    sessions,
+    resolverCalls: () => resolveCalls,
+    updateModel: (patch) => {
+      resolved = { ...resolved, ...patch };
+    },
+    failModelResolution: (error = new RuntimeError("model_not_found", 404, "模型已停用或删除")) => {
+      resolveError = error;
+    },
+  };
   fixtures.push(created);
   return created;
 }
@@ -92,7 +138,7 @@ async function createSession(baseUrl: string, profile: "chat" | "workspace" = "c
   const response = await fetch(`${baseUrl}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model_id: MODEL_ID, tool_profile: profile }),
+    body: JSON.stringify({ agent_key: "personal.general", model_id: MODEL_ID, tool_profile: profile }),
   });
   expect(response.status).toBe(201);
   const body = (await response.json()) as { session: { session_id: string } };
@@ -107,7 +153,299 @@ function post(baseUrl: string, path: string, body: object = {}) {
   });
 }
 
+async function createLegacySession(root: string, systemPrompt?: string): Promise<string> {
+  const env = new NodeExecutionEnv({ cwd: root });
+  const repo = new SqliteSessionRepo({
+    env,
+    sqlite: createNodeSqliteFactory(),
+    databasePath: join(root, "sessions.sqlite"),
+  });
+  const session = await repo.create({
+    cwd: root,
+    metadata: {
+      model_id: MODEL_ID,
+      tool_profile: "chat",
+      source: "legacy_fixture",
+      ...(systemPrompt ? { system_prompt: systemPrompt } : {}),
+    },
+  });
+  await session.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: "legacy history" }],
+    timestamp: Date.now(),
+  });
+  const id = (await session.getMetadata()).id;
+  await cleanupSession(session);
+  await env.cleanup();
+  return id;
+}
+
+function sortedKeys(value: unknown): string[] {
+  return Object.keys(value as Record<string, unknown>).sort();
+}
+
+function contractFields(contract: Record<string, unknown>, key: string): string[] {
+  return [...(contract[key] as string[])].sort();
+}
+
 describe("fake provider runtime and SSE", () => {
+  it("plans and idempotently migrates legacy sessions without losing trees or reusing custom System text", async () => {
+    const current = await fixture();
+    const plainId = await createLegacySession(current.root);
+    const customId = await createLegacySession(current.root, "legacy custom system");
+
+    const plan = await fetch(`${current.baseUrl}/migration/plan`);
+    expect(plan.status).toBe(200);
+    const planned = await plan.json() as { dry_run: boolean; items: Array<Record<string, unknown>> };
+    expect(planned.dry_run).toBe(true);
+    expect(planned.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ session_id: plainId, disposition: "auto_bind_personal_general" }),
+      expect.objectContaining({ session_id: customId, disposition: "custom_prompt_read_only" }),
+    ]));
+    expect(current.sessions.novex.listModelCalls(plainId)).toHaveLength(0);
+    const backupPath = join(current.root, "pre-migration.sqlite");
+    await current.sessions.backupForHistoryMigration(backupPath);
+    const backup = new DatabaseSync(backupPath, { readOnly: true });
+    expect(backup.prepare("SELECT COUNT(*) AS count FROM novex_session_bindings").get())
+      .toMatchObject({ count: 0 });
+    backup.close();
+
+    const plain = await fetch(`${current.baseUrl}/sessions/${plainId}`);
+    expect(plain.status).toBe(200);
+    expect(await plain.json()).toMatchObject({ session_id: plainId, agent_key: "personal.general", agent_version: "1.0.0" });
+    expect(current.sessions.novex.binding(plainId)).toMatchObject({
+      binding_status: "executable",
+      migration_source: "legacy_default_prompt",
+    });
+    expect(current.sessions.novex.migrationEvent(plainId, "legacy_default_prompt_bound"))
+      .toMatchObject({ details: { legacy_text_exposed: false } });
+    expect((await current.sessions.entries(plainId)).map(({ entry }) => entry))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ type: "message" })]));
+
+    const custom = await fetch(`${current.baseUrl}/sessions/${customId}`);
+    expect(custom.status).toBe(200);
+    expect(current.sessions.novex.binding(customId)).toMatchObject({
+      binding_status: "read_only",
+      migration_source: "legacy_custom_prompt",
+    });
+    expect(JSON.stringify(current.sessions.novex.migrationEvent(customId, "legacy_custom_prompt_read_only")))
+      .not.toContain("legacy custom system");
+    expect((await post(current.baseUrl, `/sessions/${customId}/prompt`, { text: "continue" })).status).toBe(409);
+    expect((await post(current.baseUrl, `/sessions/${customId}/fork`, {})).status).toBe(409);
+
+    const upgrade = {
+      agent_key: "personal.general",
+      agent_version: "1.0.0",
+      model_id: MODEL_ID,
+      tool_profile: "chat",
+    };
+    expect((await post(current.baseUrl, `/sessions/${customId}/fork`, { upgrade })).status).toBe(409);
+    const visibleFork = await post(current.baseUrl, `/sessions/${customId}/fork`, {
+      upgrade: { ...upgrade, legacy_prompt_disposition: "user_instruction" },
+    });
+    expect(visibleFork.status).toBe(201);
+    const visibleId = ((await visibleFork.json()) as { session_id: string }).session_id;
+    const visibleEntries = await current.sessions.entries(visibleId);
+    expect(JSON.stringify(visibleEntries)).toContain("legacy custom system");
+    expect((await current.sessions.findMetadata(visibleId)).metadata).not.toHaveProperty("system_prompt");
+    expect(current.sessions.novex.binding(customId).binding_status).toBe("read_only");
+    expect(current.sessions.novex.binding(visibleId).binding_status).toBe("executable");
+
+    const customDiscardId = await createLegacySession(current.root, "discard this legacy system");
+    await fetch(`${current.baseUrl}/sessions/${customDiscardId}`);
+    const discardFork = await post(current.baseUrl, `/sessions/${customDiscardId}/fork`, {
+      upgrade: { ...upgrade, legacy_prompt_disposition: "discard" },
+    });
+    expect(discardFork.status).toBe(201);
+    const discardId = ((await discardFork.json()) as { session_id: string }).session_id;
+    expect(JSON.stringify(await current.sessions.entries(discardId))).not.toContain("discard this legacy system");
+    expect((await current.sessions.findMetadata(customDiscardId)).id).toBe(customDiscardId);
+
+    const after = await fetch(`${current.baseUrl}/migration/plan`);
+    expect(((await after.json()) as { items: unknown[] }).items).toHaveLength(0);
+    expect(current.sessions.novex.listModelCalls(plainId)).toHaveLength(0);
+  });
+
+  it("serves the shared ModelCall read contract and recompiles dry-run without side effects", async () => {
+    const current = await fixture();
+    current.faux.setResponses([fauxAssistantMessage("audited response")]);
+    const id = await createSession(current.baseUrl);
+    const prompt = await post(current.baseUrl, `/sessions/${id}/prompt`, { text: "audit this" });
+    expect(await prompt.text()).toContain("event: run_completed");
+
+    const contract = JSON.parse(await readFile(
+      resolve(import.meta.dirname, "../../../agent-definitions/fixtures/model-call-read-api.json"),
+      "utf8",
+    )) as Record<string, unknown>;
+    const raw = current.sessions.novex.listModelCalls(id);
+    expect(raw).toHaveLength(1);
+    const call = raw[0]!;
+    const query = new URLSearchParams({
+      owner_type: "session",
+      owner_id: id,
+      node_key: call.node_key,
+      agent_version: call.agent_version,
+      prompt_version: call.prompt_version,
+      model_id: call.model_id,
+      status: call.status,
+      prepared_from: call.prepared_at,
+      prepared_to: new Date(Date.now() + 60_000).toISOString(),
+      limit: "20",
+      offset: "0",
+    });
+    const list = await fetch(`${current.baseUrl}/model-calls?${query}`).then((item) => item.json()) as Record<string, unknown>;
+    expect(sortedKeys(list)).toEqual(contractFields(contract, "list_envelope_fields"));
+    expect(list.source_runtime).toBe("pi");
+    expect(list.total).toBe(1);
+    const summary = (list.items as Array<Record<string, unknown>>)[0]!;
+    expect(sortedKeys(summary)).toEqual(contractFields(contract, "summary_fields"));
+    expect(sortedKeys(summary.owner)).toEqual(contractFields(contract, "owner_fields"));
+    expect(sortedKeys(summary.execution)).toEqual(contractFields(contract, "execution_fields"));
+    expect(sortedKeys(summary.definition)).toEqual(contractFields(contract, "definition_fields"));
+    expect(sortedKeys(summary.model)).toEqual(contractFields(contract, "summary_model_fields"));
+    expect(sortedKeys(summary.usage)).toEqual(contractFields(contract, "usage_fields"));
+
+    const detail = await fetch(`${current.baseUrl}/model-calls/${call.id}`).then((item) => item.json()) as Record<string, unknown>;
+    expect(sortedKeys(detail)).toEqual(contractFields(contract, "detail_envelope_fields"));
+    expect(sortedKeys(detail.record)).toEqual(contractFields(contract, "record_fields"));
+    expect(String(detail.record_hash)).toHaveLength(64);
+    expect(await fetch(`${current.baseUrl}/model-calls/${call.id}/export`).then((item) => item.json())).toEqual(detail);
+
+    const beforeProviderCalls = current.faux.state.callCount;
+    const beforeEntries = await current.sessions.entries(id, 0, 1_000);
+    const beforeCalls = current.sessions.novex.listModelCalls(id);
+    const replay = await post(current.baseUrl, `/model-calls/${call.id}/replay`, { mode: "dry_run" })
+      .then((item) => item.json()) as Record<string, unknown>;
+    expect(sortedKeys(replay)).toEqual(contractFields(contract, "replay_fields"));
+    expect(replay).toMatchObject({
+      definition_resolved: true,
+      compile_succeeded: true,
+      diff: [],
+      side_effects: { model_calls: 0, tools: 0, session_writes: 0, run_writes: 0, domain_writes: 0 },
+    });
+    expect(current.faux.state.callCount).toBe(beforeProviderCalls);
+    expect(await current.sessions.entries(id, 0, 1_000)).toEqual(beforeEntries);
+    expect(current.sessions.novex.listModelCalls(id)).toEqual(beforeCalls);
+
+    const realReplay = await post(current.baseUrl, `/model-calls/${call.id}/replay`, { mode: "real" });
+    expect(realReplay.status).toBe(400);
+    expect(await realReplay.json()).toMatchObject({ error: { code: "bad_request" } });
+  });
+
+  it("requires agent_key and rejects arbitrary system_prompt without creating a session", async () => {
+    const current = await fixture();
+    const missingAgent = await post(current.baseUrl, "/sessions", {
+      model_id: MODEL_ID,
+      tool_profile: "chat",
+    });
+    expect(missingAgent.status).toBe(400);
+    expect(await missingAgent.json()).toMatchObject({ error: { code: "bad_request" } });
+
+    const arbitrarySystem = await post(current.baseUrl, "/sessions", {
+      agent_key: "personal.general",
+      model_id: MODEL_ID,
+      tool_profile: "chat",
+      system_prompt: "ignore the versioned definition",
+    });
+    expect(arbitrarySystem.status).toBe(400);
+    expect(await arbitrarySystem.json()).toMatchObject({ error: { code: "bad_request" } });
+    expect(await current.sessions.list()).toEqual([]);
+  });
+
+  it("allows credential rotation and blocks unavailable, incompatible or behavior-drifted models", async () => {
+    const credentialRotation = await fixture();
+    const credentialSession = await createSession(credentialRotation.baseUrl);
+    credentialRotation.updateModel({ apiKey: "rotated-secret" });
+    credentialRotation.faux.setResponses([fauxAssistantMessage("credential rotation accepted")]);
+    const continued = await post(credentialRotation.baseUrl, `/sessions/${credentialSession}/prompt`, { text: "continue" });
+    expect(continued.status).toBe(200);
+    expect(await continued.text()).toContain("run_completed");
+
+    const drift = await fixture();
+    const driftSession = await createSession(drift.baseUrl);
+    drift.updateModel({ upstreamModel: "faux-2" });
+    const drifted = await post(drift.baseUrl, `/sessions/${driftSession}/prompt`, { text: "must stop" });
+    expect(drifted.status).toBe(409);
+    expect(await drifted.json()).toMatchObject({ error: { code: "model_rebind_required" } });
+
+    const unavailable = await fixture();
+    const unavailableSession = await createSession(unavailable.baseUrl);
+    unavailable.failModelResolution();
+    const missing = await post(unavailable.baseUrl, `/sessions/${unavailableSession}/prompt`, { text: "must stop" });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ error: { code: "model_not_found" } });
+
+    const incompatible = await fixture();
+    incompatible.updateModel({ contextWindow: 4096 });
+    const rejected = await post(incompatible.baseUrl, "/sessions", {
+      agent_key: "personal.general",
+      model_id: MODEL_ID,
+      tool_profile: "chat",
+    });
+    expect(rejected.status).toBe(422);
+    expect(await rejected.json()).toMatchObject({ error: { code: "model_capability_mismatch" } });
+  });
+
+  it("does not call the provider when prepared ModelCall persistence fails", async () => {
+    const current = await fixture();
+    const id = await createSession(current.baseUrl);
+    current.faux.setResponses([fauxAssistantMessage("must not be called")]);
+    const database = new DatabaseSync(join(current.root, "sessions.sqlite"));
+    database.exec(`
+      CREATE TRIGGER fail_model_call_prepare
+      BEFORE INSERT ON novex_model_calls
+      BEGIN SELECT RAISE(ABORT, 'injected audit failure'); END;
+    `);
+    database.close();
+
+    const response = await post(current.baseUrl, `/sessions/${id}/prompt`, { text: "must stop before provider" });
+    const sse = await response.text();
+
+    expect(current.faux.state.callCount).toBe(0);
+    expect(current.faux.getPendingResponseCount()).toBe(1);
+    expect(sse).toContain('"code":"audit_persistence_failed"');
+    expect(sse).toContain("event: run_failed");
+    expect(sse).not.toContain("event: run_completed");
+    expect(current.sessions.novex.listModelCalls(id)).toEqual([]);
+    const entries = await current.sessions.entries(id, 0, 20);
+    expect(entries.some(({ entry }) => entry.type === "message"
+      && entry.message.role === "assistant"
+      && entry.message.stopReason !== "error")).toBe(false);
+  });
+
+  it("does not silently retry after partial stream output", async () => {
+    const current = await fixture();
+    let observedMaxRetries: number | undefined;
+    current.faux.setResponses([
+      (_context, options) => {
+        observedMaxRetries = options?.maxRetries;
+        return fauxAssistantMessage("partial output", {
+          stopReason: "error",
+          errorMessage: "stream failed after output",
+        });
+      },
+      fauxAssistantMessage("unapproved retry response"),
+    ]);
+    const id = await createSession(current.baseUrl);
+    const response = await post(current.baseUrl, `/sessions/${id}/prompt`, { text: "stream once" });
+    const sse = await response.text();
+
+    expect(observedMaxRetries).toBe(0);
+    expect(current.faux.state.callCount).toBe(1);
+    expect(current.faux.getPendingResponseCount()).toBe(1);
+    expect(sse).toContain("partial output");
+    expect(sse).toContain("event: run_failed");
+    expect(sse).not.toContain("unapproved retry response");
+    const calls = current.sessions.novex.listModelCalls(id);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ attempt: 1, status: "failed" });
+    expect(calls[0]?.entry_id).toBeTruthy();
+    expect(current.sessions.novex.modelCall(calls[0]!.id)).toMatchObject({
+      output_snapshot: { stopReason: "error" },
+      error_snapshot: { code: "provider_error", message: "stream failed after output" },
+    });
+  });
+
   it("streams compatible write and edit tool loops before the persisted terminal event", async () => {
     const current = await fixture();
     current.faux.setResponses([
@@ -137,9 +475,50 @@ describe("fake provider runtime and SSE", () => {
     expect(sse).not.toContain(SECRET);
     expect(await readFile(join(current.root, "result.txt"), "utf8")).toBe("after");
 
-    const entries = await fetch(`${current.baseUrl}/sessions/${id}/entries`).then((item) => item.json());
+    const entries = await fetch(`${current.baseUrl}/sessions/${id}/entries`).then((item) => item.json()) as {
+      entries: Array<{ entry: { id: string } }>;
+    };
     expect(JSON.stringify(entries)).toContain("finished");
     expect(JSON.stringify(entries)).not.toContain(SECRET);
+
+    const calls = (await fetch(`${current.baseUrl}/sessions/${id}/model-calls`).then((item) => item.json())) as {
+      items: Array<{
+        id: string;
+        execution: { entry_id: string | null };
+        node_key: string;
+        status: string;
+      }>;
+    };
+    expect(calls.items).toHaveLength(3);
+    expect(calls.items.every((call) => call.status === "succeeded")).toBe(true);
+    expect(calls.items.every((call) => typeof call.execution.entry_id === "string")).toBe(true);
+    expect(current.resolverCalls()).toBeGreaterThanOrEqual(4);
+    expect(calls.items.filter((call) => call.node_key === "personal.tool_followup")).toHaveLength(2);
+    const entryIds = new Set(entries.entries.map(({ entry }) => entry.id));
+    expect(calls.items.every((call) => call.execution.entry_id !== null && entryIds.has(call.execution.entry_id))).toBe(true);
+    const detail = await fetch(`${current.baseUrl}/model-calls/${calls.items[0]!.id}`).then((item) => item.json());
+    expect(JSON.stringify(detail)).not.toContain(SECRET);
+    const details = calls.items.map((call) => current.sessions.novex.modelCall(call.id));
+    const toolFollowups = details.filter((call) => call.node_key === "personal.tool_followup");
+    expect(toolFollowups).toHaveLength(2);
+    for (const call of toolFollowups) {
+      expect(call.prompt_snapshot).toMatchObject({
+        agent_key: "personal.general",
+        agent_version: "1.0.0",
+        node_key: "personal.tool_followup",
+      });
+      expect(call.context_sources).toEqual(expect.arrayContaining([
+        expect.objectContaining({ source: "pi_context_hook", trust: "reference" }),
+      ]));
+      expect(JSON.stringify(call.prompt_snapshot)).not.toContain("You are a helpful assistant.");
+    }
+    const exported = await fetch(`${current.baseUrl}/model-calls/${calls.items[0]!.id}/export`).then((item) => item.json());
+    expect(exported).toMatchObject({ schema_version: "1", source_runtime: "pi" });
+    const replay = await post(current.baseUrl, `/model-calls/${calls.items[0]!.id}/replay`, { mode: "dry_run" }).then((item) => item.json());
+    expect(replay).toMatchObject({
+      mode: "dry_run",
+      side_effects: { model_calls: 0, tools: 0, session_writes: 0, domain_writes: 0 },
+    });
   });
 
   it("rejects concurrent prompt and accepts steer plus follow-up during an active run", async () => {
@@ -162,7 +541,32 @@ describe("fake provider runtime and SSE", () => {
     expect(sse).toContain("event: queue_update");
     expect((sse.match(/event: run_completed/g) ?? [])).toHaveLength(1);
     expect(sse).not.toContain("event: run_failed");
+    const details = current.sessions.novex.listModelCalls(id).map((call) => current.sessions.novex.modelCall(call.id));
+    expect(details).toHaveLength(3);
+    const snapshots = details.map((call) => call.prompt_snapshot as { system: string; fragments: unknown[] });
+    expect(snapshots.some(({ fragments }) => JSON.stringify(fragments).includes('"trust":"steer"')
+      && JSON.stringify(fragments).includes("change direction"))).toBe(true);
+    expect(snapshots.some(({ fragments }) => JSON.stringify(fragments).includes('"trust":"follow_up"')
+      && JSON.stringify(fragments).includes("then continue"))).toBe(true);
+    expect(snapshots.every(({ system }) => !system.includes("change direction") && !system.includes("then continue"))).toBe(true);
   }, 15_000);
+
+  it("blocks model-requested tools outside the bound workspace profile", async () => {
+    const current = await fixture();
+    current.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("write", { path: "blocked.txt", content: "must not exist" }), {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage("tool request was blocked"),
+    ]);
+    const id = await createSession(current.baseUrl, "chat");
+    const response = await post(current.baseUrl, `/sessions/${id}/prompt`, { text: "try a tool" });
+    const sse = await response.text();
+
+    expect(sse).toContain("Tool write not found");
+    await expect(readFile(join(current.root, "blocked.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(current.sessions.novex.listModelCalls(id)).toHaveLength(2);
+  });
 
   it("aborts a slow run and emits exactly one completed terminal state", async () => {
     const current = await fixture(20);
@@ -176,4 +580,84 @@ describe("fake provider runtime and SSE", () => {
     expect((sse.match(/event: run_completed/g) ?? [])).toHaveLength(1);
     expect(sse).not.toContain("event: run_failed");
   }, 15_000);
+
+  it("keeps compaction, summarized navigation and fork on the persisted session tree", async () => {
+    const current = await fixture();
+    current.faux.setResponses([
+      fauxAssistantMessage("initial answer"),
+      fauxAssistantMessage("compact summary"),
+      fauxAssistantMessage("branch summary"),
+    ]);
+    const id = await createSession(current.baseUrl);
+    const promptResponse = await post(current.baseUrl, `/sessions/${id}/prompt`, { text: "establish context" });
+    expect((await promptResponse.text()).match(/event: run_completed/g)).toHaveLength(1);
+
+    const before = (await fetch(`${current.baseUrl}/sessions/${id}/entries`).then((item) => item.json())) as {
+      entries: Array<{ entry: { id: string; type: string } }>;
+    };
+    const userEntry = before.entries.find(({ entry }) => entry.type === "message")?.entry.id;
+    expect(userEntry).toBeTruthy();
+
+    const compact = await post(current.baseUrl, `/sessions/${id}/compact`, { instructions: "保留已确认事实" });
+    expect(compact.status).toBe(200);
+    const navigate = await post(current.baseUrl, `/sessions/${id}/tree`, {
+      entry_id: userEntry,
+      summarize: true,
+      instructions: "总结被切换的分支",
+    });
+    expect(navigate.status).toBe(200);
+
+    const fork = await post(current.baseUrl, `/sessions/${id}/fork`, { entry_id: userEntry, position: "at" });
+    expect(fork.status).toBe(201);
+    const forkView = await fork.json() as { session_id: string; parent_session_id: string };
+    expect(forkView).toMatchObject({ parent_session_id: id });
+    const sourceBinding = current.sessions.novex.binding(id);
+    const forkBinding = current.sessions.novex.binding(forkView.session_id);
+    expect(forkBinding).toMatchObject({
+      agent_key: sourceBinding.agent_key,
+      agent_version: sourceBinding.agent_version,
+      agent_digest: sourceBinding.agent_digest,
+      prompt_bindings: sourceBinding.prompt_bindings,
+      registry_digest: sourceBinding.registry_digest,
+      tool_profile: sourceBinding.tool_profile,
+      model_id: sourceBinding.model_id,
+      behavior_fingerprint: sourceBinding.behavior_fingerprint,
+      migration_source: "ordinary_fork",
+      parent_session_id: id,
+    });
+
+    const upgraded = await post(current.baseUrl, `/sessions/${id}/fork`, {
+      entry_id: userEntry,
+      position: "at",
+      upgrade: {
+        agent_key: "personal.general",
+        agent_version: "1.0.0",
+        model_id: MODEL_ID,
+        tool_profile: "workspace",
+      },
+    });
+    expect(upgraded.status).toBe(201);
+    const upgradedView = await upgraded.json() as { session_id: string; parent_session_id: string; tool_profile: string };
+    expect(upgradedView).toMatchObject({ parent_session_id: id, tool_profile: "workspace" });
+    expect(current.sessions.novex.binding(upgradedView.session_id)).toMatchObject({
+      agent_key: "personal.general",
+      agent_version: "1.0.0",
+      model_id: MODEL_ID,
+      tool_profile: "workspace",
+      migration_source: "explicit_upgrade_fork",
+      parent_session_id: id,
+    });
+    expect(current.sessions.novex.binding(id)).toEqual(sourceBinding);
+
+    const after = await fetch(`${current.baseUrl}/sessions/${id}/entries`).then((item) => item.json());
+    expect(JSON.stringify(after)).toContain("compaction");
+    expect(JSON.stringify(after)).toContain("branch");
+    expect(JSON.stringify(after)).not.toContain(SECRET);
+    const calls = (await fetch(`${current.baseUrl}/sessions/${id}/model-calls`).then((item) => item.json())) as {
+      items: Array<{ execution: { entry_id: string | null; phase: string }; status: string }>;
+    };
+    expect(calls.items.map((item) => item.execution.phase).sort()).toEqual(["branch_summary", "compaction", "turn"]);
+    expect(calls.items.every((item) => item.status === "succeeded")).toBe(true);
+    expect(calls.items.every((item) => typeof item.execution.entry_id === "string")).toBe(true);
+  });
 });

@@ -111,6 +111,56 @@ pub struct AgentRunRecord {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct AgentConversationBinding {
+    pub conversation_id: Uuid,
+    pub agent_key: String,
+    pub agent_version: String,
+    pub agent_digest: String,
+    pub prompt_bindings: Value,
+    pub registry_digest: String,
+    pub model_id: Option<Uuid>,
+    pub behavior_fingerprint: Option<String>,
+    pub model_capabilities: Option<Value>,
+    pub binding_status: String,
+    pub migration_source: Option<String>,
+    pub parent_conversation_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentConversationDefinitionBindingInput {
+    pub agent_key: String,
+    pub agent_version: String,
+    pub agent_digest: String,
+    pub prompt_bindings: Value,
+    pub registry_digest: String,
+    pub migration_source: Option<String>,
+    pub parent_conversation_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelBindingEvidence {
+    pub model_id: Uuid,
+    pub behavior_fingerprint: String,
+    pub model_capabilities: Value,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentRunBinding {
+    pub agent_run_id: Uuid,
+    pub agent_key: String,
+    pub agent_version: String,
+    pub agent_digest: String,
+    pub prompt_bindings: Value,
+    pub registry_digest: String,
+    pub model_id: Uuid,
+    pub behavior_fingerprint: String,
+    pub model_capabilities: Value,
+    pub legacy_partial_audit: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct CreateAgentConversationInput {
     pub project_id: Option<Uuid>,
     pub agent_type: String,

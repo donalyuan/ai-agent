@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { publicError, RuntimeError } from "../src/errors.js";
 import { createPiModelRuntime, ModelConfigRepository } from "../src/models.js";
-import { REDACTED, redactUnknown, safeJson } from "../src/redaction.js";
+import { MODEL_CALL_SCHEMA_VERSION, REDACTED, redactForAudit, redactUnknown, safeJson } from "../src/redaction.js";
 import { toolsForProfile } from "../src/coordinator.js";
 
 function row(protocol: string) {
@@ -66,6 +66,16 @@ describe("model routing and safety", () => {
     expect(serialized).not.toContain("known");
     expect(serialized).toContain(REDACTED);
     expect(safeJson(new Error("Bearer hidden"))).not.toContain("hidden");
+    expect(MODEL_CALL_SCHEMA_VERSION).toBe("1");
+    const structured = redactForAudit({
+      headers: { accept: "application/json" },
+      schema_secret: { secret: true, value: "schema-secret" },
+      message: "Cookie: session=hidden-cookie",
+    });
+    expect(JSON.stringify(structured)).not.toMatch(/schema-secret|hidden-cookie|application\/json/);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => redactForAudit(cyclic)).toThrow(/cycle/);
   });
 
   it("removes sensitive URL query values before a model snapshot is persisted", async () => {

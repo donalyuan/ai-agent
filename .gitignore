@@ -21,3 +21,5 @@
 /services/video-worker/.pytest_cache/
 /services/video-worker/**/__pycache__/
 /services/video-worker/src/*.egg-info/
+/services/agent-runtime/node_modules/
+/services/agent-runtime/dist/

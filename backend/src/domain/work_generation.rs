@@ -507,10 +507,10 @@ pub fn build_segments(
     // 先给每段最小时长，再均匀分配剩余秒数；可确定地消除不足 4 秒的尾段。
     let mut durations = vec![min; segment_count];
     let mut remaining = target_seconds - min * segment_count as u32;
-    for index in 0..segment_count {
+    for (index, duration) in durations.iter_mut().enumerate() {
         let remaining_groups = (segment_count - index) as u32;
         let addition = remaining.div_ceil(remaining_groups).min(max - min);
-        durations[index] += addition;
+        *duration += addition;
         remaining -= addition;
     }
     if remaining != 0 {

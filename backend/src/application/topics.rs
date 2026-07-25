@@ -1,19 +1,26 @@
 //! 选题用例，维护项目边界、状态规则、主题组归一和评审编排。
 
 use crate::agents::ScriptAgentError;
-use crate::application::agents::adapters::{AgentRuntimeError, TopicAgentAdapter};
-use crate::application::agents::kernel::PostgresAgentKernelStore;
+use crate::application::agents::adapters::{
+    AgentRuntimeError, AuditedTopicReviewExecution, TopicAgentAdapter,
+};
+use crate::application::agents::kernel::{
+    active_rust_definition_binding, PostgresAgentKernelStore,
+};
+use crate::domain::conversation::ModelBindingEvidence;
 use crate::domain::script::ScriptStyle;
 use crate::domain::topic::{
     ContentTopic, ContentTopicFilter, ContentTopicStatus, TopicGenerationBatchSummary,
     TopicGroupSort, TopicGroupSummary, TopicQualityEvaluation, TopicReviewSnapshot,
 };
-use crate::model_routing::{ModelClientResolver, ModelResolveError};
+use crate::model_routing::{model_behavior_evidence, ModelClientResolver, ModelResolveError};
 use crate::repositories::{
     CreateContentTopicInput, PostgresConversationRepository, PostgresProjectRepository,
     PostgresTopicRepository, ProjectRepository, ProjectRepositoryError, TopicRepository,
     TopicRepositoryError, UpdateContentTopicInput,
 };
+use novex_agent::{AuditedExecutionBinding, AuditedModelExecutor, FixedModelBinding};
+use novex_ai_core::{validate_model_capabilities, DefinitionRegistry};
 use serde_json::Value;
 use std::{fmt, sync::Arc};
 use uuid::Uuid;
@@ -25,6 +32,8 @@ pub struct TopicService {
     topic_repository: PostgresTopicRepository,
     conversation_repository: PostgresConversationRepository,
     model_resolver: Arc<dyn ModelClientResolver>,
+    definition_registry: Arc<DefinitionRegistry>,
+    audited_model_executor: Arc<AuditedModelExecutor>,
 }
 
 impl TopicService {
@@ -33,12 +42,16 @@ impl TopicService {
         topic_repository: PostgresTopicRepository,
         conversation_repository: PostgresConversationRepository,
         model_resolver: Arc<dyn ModelClientResolver>,
+        definition_registry: Arc<DefinitionRegistry>,
+        audited_model_executor: Arc<AuditedModelExecutor>,
     ) -> Self {
         Self {
             project_repository,
             topic_repository,
             conversation_repository,
             model_resolver,
+            definition_registry,
+            audited_model_executor,
         }
     }
 
@@ -103,15 +116,43 @@ impl TopicService {
             .resolve_group_project_id(root_batch_id, requested_project_id)
             .await?;
         let resolved = self.model_resolver.text_client(model_id).await?;
+        let evidence = model_behavior_evidence(&resolved.snapshot)?;
+        let agent = self
+            .definition_registry
+            .active_agent("video.topic")
+            .map_err(|error| TopicApplicationError::Definition(error.to_string()))?;
+        validate_model_capabilities(&agent.model_requirements, &evidence.capabilities)
+            .map_err(|_| TopicApplicationError::ModelCapabilityMismatch)?;
+        let definition = active_rust_definition_binding(&self.definition_registry, "video.topic")
+            .map_err(TopicApplicationError::Definition)?;
+        let model_binding = ModelBindingEvidence {
+            model_id,
+            behavior_fingerprint: evidence.behavior_fingerprint.clone(),
+            model_capabilities: serde_json::to_value(&evidence.capabilities)
+                .map_err(|error| TopicApplicationError::Serialization(error.to_string()))?,
+        };
         let store = Arc::new(PostgresAgentKernelStore::new(
             self.conversation_repository.clone(),
         ));
         self.topic_adapter()
-            .review_topic_group(
+            .review_topic_group_audited(
                 project_id,
                 root_batch_id,
-                resolved.client,
-                Some(resolved.snapshot),
+                resolved.snapshot,
+                AuditedTopicReviewExecution {
+                    definition: definition.clone(),
+                    model_binding,
+                    audited: AuditedExecutionBinding {
+                        executor: self.audited_model_executor.clone(),
+                        agent_key: definition.agent_key,
+                        agent_version: definition.agent_version,
+                        binding: FixedModelBinding {
+                            model_id,
+                            behavior_fingerprint: evidence.behavior_fingerprint,
+                        },
+                    },
+                },
+                self.conversation_repository.clone(),
                 store.clone(),
                 store,
             )
@@ -271,6 +312,9 @@ pub enum TopicApplicationError {
     Agent(ScriptAgentError),
     Runtime(AgentRuntimeError),
     ModelResolve(ModelResolveError),
+    Definition(String),
+    ModelCapabilityMismatch,
+    Serialization(String),
     Validation(String),
 }
 
@@ -312,6 +356,9 @@ impl fmt::Display for TopicApplicationError {
             Self::Agent(error) => write!(formatter, "{error}"),
             Self::Runtime(error) => write!(formatter, "{error}"),
             Self::ModelResolve(error) => write!(formatter, "{error}"),
+            Self::Definition(message) => write!(formatter, "{message}"),
+            Self::ModelCapabilityMismatch => formatter.write_str("model capability mismatch"),
+            Self::Serialization(message) => write!(formatter, "serialization error: {message}"),
             Self::Validation(message) => formatter.write_str(message),
         }
     }

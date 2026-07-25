@@ -1,7 +1,8 @@
 use crate::domain::conversation::{
-    AgentConversation, AgentConversationStatus, AgentMessage, AgentMessageRole, AgentRunRecord,
+    AgentConversation, AgentConversationBinding, AgentConversationDefinitionBindingInput,
+    AgentConversationStatus, AgentMessage, AgentMessageRole, AgentRunBinding, AgentRunRecord,
     BindAgentConversationSubjectInput, CreateAgentConversationInput, CreateAgentMessageInput,
-    CreateAgentRunInput, CreateAgentStepInput, FinishAgentRunInput,
+    CreateAgentRunInput, CreateAgentStepInput, FinishAgentRunInput, ModelBindingEvidence,
 };
 use async_trait::async_trait;
 use sqlx::{postgres::PgRow, PgPool, Row};
@@ -16,6 +17,195 @@ pub struct PostgresConversationRepository {
 impl PostgresConversationRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// Conversation 与代码 Definition 必须在同一事务中创建，不能留下可执行但未绑定的记录。
+    pub async fn create_conversation_with_definition(
+        &self,
+        input: CreateAgentConversationInput,
+        binding: AgentConversationDefinitionBindingInput,
+    ) -> Result<AgentConversation, AgentBindingError> {
+        validate_definition_binding(&binding)?;
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query(
+            r#"
+            INSERT INTO agent_conversations (
+                project_id, agent_type, subject_type, subject_id, title, metadata
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id, project_id, agent_type, subject_type, subject_id, title,
+                      status, metadata, created_at, updated_at
+            "#,
+        )
+        .bind(input.project_id)
+        .bind(input.agent_type)
+        .bind(input.subject_type)
+        .bind(input.subject_id)
+        .bind(input.title)
+        .bind(input.metadata)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let conversation = conversation_from_row(row)
+            .map_err(|error| AgentBindingError::Storage(error.to_string()))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO agent_conversation_bindings (
+                conversation_id, agent_key, agent_version, agent_digest, prompt_bindings,
+                registry_digest, migration_source, parent_conversation_id
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(conversation.id)
+        .bind(binding.agent_key)
+        .bind(binding.agent_version)
+        .bind(binding.agent_digest)
+        .bind(binding.prompt_bindings)
+        .bind(binding.registry_digest)
+        .bind(binding.migration_source)
+        .bind(binding.parent_conversation_id)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(conversation)
+    }
+
+    pub async fn get_conversation_binding(
+        &self,
+        conversation_id: Uuid,
+    ) -> Result<AgentConversationBinding, AgentBindingError> {
+        let row = sqlx::query(
+            r#"
+            SELECT conversation_id, agent_key, agent_version, agent_digest, prompt_bindings,
+                   registry_digest, model_id, behavior_fingerprint, model_capabilities,
+                   binding_status, migration_source, parent_conversation_id, created_at
+            FROM agent_conversation_bindings
+            WHERE conversation_id = $1
+            "#,
+        )
+        .bind(conversation_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(AgentBindingError::BindingNotFound(conversation_id))?;
+        Ok(binding_from_row(row))
+    }
+
+    /// 首次 UPDATE 依赖行锁串行化；并发失败方只能读取胜出的不可变 binding。
+    pub async fn bind_or_validate_conversation_model(
+        &self,
+        conversation_id: Uuid,
+        evidence: ModelBindingEvidence,
+    ) -> Result<AgentConversationBinding, AgentBindingError> {
+        validate_model_binding(&evidence)?;
+        let updated = sqlx::query(
+            r#"
+            UPDATE agent_conversation_bindings
+            SET model_id = $2,
+                behavior_fingerprint = $3,
+                model_capabilities = $4,
+                binding_status = 'executable'
+            WHERE conversation_id = $1 AND model_id IS NULL
+            RETURNING conversation_id, agent_key, agent_version, agent_digest, prompt_bindings,
+                      registry_digest, model_id, behavior_fingerprint, model_capabilities,
+                      binding_status, migration_source, parent_conversation_id, created_at
+            "#,
+        )
+        .bind(conversation_id)
+        .bind(evidence.model_id)
+        .bind(&evidence.behavior_fingerprint)
+        .bind(&evidence.model_capabilities)
+        .fetch_optional(&self.pool)
+        .await?;
+        if let Some(row) = updated {
+            return Ok(binding_from_row(row));
+        }
+
+        let existing = self.get_conversation_binding(conversation_id).await?;
+        if existing.model_id == Some(evidence.model_id)
+            && existing.behavior_fingerprint.as_deref()
+                == Some(evidence.behavior_fingerprint.as_str())
+            && existing.model_capabilities.as_ref() == Some(&evidence.model_capabilities)
+            && existing.binding_status == "executable"
+        {
+            Ok(existing)
+        } else {
+            Err(AgentBindingError::ModelRebindRequired {
+                conversation_id,
+                bound_model_id: existing.model_id,
+                requested_model_id: evidence.model_id,
+            })
+        }
+    }
+
+    pub async fn create_run_binding(
+        &self,
+        agent_run_id: Uuid,
+        definition: AgentConversationDefinitionBindingInput,
+        model: ModelBindingEvidence,
+        legacy_partial_audit: bool,
+    ) -> Result<AgentRunBinding, AgentBindingError> {
+        validate_definition_binding(&definition)?;
+        validate_model_binding(&model)?;
+        sqlx::query(
+            r#"
+            INSERT INTO agent_run_bindings (
+                agent_run_id, agent_key, agent_version, agent_digest, prompt_bindings,
+                registry_digest, model_id, behavior_fingerprint, model_capabilities,
+                legacy_partial_audit
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (agent_run_id) DO NOTHING
+            "#,
+        )
+        .bind(agent_run_id)
+        .bind(&definition.agent_key)
+        .bind(&definition.agent_version)
+        .bind(&definition.agent_digest)
+        .bind(&definition.prompt_bindings)
+        .bind(&definition.registry_digest)
+        .bind(model.model_id)
+        .bind(&model.behavior_fingerprint)
+        .bind(&model.model_capabilities)
+        .bind(legacy_partial_audit)
+        .execute(&self.pool)
+        .await?;
+
+        let existing = self.get_run_binding(agent_run_id).await?;
+        if existing.agent_key == definition.agent_key
+            && existing.agent_version == definition.agent_version
+            && existing.agent_digest == definition.agent_digest
+            && existing.prompt_bindings == definition.prompt_bindings
+            && existing.registry_digest == definition.registry_digest
+            && existing.model_id == model.model_id
+            && existing.behavior_fingerprint == model.behavior_fingerprint
+            && existing.model_capabilities == model.model_capabilities
+            && existing.legacy_partial_audit == legacy_partial_audit
+        {
+            Ok(existing)
+        } else {
+            Err(AgentBindingError::RunBindingConflict(agent_run_id))
+        }
+    }
+
+    pub async fn get_run_binding(
+        &self,
+        agent_run_id: Uuid,
+    ) -> Result<AgentRunBinding, AgentBindingError> {
+        let row = sqlx::query(
+            r#"
+            SELECT agent_run_id, agent_key, agent_version, agent_digest, prompt_bindings,
+                   registry_digest, model_id, behavior_fingerprint, model_capabilities,
+                   legacy_partial_audit, created_at
+            FROM agent_run_bindings
+            WHERE agent_run_id = $1
+            "#,
+        )
+        .bind(agent_run_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(AgentBindingError::RunBindingNotFound(agent_run_id))?;
+        Ok(run_binding_from_row(row))
     }
 }
 
@@ -49,7 +239,7 @@ pub trait ConversationRepository: Send + Sync {
     async fn add_step(
         &self,
         input: CreateAgentStepInput,
-    ) -> Result<(), ConversationRepositoryError>;
+    ) -> Result<Uuid, ConversationRepositoryError>;
 
     async fn finish_run(
         &self,
@@ -186,13 +376,14 @@ impl ConversationRepository for PostgresConversationRepository {
     async fn add_step(
         &self,
         input: CreateAgentStepInput,
-    ) -> Result<(), ConversationRepositoryError> {
-        sqlx::query(
+    ) -> Result<Uuid, ConversationRepositoryError> {
+        sqlx::query_scalar(
             r#"
             INSERT INTO agent_steps (
                 agent_run_id, step_order, step_type, status, input, output, error_message
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id
             "#,
         )
         .bind(input.agent_run_id)
@@ -202,11 +393,9 @@ impl ConversationRepository for PostgresConversationRepository {
         .bind(input.input)
         .bind(input.output)
         .bind(input.error_message)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await
-        .map_err(ConversationRepositoryError::from)?;
-
-        Ok(())
+        .map_err(ConversationRepositoryError::from)
     }
 
     async fn finish_run(
@@ -325,6 +514,113 @@ fn run_from_row(row: PgRow) -> AgentRunRecord {
         ended_at: row.get("ended_at"),
     }
 }
+
+fn binding_from_row(row: PgRow) -> AgentConversationBinding {
+    AgentConversationBinding {
+        conversation_id: row.get("conversation_id"),
+        agent_key: row.get("agent_key"),
+        agent_version: row.get("agent_version"),
+        agent_digest: row.get("agent_digest"),
+        prompt_bindings: row.get("prompt_bindings"),
+        registry_digest: row.get("registry_digest"),
+        model_id: row.get("model_id"),
+        behavior_fingerprint: row.get("behavior_fingerprint"),
+        model_capabilities: row.get("model_capabilities"),
+        binding_status: row.get("binding_status"),
+        migration_source: row.get("migration_source"),
+        parent_conversation_id: row.get("parent_conversation_id"),
+        created_at: row.get("created_at"),
+    }
+}
+
+fn run_binding_from_row(row: PgRow) -> AgentRunBinding {
+    AgentRunBinding {
+        agent_run_id: row.get("agent_run_id"),
+        agent_key: row.get("agent_key"),
+        agent_version: row.get("agent_version"),
+        agent_digest: row.get("agent_digest"),
+        prompt_bindings: row.get("prompt_bindings"),
+        registry_digest: row.get("registry_digest"),
+        model_id: row.get("model_id"),
+        behavior_fingerprint: row.get("behavior_fingerprint"),
+        model_capabilities: row.get("model_capabilities"),
+        legacy_partial_audit: row.get("legacy_partial_audit"),
+        created_at: row.get("created_at"),
+    }
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn validate_definition_binding(
+    binding: &AgentConversationDefinitionBindingInput,
+) -> Result<(), AgentBindingError> {
+    if binding.agent_key.trim().is_empty()
+        || binding.agent_version.trim().is_empty()
+        || !valid_digest(&binding.agent_digest)
+        || !valid_digest(&binding.registry_digest)
+        || !binding.prompt_bindings.is_object()
+        || binding
+            .prompt_bindings
+            .as_object()
+            .is_some_and(|value| value.is_empty())
+    {
+        return Err(AgentBindingError::InvalidEvidence(
+            "definition binding is incomplete".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_model_binding(evidence: &ModelBindingEvidence) -> Result<(), AgentBindingError> {
+    if !valid_digest(&evidence.behavior_fingerprint) || !evidence.model_capabilities.is_object() {
+        return Err(AgentBindingError::InvalidEvidence(
+            "model binding evidence is incomplete".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+pub enum AgentBindingError {
+    BindingNotFound(Uuid),
+    RunBindingNotFound(Uuid),
+    RunBindingConflict(Uuid),
+    ModelRebindRequired {
+        conversation_id: Uuid,
+        bound_model_id: Option<Uuid>,
+        requested_model_id: Uuid,
+    },
+    InvalidEvidence(String),
+    Storage(String),
+}
+
+impl From<sqlx::Error> for AgentBindingError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Storage(error.to_string())
+    }
+}
+
+impl fmt::Display for AgentBindingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BindingNotFound(id) => write!(formatter, "conversation binding not found: {id}"),
+            Self::RunBindingNotFound(id) => write!(formatter, "agent run binding not found: {id}"),
+            Self::RunBindingConflict(id) => write!(formatter, "agent run binding conflict: {id}"),
+            Self::ModelRebindRequired { .. } => formatter.write_str("model_rebind_required"),
+            Self::InvalidEvidence(message) => {
+                write!(formatter, "invalid binding evidence: {message}")
+            }
+            Self::Storage(message) => write!(formatter, "agent binding storage error: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for AgentBindingError {}
 
 #[derive(Debug)]
 pub enum ConversationRepositoryError {

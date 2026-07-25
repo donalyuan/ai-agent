@@ -1,21 +1,16 @@
 use crate::domain::script::ScriptGenerationInput;
-use novex_model::LLMJsonSchema;
 use serde::Deserialize;
-use serde_json::json;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ScriptPrompt {
-    pub system: String,
-    pub user: String,
-    pub max_output_tokens: Option<u32>,
-    pub output_schema: Option<LLMJsonSchema>,
+pub struct ScriptNodeInput {
+    pub content: String,
 }
 
-pub struct ScriptPromptBuilder;
+pub struct ScriptNodeInputBuilder;
 
-impl ScriptPromptBuilder {
-    pub fn build(request: &ScriptGenerationInput) -> ScriptPrompt {
+impl ScriptNodeInputBuilder {
+    pub fn build(request: &ScriptGenerationInput) -> ScriptNodeInput {
         let style = request.style_or_default();
         let scene_count = request.scene_count_or_default();
         let variant_instruction = if request.parent_id.is_some() {
@@ -24,9 +19,8 @@ impl ScriptPromptBuilder {
             ""
         };
 
-        ScriptPrompt {
-            system: base_system_prompt(),
-            user: format!(
+        ScriptNodeInput {
+            content: format!(
                 r#"请根据以下选题生成{scene_count}个分镜的中文短视频脚本。
 
 选题：{topic}
@@ -60,12 +54,10 @@ JSON Schema：
                 style_code = style.as_str(),
                 variant_instruction = variant_instruction,
             ),
-            max_output_tokens: None,
-            output_schema: Some(script_output_schema(scene_count)),
         }
     }
 
-    pub fn build_metadata(request: &ScriptGenerationInput) -> ScriptPrompt {
+    pub fn build_metadata(request: &ScriptGenerationInput) -> ScriptNodeInput {
         let style = request.style_or_default();
         let variant_instruction = if request.parent_id.is_some() {
             "\n5. 这是 A/B 测试差异化版本，标题和 hook 必须避免复用父版本的表达结构。"
@@ -73,9 +65,8 @@ JSON Schema：
             ""
         };
 
-        ScriptPrompt {
-            system: base_system_prompt(),
-            user: format!(
+        ScriptNodeInput {
+            content: format!(
                 r#"请根据以下选题生成中文短视频脚本的标题和 hook。只输出 title 和 hook，不要输出 scenes。
 
 选题：{topic}
@@ -97,12 +88,10 @@ JSON Schema：
                 style_code = style.as_str(),
                 variant_instruction = variant_instruction,
             ),
-            max_output_tokens: Some(400),
-            output_schema: Some(script_metadata_output_schema()),
         }
     }
 
-    pub fn build_single_scene(request: &ScriptGenerationInput, sequence: u8) -> ScriptPrompt {
+    pub fn build_single_scene(request: &ScriptGenerationInput, sequence: u8) -> ScriptNodeInput {
         let style = request.style_or_default();
         let scene_count = request.scene_count_or_default();
         let variant_instruction = if request.parent_id.is_some() {
@@ -111,9 +100,8 @@ JSON Schema：
             ""
         };
 
-        ScriptPrompt {
-            system: base_system_prompt(),
-            user: format!(
+        ScriptNodeInput {
+            content: format!(
                 r#"请根据以下选题生成一个中文短视频分镜。只输出单个 scene 对象，不要输出 title、hook 或 scenes 数组。
 
 选题：{topic}
@@ -146,93 +134,8 @@ JSON Schema：
                 sequence = sequence,
                 variant_instruction = variant_instruction,
             ),
-            max_output_tokens: Some(1_200),
-            output_schema: Some(script_scene_output_schema()),
         }
     }
-}
-
-fn base_system_prompt() -> String {
-    "你是专业的短视频脚本创作者，擅长创作15-60秒的抖音/小红书短视频脚本。你必须只输出合法 JSON，不要输出解释、Markdown 或额外文本。".to_string()
-}
-
-impl From<ScriptPrompt> for novex_model::LLMPrompt {
-    fn from(prompt: ScriptPrompt) -> Self {
-        Self {
-            system: prompt.system,
-            user: prompt.user,
-            max_output_tokens: prompt.max_output_tokens,
-            output_schema: prompt.output_schema,
-        }
-    }
-}
-
-fn script_output_schema(scene_count: u8) -> LLMJsonSchema {
-    LLMJsonSchema {
-        name: "script".to_string(),
-        strict: true,
-        schema: json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["title", "hook", "scenes"],
-            "properties": {
-                "title": { "type": "string" },
-                "hook": { "type": "string" },
-                "scenes": {
-                    "type": "array",
-                    "minItems": scene_count,
-                    "maxItems": scene_count,
-                    "items": script_scene_schema()
-                }
-            }
-        }),
-    }
-}
-
-fn script_metadata_output_schema() -> LLMJsonSchema {
-    LLMJsonSchema {
-        name: "script_metadata".to_string(),
-        strict: true,
-        schema: json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["title", "hook"],
-            "properties": {
-                "title": { "type": "string" },
-                "hook": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn script_scene_output_schema() -> LLMJsonSchema {
-    LLMJsonSchema {
-        name: "script_scene".to_string(),
-        strict: true,
-        schema: json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["scene"],
-            "properties": {
-                "scene": script_scene_schema()
-            }
-        }),
-    }
-}
-
-fn script_scene_schema() -> serde_json::Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["sequence", "narration", "visual_description", "emotion", "duration_sec"],
-        "properties": {
-            "sequence": { "type": "integer" },
-            "narration": { "type": "string" },
-            "visual_description": { "type": "string" },
-            "emotion": { "type": "string" },
-            "duration_sec": { "type": "integer" }
-        }
-    })
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]

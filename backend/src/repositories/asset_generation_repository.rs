@@ -956,7 +956,7 @@ impl AssetGenerationRepository for PostgresAssetGenerationRepository {
         .fetch_optional(&self.pool)
         .await
         .map_err(AssetGenerationRepositoryError::from)?
-        .ok_or_else(|| AssetGenerationRepositoryError::TaskNotFound(task_id))?;
+        .ok_or(AssetGenerationRepositoryError::TaskNotFound(task_id))?;
 
         task_from_row(row)
     }

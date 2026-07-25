@@ -1,16 +1,24 @@
 //! 项目与账号策略用例，集中处理仓储协作、模型调用和运行记录。
 
 use crate::application::agents::adapters::AgentRuntimeError;
-use crate::application::agents::kernel::{run_lifecycle, run_lifecycle_error};
-use crate::model_routing::{ModelClientResolver, ModelResolveError};
+use crate::application::agents::kernel::{
+    active_rust_definition_binding, run_lifecycle, run_lifecycle_error,
+};
+use crate::domain::conversation::ModelBindingEvidence;
+use crate::model_routing::{model_behavior_evidence, ModelClientResolver, ModelResolveError};
 use crate::repositories::{
-    AccountStrategyProfile, ConversationRepositoryError, CreateProjectInput,
+    AccountStrategyProfile, AgentBindingError, ConversationRepositoryError, CreateProjectInput,
     PostgresConversationRepository, PostgresProjectRepository, Project, ProjectRepository,
     ProjectRepositoryError, UpdateProjectStrategyProfileInput,
 };
-use novex_agent::StartRun;
-use novex_ai_core::AgentKey;
-use novex_model::{LLMClient, LLMError, LLMJsonSchema, LLMPrompt};
+use novex_agent::{
+    AuditedCallOwner, AuditedModelError, AuditedModelExecutor, AuditedModelRequest,
+    FixedModelBinding, StartRun,
+};
+use novex_ai_core::{
+    AgentKey, DefinitionRegistry, DynamicFragment, PromptCompileInput, TrustLevel,
+};
+use novex_model::LLMError;
 use serde::Deserialize;
 use serde_json::json;
 use std::{fmt, sync::Arc};
@@ -26,6 +34,8 @@ pub struct ProjectService {
     project_repository: PostgresProjectRepository,
     conversation_repository: PostgresConversationRepository,
     model_resolver: Arc<dyn ModelClientResolver>,
+    definition_registry: Arc<DefinitionRegistry>,
+    audited_model_executor: Arc<AuditedModelExecutor>,
 }
 
 impl ProjectService {
@@ -33,11 +43,15 @@ impl ProjectService {
         project_repository: PostgresProjectRepository,
         conversation_repository: PostgresConversationRepository,
         model_resolver: Arc<dyn ModelClientResolver>,
+        definition_registry: Arc<DefinitionRegistry>,
+        audited_model_executor: Arc<AuditedModelExecutor>,
     ) -> Self {
         Self {
             project_repository,
             conversation_repository,
             model_resolver,
+            definition_registry,
+            audited_model_executor,
         }
     }
 
@@ -78,9 +92,42 @@ impl ProjectService {
     ) -> Result<StrategyProfileDraft, ProjectApplicationError> {
         let project = self.project_repository.get_project(project_id).await?;
         let resolved = self.model_resolver.text_client(model_id).await?;
+        let evidence = model_behavior_evidence(&resolved.snapshot)?;
         let model_snapshot = serde_json::to_value(&resolved.snapshot)
             .map_err(|error| ProjectApplicationError::Serialization(error.to_string()))?;
         let prompt = build_strategy_profile_draft_prompt(&project, direction_notes);
+        let fragment = DynamicFragment {
+            id: format!("project:{project_id}:strategy-profile-draft"),
+            trust: TrustLevel::Reference,
+            source: "project_strategy_context".into(),
+            content: Some(prompt),
+            asset: None,
+        };
+        let context_sources = json!([{
+            "id": fragment.id,
+            "trust": fragment.trust,
+            "source": fragment.source,
+        }]);
+        let compile_input = PromptCompileInput {
+            schema_version: "1".into(),
+            variables: Default::default(),
+            fragments: vec![fragment],
+        };
+        let definition =
+            active_rust_definition_binding(&self.definition_registry, "video.project-strategy")
+                .map_err(ProjectApplicationError::Serialization)?;
+        let model_binding = ModelBindingEvidence {
+            model_id,
+            behavior_fingerprint: evidence.behavior_fingerprint.clone(),
+            model_capabilities: serde_json::to_value(&evidence.capabilities)
+                .map_err(|error| ProjectApplicationError::Serialization(error.to_string()))?,
+        };
+        let fixed_binding = FixedModelBinding {
+            model_id,
+            behavior_fingerprint: evidence.behavior_fingerprint,
+        };
+        let repository = self.conversation_repository.clone();
+        let executor = self.audited_model_executor.clone();
         run_lifecycle(self.conversation_repository.clone())
             .execute(
                 StartRun {
@@ -91,11 +138,29 @@ impl ProjectService {
                     model_id: Some(model_id),
                     model_snapshot: Some(model_snapshot),
                 },
-                |_| async move {
-                    generate_strategy_profile_draft_with_retry(resolved.client.as_ref(), prompt)
-                        .await
-                        .map_err(ProjectApplicationError::Llm)
-                        .and_then(|raw| parse_strategy_profile_draft(&raw))
+                |run_id| async move {
+                    repository
+                        .create_run_binding(run_id, definition.clone(), model_binding, false)
+                        .await?;
+                    let request = AuditedModelRequest {
+                        owner: AuditedCallOwner::AgentRun(run_id),
+                        step_id: None,
+                        root_call_id: None,
+                        parent_call_id: None,
+                        attempt: 1,
+                        agent_key: definition.agent_key,
+                        agent_version: definition.agent_version,
+                        node_key: "project.strategy_draft".into(),
+                        compile_input,
+                        tool_profile: "chat".into(),
+                        tool_schema: None,
+                        binding: fixed_binding,
+                        context_sources,
+                        memory_sources: json!([]),
+                        parameters: json!({ "max_output_tokens": 1200 }),
+                        asset_references: json!([]),
+                    };
+                    generate_strategy_profile_draft_with_retry(executor.as_ref(), request).await
                 },
                 |_| Some(json!({ "draft_generated": true })),
                 |error| format!("{error:?}"),
@@ -117,6 +182,7 @@ pub enum ProjectApplicationError {
     ConversationRepository(ConversationRepositoryError),
     Runtime(AgentRuntimeError),
     ModelResolve(ModelResolveError),
+    AgentBinding(AgentBindingError),
     Llm(LLMError),
     InvalidOutput(String),
     Serialization(String),
@@ -146,6 +212,12 @@ impl From<ModelResolveError> for ProjectApplicationError {
     }
 }
 
+impl From<AgentBindingError> for ProjectApplicationError {
+    fn from(error: AgentBindingError) -> Self {
+        Self::AgentBinding(error)
+    }
+}
+
 impl fmt::Display for ProjectApplicationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -153,6 +225,7 @@ impl fmt::Display for ProjectApplicationError {
             Self::ConversationRepository(error) => write!(formatter, "{error}"),
             Self::Runtime(error) => write!(formatter, "{error}"),
             Self::ModelResolve(error) => write!(formatter, "{error}"),
+            Self::AgentBinding(error) => write!(formatter, "{error}"),
             Self::Llm(error) => write!(formatter, "{error}"),
             Self::InvalidOutput(message) | Self::Serialization(message) => {
                 formatter.write_str(message)
@@ -238,17 +311,43 @@ fn normalize_string_list(
 }
 
 async fn generate_strategy_profile_draft_with_retry(
-    llm_client: &dyn LLMClient,
-    prompt: LLMPrompt,
-) -> Result<String, LLMError> {
-    let first_result = llm_client.generate_script(prompt.clone()).await;
+    executor: &AuditedModelExecutor,
+    request: AuditedModelRequest,
+) -> Result<StrategyProfileDraft, ProjectApplicationError> {
+    let first_result = executor
+        .execute_parsed(request.clone(), |raw| {
+            parse_strategy_profile_draft(raw).map_err(|error| error.to_string())
+        })
+        .await;
     match first_result {
-        Ok(raw) => Ok(raw),
-        Err(error) if is_retryable_strategy_draft_error(&error) => {
+        Ok(response) => Ok(response.output),
+        Err(AuditedModelError::Provider {
+            model_call_id,
+            source,
+        }) if is_retryable_strategy_draft_error(&source) => {
             // 策略草稿只允许同模型再试一次，避免瞬时上游故障扩大成本。
-            llm_client.generate_script(prompt).await
+            let mut retry = request;
+            retry.root_call_id = Some(model_call_id);
+            retry.attempt = 2;
+            executor
+                .execute_parsed(retry, |raw| {
+                    parse_strategy_profile_draft(raw).map_err(|error| error.to_string())
+                })
+                .await
+                .map(|response| response.output)
+                .map_err(project_audited_model_error)
         }
-        Err(error) => Err(error),
+        Err(error) => Err(project_audited_model_error(error)),
+    }
+}
+
+fn project_audited_model_error(error: AuditedModelError) -> ProjectApplicationError {
+    match error {
+        AuditedModelError::Provider { source, .. } => ProjectApplicationError::Llm(source),
+        AuditedModelError::StructuredParse { message, .. } => {
+            ProjectApplicationError::InvalidOutput(message)
+        }
+        error => ProjectApplicationError::Runtime(AgentRuntimeError::Kernel(error.to_string())),
     }
 }
 
@@ -270,12 +369,9 @@ fn is_retryable_strategy_draft_error(error: &LLMError) -> bool {
     }
 }
 
-fn build_strategy_profile_draft_prompt(project: &Project, direction_notes: &str) -> LLMPrompt {
-    LLMPrompt {
-        system: "你是短视频内容账号策略顾问。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。"
-            .to_string(),
-        user: format!(
-            r#"请基于当前内容账号资料和补充方向，生成结构化账号策略草稿。
+fn build_strategy_profile_draft_prompt(project: &Project, direction_notes: &str) -> String {
+    format!(
+        r#"请基于当前内容账号资料和补充方向，生成结构化账号策略草稿。
 
 当前账号名称：{name}
 定位摘要：{positioning}
@@ -295,20 +391,17 @@ fn build_strategy_profile_draft_prompt(project: &Project, direction_notes: &str)
 3. content_pillars、forbidden_topics、reference_accounts 每组最多 20 项。
 4. 不得生成夸大收益、灰产引流或虚假承诺方向。
 5. draft_summary 用一句中文总结草稿策略取向。"#,
-            name = project.name,
-            positioning = project.positioning,
-            description = project.description,
-            target_audience = project.strategy_profile.target_audience,
-            content_pillars = format_prompt_list(&project.strategy_profile.content_pillars),
-            tone_style = project.strategy_profile.tone_style,
-            forbidden_topics = format_prompt_list(&project.strategy_profile.forbidden_topics),
-            reference_accounts = format_prompt_list(&project.strategy_profile.reference_accounts),
-            topic_preferences = project.strategy_profile.topic_preferences,
-            direction_notes = direction_notes.trim()
-        ),
-        max_output_tokens: Some(1_200),
-        output_schema: Some(strategy_profile_draft_output_schema()),
-    }
+        name = project.name,
+        positioning = project.positioning,
+        description = project.description,
+        target_audience = project.strategy_profile.target_audience,
+        content_pillars = format_prompt_list(&project.strategy_profile.content_pillars),
+        tone_style = project.strategy_profile.tone_style,
+        forbidden_topics = format_prompt_list(&project.strategy_profile.forbidden_topics),
+        reference_accounts = format_prompt_list(&project.strategy_profile.reference_accounts),
+        topic_preferences = project.strategy_profile.topic_preferences,
+        direction_notes = direction_notes.trim()
+    )
 }
 
 fn format_prompt_list(values: &[String]) -> String {
@@ -316,53 +409,6 @@ fn format_prompt_list(values: &[String]) -> String {
         return "无".to_string();
     }
     values.join("、")
-}
-
-fn strategy_profile_draft_output_schema() -> LLMJsonSchema {
-    LLMJsonSchema {
-        name: "account_strategy_profile_draft".to_string(),
-        strict: true,
-        schema: json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["draft", "draft_summary"],
-            "properties": {
-                "draft": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "target_audience",
-                        "content_pillars",
-                        "tone_style",
-                        "forbidden_topics",
-                        "reference_accounts",
-                        "topic_preferences"
-                    ],
-                    "properties": {
-                        "target_audience": { "type": "string" },
-                        "content_pillars": {
-                            "type": "array",
-                            "maxItems": 20,
-                            "items": { "type": "string" }
-                        },
-                        "tone_style": { "type": "string" },
-                        "forbidden_topics": {
-                            "type": "array",
-                            "maxItems": 20,
-                            "items": { "type": "string" }
-                        },
-                        "reference_accounts": {
-                            "type": "array",
-                            "maxItems": 20,
-                            "items": { "type": "string" }
-                        },
-                        "topic_preferences": { "type": "string" }
-                    }
-                },
-                "draft_summary": { "type": "string" }
-            }
-        }),
-    }
 }
 
 #[derive(Debug, Deserialize)]

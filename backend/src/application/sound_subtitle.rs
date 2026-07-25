@@ -657,6 +657,7 @@ impl SoundSubtitleService {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_preflight(
     intent: SoundTaskIntent,
     model_display_name: String,
@@ -722,7 +723,7 @@ fn model_snapshot_with_version(
 
 fn speech_settings(value: &Value) -> Result<SpeechModelSettings, SoundSubtitleApplicationError> {
     match ModelSettings::parse(ModelType::Speech, value.clone())
-        .map_err(|error| validation("model_config_invalid", &error.to_string()))?
+        .map_err(|error| validation("model_config_invalid", error.to_string()))?
     {
         ModelSettings::Speech(settings) => Ok(settings),
         _ => unreachable!(),
@@ -786,9 +787,7 @@ fn normalize_speech_parameters(
         let definition = definitions
             .get(name)
             .and_then(Value::as_object)
-            .ok_or_else(|| {
-                validation("parameter_unsupported", &format!("模型不支持参数 {name}"))
-            })?;
+            .ok_or_else(|| validation("parameter_unsupported", format!("模型不支持参数 {name}")))?;
         validate_parameter(name, parameter, definition)?;
         output.insert(name.clone(), parameter.clone());
     }
@@ -803,7 +802,7 @@ fn validate_parameter(
     if definition.get("type").and_then(Value::as_str) == Some("number") {
         let number = value
             .as_f64()
-            .ok_or_else(|| validation("parameter_invalid", &format!("参数 {name} 必须是数字")))?;
+            .ok_or_else(|| validation("parameter_invalid", format!("参数 {name} 必须是数字")))?;
         let minimum = definition
             .get("minimum")
             .or_else(|| definition.get("min"))
@@ -817,7 +816,7 @@ fn validate_parameter(
         {
             return Err(validation(
                 "parameter_out_of_range",
-                &format!("参数 {name} 超出模型允许范围"),
+                format!("参数 {name} 超出模型允许范围"),
             ));
         }
     }
@@ -825,7 +824,7 @@ fn validate_parameter(
         if !options.contains(value) {
             return Err(validation(
                 "parameter_unsupported",
-                &format!("参数 {name} 的值不受模型支持"),
+                format!("参数 {name} 的值不受模型支持"),
             ));
         }
     }

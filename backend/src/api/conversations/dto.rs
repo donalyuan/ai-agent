@@ -49,10 +49,11 @@ impl CreateAgentConversationRequest {
         {
             return Err("未绑定脚本会话不能传 subject_type".to_string());
         }
-        if agent_type == "work" {
-            if self.subject_type.as_deref() != Some("work") && self.subject_id.is_some() {
-                return Err("作品会话绑定 subject 时 subject_type 必须为 work".to_string());
-            }
+        if agent_type == "work"
+            && self.subject_type.as_deref() != Some("work")
+            && self.subject_id.is_some()
+        {
+            return Err("作品会话绑定 subject 时 subject_type 必须为 work".to_string());
         }
         if agent_type == "sound" {
             if self.subject_id.is_some() || subject_type.is_some() {

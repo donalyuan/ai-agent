@@ -277,6 +277,56 @@ async fn topic_review_routes_create_and_read_latest_snapshot() {
         "priority"
     );
     assert!(created["source_run_id"].as_str().is_some());
+    let source_run_id = Uuid::parse_str(created["source_run_id"].as_str().unwrap()).unwrap();
+    let run_binding = sqlx::query_as::<_, (String, String, Uuid, String)>(
+        r#"
+        SELECT agent_key, agent_version, model_id, behavior_fingerprint
+        FROM agent_run_bindings
+        WHERE agent_run_id = $1
+        "#,
+    )
+    .bind(source_run_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(run_binding.0, "video.topic");
+    assert_eq!(run_binding.1, "1.0.0");
+    assert_eq!(run_binding.2, model_id);
+    assert_eq!(run_binding.3.len(), 64);
+
+    let model_call = sqlx::query_as::<_, (String, String, Option<String>, Value, Value, String)>(
+        r#"
+        SELECT mc.node_key, mc.status, mc.structured_parse_status,
+               mc.prompt_snapshot, mc.context_sources, steps.step_type
+        FROM model_calls mc
+        JOIN agent_steps steps ON steps.id = mc.agent_step_id
+        WHERE mc.agent_run_id = $1
+        "#,
+    )
+    .bind(source_run_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(model_call.0, "topic.group_review");
+    assert_eq!(model_call.1, "succeeded");
+    assert_eq!(model_call.2.as_deref(), Some("succeeded"));
+    assert_eq!(model_call.3["agent_key"], "video.topic");
+    assert_eq!(model_call.3["prompt_key"], "topic.group_review");
+    assert_eq!(model_call.3["prompt_version"], "1.0.0");
+    assert_eq!(model_call.3["output_schema"]["name"], "topic_group_review");
+    assert!(model_call
+        .4
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|source| source["source"] == "project_account_strategy"));
+    assert!(model_call
+        .4
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|source| source["source"] == "topic_batch_group"));
+    assert_eq!(model_call.5, "review_topic_group");
 
     let latest_response = app
         .oneshot(

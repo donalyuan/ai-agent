@@ -16,8 +16,8 @@ use crate::bootstrap::AppStateError;
 use crate::domain::work_generation::WorkGenerationError;
 use crate::model_routing::ModelResolveError;
 use crate::repositories::{
-    AssetGenerationRepositoryError, ConversationRepositoryError, MaterialRepositoryError,
-    ProjectRepositoryError, ScriptRepositoryError, TopicRepositoryError,
+    AgentBindingError, AssetGenerationRepositoryError, ConversationRepositoryError,
+    MaterialRepositoryError, ProjectRepositoryError, ScriptRepositoryError, TopicRepositoryError,
     VoiceCatalogRepositoryError, WorkLibraryRepositoryError, WorkspaceMenuRepositoryError,
 };
 use axum::{
@@ -61,6 +61,7 @@ pub(crate) enum ScriptApiError {
     MaterialRepository(MaterialRepositoryError),
     AssetGenerationRepository(AssetGenerationRepositoryError),
     ConversationRepository(ConversationRepositoryError),
+    AgentBinding(AgentBindingError),
     TopicRepository(TopicRepositoryError),
     WorkspaceMenuRepository(WorkspaceMenuRepositoryError),
     ProjectValidation(String),
@@ -161,6 +162,7 @@ impl From<ProjectApplicationError> for ScriptApiError {
             }
             ProjectApplicationError::Runtime(error) => Self::AgentRuntime(error),
             ProjectApplicationError::ModelResolve(error) => Self::ModelResolve(error),
+            ProjectApplicationError::AgentBinding(error) => Self::AgentBinding(error),
             ProjectApplicationError::Llm(error) => Self::StrategyDraftLlm(error),
             ProjectApplicationError::InvalidOutput(message) => Self::StrategyDraftOutput(message),
             ProjectApplicationError::Serialization(message) => Self::State(message),
@@ -194,7 +196,12 @@ impl From<ScriptApplicationError> for ScriptApiError {
             }
             ScriptApplicationError::Runtime(error) => Self::AgentRuntime(error),
             ScriptApplicationError::ModelResolve(error) => Self::ModelResolve(error),
-            ScriptApplicationError::Serialization(message) => Self::State(message),
+            ScriptApplicationError::AgentBinding(error) => Self::AgentBinding(error),
+            ScriptApplicationError::ModelCapabilityMismatch => {
+                Self::ConversationValidation("model_capability_mismatch".into())
+            }
+            ScriptApplicationError::Definition(message)
+            | ScriptApplicationError::Serialization(message) => Self::State(message),
         }
     }
 }
@@ -214,6 +221,11 @@ impl From<ConversationApplicationError> for ScriptApiError {
             ConversationApplicationError::Agent(error) => Self::Agent(error),
             ConversationApplicationError::Runtime(error) => Self::AgentRuntime(error),
             ConversationApplicationError::ModelResolve(error) => Self::ModelResolve(error),
+            ConversationApplicationError::AgentBinding(error) => Self::AgentBinding(error),
+            ConversationApplicationError::ModelCapabilityMismatch => {
+                Self::ConversationValidation("model_capability_mismatch".into())
+            }
+            ConversationApplicationError::Definition(message) => Self::State(message),
             ConversationApplicationError::Validation(message) => {
                 Self::ConversationValidation(message)
             }
@@ -229,6 +241,11 @@ impl From<TopicApplicationError> for ScriptApiError {
             TopicApplicationError::Agent(error) => Self::Agent(error),
             TopicApplicationError::Runtime(error) => Self::AgentRuntime(error),
             TopicApplicationError::ModelResolve(error) => Self::ModelResolve(error),
+            TopicApplicationError::Definition(message) => Self::State(message),
+            TopicApplicationError::ModelCapabilityMismatch => {
+                Self::TopicValidation("model_capability_mismatch".into())
+            }
+            TopicApplicationError::Serialization(message) => Self::State(message),
             TopicApplicationError::Validation(message) => Self::TopicValidation(message),
         }
     }
@@ -290,6 +307,7 @@ impl IntoResponse for ScriptApiError {
             Self::ConversationRepository(error) => {
                 conversation_repository_error_response(error).into_response()
             }
+            Self::AgentBinding(error) => agent_binding_error_response(error).into_response(),
             Self::TopicRepository(error) => topic_repository_error_response(error).into_response(),
             Self::WorkspaceMenuRepository(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -560,6 +578,49 @@ fn conversation_repository_error_response(
         ConversationRepositoryError::Storage(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "会话存储失败", "details": message })),
+        ),
+    }
+}
+
+fn agent_binding_error_response(error: AgentBindingError) -> (StatusCode, Json<serde_json::Value>) {
+    match error {
+        AgentBindingError::ModelRebindRequired {
+            conversation_id,
+            bound_model_id,
+            requested_model_id,
+        } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "会话已绑定不同的模型行为，请显式 rebind 或 fork",
+                "code": "model_rebind_required",
+                "conversation_id": conversation_id,
+                "bound_model_id": bound_model_id,
+                "requested_model_id": requested_model_id
+            })),
+        ),
+        AgentBindingError::BindingNotFound(conversation_id) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "会话缺少 Definition binding",
+                "code": "conversation_binding_required",
+                "conversation_id": conversation_id
+            })),
+        ),
+        AgentBindingError::RunBindingNotFound(run_id) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "Agent Run 缺少 binding", "run_id": run_id})),
+        ),
+        AgentBindingError::RunBindingConflict(run_id) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "Agent Run binding 冲突", "run_id": run_id})),
+        ),
+        AgentBindingError::InvalidEvidence(message) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error": "binding 证据无效", "details": message})),
+        ),
+        AgentBindingError::Storage(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "binding 存储失败", "details": message})),
         ),
     }
 }

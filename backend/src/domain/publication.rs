@@ -76,11 +76,7 @@ impl PublicationPlanStatus {
 
     /// 计划状态始终由平台目标投影而来，禁止独立写入。
     pub fn derive(targets: &[PublicationTargetStatus]) -> Self {
-        if targets.is_empty()
-            || targets
-                .iter()
-                .any(|status| *status == PublicationTargetStatus::Draft)
-        {
+        if targets.is_empty() || targets.contains(&PublicationTargetStatus::Draft) {
             return Self::Draft;
         }
         if targets
@@ -99,16 +95,10 @@ impl PublicationPlanStatus {
         if published > 0 {
             return Self::PartiallyPublished;
         }
-        if targets
-            .iter()
-            .any(|status| *status == PublicationTargetStatus::NeedsAttention)
-        {
+        if targets.contains(&PublicationTargetStatus::NeedsAttention) {
             return Self::NeedsAttention;
         }
-        if targets
-            .iter()
-            .any(|status| *status == PublicationTargetStatus::HandedOff)
-        {
+        if targets.contains(&PublicationTargetStatus::HandedOff) {
             return Self::HandedOff;
         }
         Self::Ready

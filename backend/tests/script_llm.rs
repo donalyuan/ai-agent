@@ -1,11 +1,10 @@
-use novex_api::agents::llm::{ScriptLLMOutput, ScriptPromptBuilder, ScriptSceneLLMOutput};
+use novex_api::agents::llm::{ScriptLLMOutput, ScriptNodeInputBuilder, ScriptSceneLLMOutput};
 use novex_api::domain::script::{ScriptGenerationInput, ScriptStyle};
-use novex_model::LLMPrompt;
 use serde_json::json;
 use uuid::Uuid;
 
 #[test]
-fn script_prompt_builder_includes_topic_style_and_scene_count() {
+fn script_node_input_includes_topic_style_and_scene_count() {
     let request = ScriptGenerationInput {
         project_id: Uuid::new_v4(),
         topic: "ChatGPT如何改变程序员工作流".to_string(),
@@ -15,17 +14,16 @@ fn script_prompt_builder_includes_topic_style_and_scene_count() {
         parent_id: None,
     };
 
-    let prompt = ScriptPromptBuilder::build(&request);
+    let input = ScriptNodeInputBuilder::build(&request);
 
-    assert!(prompt.system.contains("短视频脚本创作者"));
-    assert!(prompt.user.contains("ChatGPT如何改变程序员工作流"));
-    assert!(prompt.user.contains("教程讲解类"));
-    assert!(prompt.user.contains("7个分镜"));
-    assert!(prompt.user.contains("narration 为 50-150 个中文字符"));
+    assert!(input.content.contains("ChatGPT如何改变程序员工作流"));
+    assert!(input.content.contains("教程讲解类"));
+    assert!(input.content.contains("7个分镜"));
+    assert!(input.content.contains("narration 为 50-150 个中文字符"));
 }
 
 #[test]
-fn script_prompt_builder_marks_parent_requests_as_variants() {
+fn script_node_input_marks_parent_requests_as_variants() {
     let request = ScriptGenerationInput {
         project_id: Uuid::new_v4(),
         topic: "ChatGPT如何改变程序员工作流".to_string(),
@@ -35,14 +33,14 @@ fn script_prompt_builder_marks_parent_requests_as_variants() {
         parent_id: Some(Uuid::new_v4()),
     };
 
-    let prompt = ScriptPromptBuilder::build(&request);
+    let input = ScriptNodeInputBuilder::build(&request);
 
-    assert!(prompt.user.contains("差异化版本"));
-    assert!(prompt.user.contains("避免复用相同表达"));
+    assert!(input.content.contains("差异化版本"));
+    assert!(input.content.contains("避免复用相同表达"));
 }
 
 #[test]
-fn script_prompt_builder_can_create_small_metadata_and_scene_prompts() {
+fn script_node_input_builder_can_create_metadata_and_scene_inputs() {
     let request = ScriptGenerationInput {
         project_id: Uuid::new_v4(),
         topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
@@ -52,70 +50,14 @@ fn script_prompt_builder_can_create_small_metadata_and_scene_prompts() {
         parent_id: None,
     };
 
-    let metadata_prompt = ScriptPromptBuilder::build_metadata(&request);
-    assert!(metadata_prompt.user.contains("只输出 title 和 hook"));
-    assert!(!metadata_prompt.user.contains("\"scenes\": ["));
-    assert_eq!(metadata_prompt.max_output_tokens, Some(400));
+    let metadata_input = ScriptNodeInputBuilder::build_metadata(&request);
+    assert!(metadata_input.content.contains("只输出 title 和 hook"));
+    assert!(!metadata_input.content.contains("\"scenes\": ["));
 
-    let scene_prompt = ScriptPromptBuilder::build_single_scene(&request, 4);
-    assert!(scene_prompt.user.contains("当前分镜序号：4"));
-    assert!(scene_prompt.user.contains("scene.sequence 必须等于 4"));
-    assert!(scene_prompt.user.contains("只输出单个 scene 对象"));
-    assert_eq!(scene_prompt.max_output_tokens, Some(1_200));
-}
-
-#[test]
-fn script_prompts_request_strict_structured_output() {
-    let request = ScriptGenerationInput {
-        project_id: Uuid::new_v4(),
-        topic: "AI 如何改变人类，人类该如何接受 AI".to_string(),
-        topic_id: None,
-        style: Some(ScriptStyle::Knowledge),
-        scene_count: Some(3),
-        parent_id: None,
-    };
-
-    let complete_prompt: LLMPrompt = ScriptPromptBuilder::build(&request).into();
-    let complete_schema = complete_prompt
-        .output_schema
-        .expect("complete script prompt should request strict JSON schema");
-    assert_eq!(complete_schema.name, "script");
-    assert!(complete_schema.strict);
-    assert_eq!(
-        complete_schema.schema["required"],
-        json!(["title", "hook", "scenes"])
-    );
-    assert_eq!(
-        complete_schema.schema["properties"]["scenes"]["minItems"],
-        3
-    );
-    assert_eq!(
-        complete_schema.schema["properties"]["scenes"]["maxItems"],
-        3
-    );
-
-    let metadata_prompt: LLMPrompt = ScriptPromptBuilder::build_metadata(&request).into();
-    let metadata_schema = metadata_prompt
-        .output_schema
-        .expect("metadata prompt should request strict JSON schema");
-    assert_eq!(metadata_schema.name, "script_metadata");
-    assert_eq!(metadata_schema.schema["required"], json!(["title", "hook"]));
-
-    let scene_prompt: LLMPrompt = ScriptPromptBuilder::build_single_scene(&request, 2).into();
-    let scene_schema = scene_prompt
-        .output_schema
-        .expect("single-scene prompt should request strict JSON schema");
-    assert_eq!(scene_schema.name, "script_scene");
-    assert_eq!(
-        scene_schema.schema["properties"]["scene"]["required"],
-        json!([
-            "sequence",
-            "narration",
-            "visual_description",
-            "emotion",
-            "duration_sec"
-        ])
-    );
+    let scene_input = ScriptNodeInputBuilder::build_single_scene(&request, 4);
+    assert!(scene_input.content.contains("当前分镜序号：4"));
+    assert!(scene_input.content.contains("scene.sequence 必须等于 4"));
+    assert!(scene_input.content.contains("只输出单个 scene 对象"));
 }
 
 #[test]

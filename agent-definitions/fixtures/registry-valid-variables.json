@@ -1,0 +1,51 @@
+{
+  "schema_version": "1",
+  "agents": [
+    {
+      "agent_key": "fixture.variables",
+      "version": "1.0.0",
+      "status": "active",
+      "executor_owner": "pi",
+      "role": "fixture",
+      "goals": ["validate compiler variable contracts"],
+      "constraints": [],
+      "model_requirements": {
+        "text": true,
+        "tool_calling": true,
+        "structured_output": true,
+        "vision": false,
+        "reasoning": false,
+        "min_context_window": 1024
+      },
+      "tool_profiles": ["workspace"],
+      "tools": ["read", "write", "edit", "bash"],
+      "nodes": {
+        "fixture.variables": { "key": "fixture.variables", "version": "1.0.0" }
+      }
+    }
+  ],
+  "prompts": [
+    {
+      "prompt_key": "fixture.variables",
+      "version": "1.0.0",
+      "status": "active",
+      "executor_owner": "pi",
+      "system_template": "templates/fixture.variables.system.txt",
+      "user_template": "templates/fixture.variables.user.txt",
+      "variables": [
+        { "name": "title", "value_type": "string", "required": true, "trust": "user_instruction", "max_bytes": 32 },
+        { "name": "tags", "value_type": "string_list", "required": true, "trust": "reference", "max_bytes": 64 },
+        { "name": "item_count", "value_type": "integer", "required": true, "trust": "confirmed_fact", "max_bytes": 4 },
+        { "name": "metadata", "value_type": "json", "required": false, "trust": "confirmed_fact", "max_bytes": 128 },
+        { "name": "fragments", "value_type": "fragments", "required": true, "trust": "reference", "max_bytes": 128 }
+      ],
+      "output_schema": {
+        "name": "fixture_output",
+        "strict": true,
+        "schema": { "type": "object", "additionalProperties": false, "properties": { "items": { "type": "array", "minItems": "{{item_count}}", "maxItems": "{{item_count}}" } } }
+      },
+      "tool_profile": "workspace",
+      "max_output_tokens": 128
+    }
+  ]
+}

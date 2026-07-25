@@ -4,17 +4,23 @@ use crate::agents::ScriptAgentError;
 use crate::application::agents::adapters::{
     AgentRuntimeError, AgentTurnResponse, SoundAgentContext,
 };
-use crate::application::agents::kernel::AgentExecutor;
-use crate::domain::conversation::{AgentConversation, AgentMessage, CreateAgentConversationInput};
-use crate::model_routing::{ModelClientResolver, ModelResolveError};
+use crate::application::agents::kernel::{active_rust_definition_binding, AgentExecutor};
+use crate::domain::conversation::{
+    AgentConversation, AgentMessage, CreateAgentConversationInput, ModelBindingEvidence,
+};
+use crate::model_routing::{model_behavior_evidence, ModelClientResolver, ModelResolveError};
 use crate::repositories::AiModelRepository;
 use crate::repositories::{
-    ConversationRepository, ConversationRepositoryError, PostgresAiModelRepository,
-    PostgresConversationRepository, PostgresProjectRepository, PostgresScriptRepository,
-    PostgresVoiceCatalogRepository, PostgresWorkLibraryRepository, ProjectRepository,
-    ProjectRepositoryError, ScriptRepository,
+    AgentBindingError, ConversationRepository, ConversationRepositoryError,
+    PostgresAiModelRepository, PostgresConversationRepository, PostgresProjectRepository,
+    PostgresScriptRepository, PostgresVoiceCatalogRepository, PostgresWorkLibraryRepository,
+    ProjectRepository, ProjectRepositoryError, ScriptRepository,
 };
-use novex_agent::{AgentInvocation, ModelExecutionRef};
+use novex_agent::{
+    AgentInvocation, AuditedExecutionBinding, AuditedModelExecutor, FixedModelBinding,
+    ModelExecutionRef,
+};
+use novex_ai_core::{validate_model_capabilities, DefinitionRegistry};
 use novex_model::{ApiProtocol, ModelType};
 use serde_json::{json, Value};
 use std::{fmt, sync::Arc};
@@ -31,9 +37,12 @@ pub struct ConversationService {
     work_library_repository: PostgresWorkLibraryRepository,
     model_resolver: Arc<dyn ModelClientResolver>,
     agent_executor: AgentExecutor,
+    definition_registry: Arc<DefinitionRegistry>,
+    audited_model_executor: Arc<AuditedModelExecutor>,
 }
 
 impl ConversationService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         conversation_repository: PostgresConversationRepository,
         script_repository: PostgresScriptRepository,
@@ -43,6 +52,8 @@ impl ConversationService {
         work_library_repository: PostgresWorkLibraryRepository,
         model_resolver: Arc<dyn ModelClientResolver>,
         agent_registry: Arc<novex_agent::AgentRegistry>,
+        definition_registry: Arc<DefinitionRegistry>,
+        audited_model_executor: Arc<AuditedModelExecutor>,
     ) -> Self {
         let agent_executor = AgentExecutor::new(agent_registry, conversation_repository.clone());
         Self {
@@ -54,6 +65,8 @@ impl ConversationService {
             work_library_repository,
             model_resolver,
             agent_executor,
+            definition_registry,
+            audited_model_executor,
         }
     }
 
@@ -144,15 +157,27 @@ impl ConversationService {
             }
         }
 
+        let agent_key = conversation_agent_key(&command.agent_type).ok_or_else(|| {
+            ConversationApplicationError::Validation(format!(
+                "暂不支持该 Agent 类型: {}",
+                command.agent_type
+            ))
+        })?;
+        let definition_binding =
+            active_rust_definition_binding(&self.definition_registry, agent_key)
+                .map_err(ConversationApplicationError::Definition)?;
         self.conversation_repository
-            .create_conversation(CreateAgentConversationInput {
-                project_id: command.project_id,
-                agent_type: command.agent_type,
-                subject_type: command.subject_type,
-                subject_id: command.subject_id,
-                title: command.title,
-                metadata: command.metadata,
-            })
+            .create_conversation_with_definition(
+                CreateAgentConversationInput {
+                    project_id: command.project_id,
+                    agent_type: command.agent_type,
+                    subject_type: command.subject_type,
+                    subject_id: command.subject_id,
+                    title: command.title,
+                    metadata: command.metadata,
+                },
+                definition_binding,
+            )
             .await
             .map_err(Into::into)
     }
@@ -178,10 +203,33 @@ impl ConversationService {
         supplement_of_batch_id: Option<Uuid>,
         sound_context: Option<SoundAgentContext>,
     ) -> Result<AgentTurnResponse, ConversationApplicationError> {
-        let resolved = self.model_resolver.text_client(model_id).await?;
         let conversation = self
             .conversation_repository
             .get_conversation(conversation_id)
+            .await?;
+        let binding = self
+            .conversation_repository
+            .get_conversation_binding(conversation_id)
+            .await?;
+        let definition = self
+            .definition_registry
+            .agent(&binding.agent_key, &binding.agent_version)
+            .map_err(|error| ConversationApplicationError::Definition(error.to_string()))?;
+        let resolved = self.model_resolver.text_client(model_id).await?;
+        let evidence = model_behavior_evidence(&resolved.snapshot)?;
+        validate_model_capabilities(&definition.model_requirements, &evidence.capabilities)
+            .map_err(|_| ConversationApplicationError::ModelCapabilityMismatch)?;
+        self.conversation_repository
+            .bind_or_validate_conversation_model(
+                conversation_id,
+                ModelBindingEvidence {
+                    model_id,
+                    behavior_fingerprint: evidence.behavior_fingerprint.clone(),
+                    model_capabilities: serde_json::to_value(&evidence.capabilities).map_err(
+                        |error| ConversationApplicationError::Definition(error.to_string()),
+                    )?,
+                },
+            )
             .await?;
         let (user_metadata, run_input, payload) = invocation_payload(
             &conversation.agent_type,
@@ -198,8 +246,16 @@ impl ConversationService {
                     payload,
                 },
                 ModelExecutionRef {
-                    client: resolved.client,
                     snapshot: Some(resolved.snapshot),
+                    audited: Some(AuditedExecutionBinding {
+                        executor: self.audited_model_executor.clone(),
+                        agent_key: binding.agent_key,
+                        agent_version: binding.agent_version,
+                        binding: FixedModelBinding {
+                            model_id,
+                            behavior_fingerprint: evidence.behavior_fingerprint,
+                        },
+                    }),
                 },
             )
             .await
@@ -215,6 +271,16 @@ impl ConversationService {
         } else {
             Err(ScriptAgentError::ProjectNotFound(project_id).into())
         }
+    }
+}
+
+fn conversation_agent_key(agent_type: &str) -> Option<&'static str> {
+    match agent_type {
+        "script" => Some("video.script"),
+        "topic" => Some("video.topic"),
+        "sound" => Some("video.sound"),
+        "work" => Some("video.work"),
+        _ => None,
     }
 }
 
@@ -267,6 +333,9 @@ pub enum ConversationApplicationError {
     Agent(ScriptAgentError),
     Runtime(AgentRuntimeError),
     ModelResolve(ModelResolveError),
+    AgentBinding(AgentBindingError),
+    ModelCapabilityMismatch,
+    Definition(String),
     Validation(String),
 }
 
@@ -306,6 +375,12 @@ impl From<ModelResolveError> for ConversationApplicationError {
     }
 }
 
+impl From<AgentBindingError> for ConversationApplicationError {
+    fn from(error: AgentBindingError) -> Self {
+        Self::AgentBinding(error)
+    }
+}
+
 impl fmt::Display for ConversationApplicationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -315,6 +390,9 @@ impl fmt::Display for ConversationApplicationError {
             Self::Agent(error) => write!(formatter, "{error}"),
             Self::Runtime(error) => write!(formatter, "{error}"),
             Self::ModelResolve(error) => write!(formatter, "{error}"),
+            Self::AgentBinding(error) => write!(formatter, "{error}"),
+            Self::ModelCapabilityMismatch => formatter.write_str("model_capability_mismatch"),
+            Self::Definition(message) => write!(formatter, "definition error: {message}"),
             Self::Validation(message) => formatter.write_str(message),
         }
     }

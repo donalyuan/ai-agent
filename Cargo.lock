@@ -1216,6 +1216,8 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
+ "url",
 ]
 
 [[package]]
@@ -1229,6 +1231,7 @@ dependencies = [
  "mime_guess",
  "novex-agent",
  "novex-ai-core",
+ "novex-eval",
  "novex-model",
  "redis",
  "serde",
@@ -1248,6 +1251,10 @@ dependencies = [
 [[package]]
 name = "novex-eval"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "novex-memory"

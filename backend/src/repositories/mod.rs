@@ -1,7 +1,10 @@
 pub mod ai_model_repository;
 pub mod asset_generation_repository;
 pub mod conversation_repository;
+pub mod definition_release_repository;
+pub mod eval_repository;
 pub mod material_repository;
+pub mod model_call_repository;
 pub mod project_repository;
 pub mod publication_repository;
 pub mod script_repository;
@@ -26,13 +29,25 @@ pub use asset_generation_repository::{
     SceneAssetCandidate,
 };
 pub use conversation_repository::{
-    ConversationRepository, ConversationRepositoryError, PostgresConversationRepository,
+    AgentBindingError, ConversationRepository, ConversationRepositoryError,
+    PostgresConversationRepository,
+};
+pub use definition_release_repository::{
+    DefinitionReleaseError, PostgresDefinitionReleaseRepository,
+};
+pub use eval_repository::{
+    EvalRepositoryError, PostgresEvalRepository, StoredEvalReport, StoredEvalRun,
 };
 pub use material_repository::{
     redact_sensitive_material_metadata, validate_material_metadata, AudioUsage,
     CreateMaterialInput, Material, MaterialListFilter, MaterialParseError, MaterialRepository,
     MaterialRepositoryError, MaterialSourceFilter, MaterialStatus, MaterialStatusFilter,
     MaterialType, PostgresMaterialRepository, UpdateMaterialInput,
+};
+pub use model_call_repository::{
+    FinishModelCall, ModelCallListFilter, ModelCallOwner, ModelCallRecord,
+    ModelCallRepositoryError, ModelCallStatus, ModelCallTerminalStatus,
+    PostgresModelCallRepository, PrepareModelCall,
 };
 pub use project_repository::{
     AccountStrategyProfile, CreateProjectInput, PostgresProjectRepository, Project,

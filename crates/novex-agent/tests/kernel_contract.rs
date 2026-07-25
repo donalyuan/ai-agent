@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use novex_agent::*;
 use novex_ai_core::AgentKey;
-use novex_model::{ApiProtocol, LLMClient, LLMError, LLMPrompt, ModelExecutionSnapshot, ModelType};
+use novex_model::{ApiProtocol, ModelExecutionSnapshot, ModelType};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -105,18 +105,9 @@ impl RunRecorder for FakePorts {
 
 #[async_trait]
 impl StepRecorder for FakePorts {
-    async fn record_step(&self, step: AgentStep) -> Result<(), BoxError> {
+    async fn record_step(&self, step: AgentStep) -> Result<Uuid, BoxError> {
         self.0.lock().unwrap().steps.push(step);
-        Ok(())
-    }
-}
-
-struct NoopLlm;
-
-#[async_trait]
-impl LLMClient for NoopLlm {
-    async fn generate_script(&self, _: LLMPrompt) -> Result<String, LLMError> {
-        unreachable!()
+        Ok(Uuid::new_v4())
     }
 }
 
@@ -158,7 +149,7 @@ impl AgentAdapter for TestAdapter {
 
 fn model() -> ModelExecutionRef {
     ModelExecutionRef {
-        client: Arc::new(NoopLlm),
+        audited: None,
         snapshot: Some(ModelExecutionSnapshot {
             model_id: Uuid::new_v4(),
             display_name: "fixture".into(),

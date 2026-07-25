@@ -19,8 +19,9 @@ services:
 
   ai-agent-api:
     build:
-      context: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/backend
-      dockerfile: Dockerfile
+      context: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}
+      dockerfile: backend/Dockerfile
+      target: development
     container_name: ai-agent-api
     working_dir: /app
     command: cargo run -p novex-api --bin novex-api
@@ -132,8 +133,8 @@ services:
 
   ai-agent-agent-runtime:
     build:
-      context: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/services/agent-runtime
-      dockerfile: Dockerfile
+      context: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}
+      dockerfile: services/agent-runtime/Dockerfile
     container_name: ai-agent-agent-runtime
     env_file:
       - path: ${VIDEO_AGENT_WORKSPACE_ROOT:-/server/ai-agent}/.env

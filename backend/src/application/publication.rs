@@ -330,6 +330,7 @@ impl PublicationService {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn write_zip(
     output: PathBuf,
     video: ValidatedArtifact,

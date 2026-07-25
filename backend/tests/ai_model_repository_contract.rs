@@ -87,7 +87,7 @@ fn text_model(name: &str) -> CreateAiModelInput {
         timeout_seconds: 120,
         reasoning_effort: Some("high".to_string()),
         max_output_tokens: Some(4096),
-        settings: json!({}),
+        settings: json!({"context_window": 128000}),
         sort_order: 10,
         remark: String::new(),
         status: AiModelStatus::Enabled,

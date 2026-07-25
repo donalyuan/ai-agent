@@ -1,0 +1,175 @@
+{
+  "schema_version": "1",
+  "golden_compile_input": {
+    "user": "golden-user-input",
+    "user_sha256": "8833cd50516cb3bf432ad1027629cf231ebe056c99da3f7b7051220953cf8c6a",
+    "scene_count": 3
+  },
+  "external_effects": {
+    "real_model_calls": 0,
+    "video_generation_calls": 0,
+    "platform_publication_calls": 0
+  },
+  "rust_nodes": [
+    {
+      "node_key": "project.strategy_draft", "source": "application/projects.rs",
+      "agent_key": "video.project-strategy", "prompt_key": "project.strategy_draft",
+      "system_prompt": "你是短视频内容账号策略顾问。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。",
+      "system_sha256": "6300e8be804ee5e952ea48a6ce62db05bd7cae58eca714d23a36bc5d3c659cc7",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "5cdca868f8f7c745e819cd4c1b2993e62ba9749da8648c39c4f1f13fe67eb412",
+      "compiled_output_schema_sha256": "5cdca868f8f7c745e819cd4c1b2993e62ba9749da8648c39c4f1f13fe67eb412",
+      "max_output_tokens": 1200, "initial_call_count": 1, "max_attempts": 2,
+      "retry_policy": "same_binding_transient_provider_once", "step_order": []
+    },
+    {
+      "node_key": "script.complete", "source": "agents/llm.rs",
+      "agent_key": "video.script", "prompt_key": "script.complete",
+      "system_prompt": "你是专业的短视频脚本创作者，擅长创作15-60秒的抖音/小红书短视频脚本。你必须只输出合法 JSON，不要输出解释、Markdown 或额外文本。",
+      "system_sha256": "02d2b164a79b9f3423122a42efded08abdb71d7da22388c7c742c345950657b3",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "3951155fd946de0f09cd49c159b821ee631ed6ac43fd9b1057b572c6cc36013b",
+      "compiled_output_schema_sha256": "9bb4f723965dc07050b5c9a85689778c5b1f6cfdfbb7a046a8e827a24ea3e6b7",
+      "max_output_tokens": null, "initial_call_count": 1, "max_attempts": 9,
+      "retry_policy": "same_binding_provider_or_parse_up_to_3x3", "step_order": []
+    },
+    {
+      "node_key": "script.metadata", "source": "agents/llm.rs",
+      "agent_key": "video.script", "prompt_key": "script.metadata",
+      "system_prompt": "你是专业的短视频脚本创作者，擅长创作15-60秒的抖音/小红书短视频脚本。你必须只输出合法 JSON，不要输出解释、Markdown 或额外文本。",
+      "system_sha256": "02d2b164a79b9f3423122a42efded08abdb71d7da22388c7c742c345950657b3",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "8efa0ffc733e9671a845056acc61693b74c3ae6e4cc6ca252bfc339c7bd5af25",
+      "compiled_output_schema_sha256": "8efa0ffc733e9671a845056acc61693b74c3ae6e4cc6ca252bfc339c7bd5af25",
+      "max_output_tokens": 400, "initial_call_count": 1, "max_attempts": 9,
+      "retry_policy": "same_binding_provider_or_parse_up_to_3x3", "step_order": []
+    },
+    {
+      "node_key": "script.single_scene", "source": "agents/llm.rs",
+      "agent_key": "video.script", "prompt_key": "script.single_scene",
+      "system_prompt": "你是专业的短视频脚本创作者，擅长创作15-60秒的抖音/小红书短视频脚本。你必须只输出合法 JSON，不要输出解释、Markdown 或额外文本。",
+      "system_sha256": "02d2b164a79b9f3423122a42efded08abdb71d7da22388c7c742c345950657b3",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "baece808562442572a1065516cd50b263c1468d8bee320b46362c2652cfd3bf4",
+      "compiled_output_schema_sha256": "baece808562442572a1065516cd50b263c1468d8bee320b46362c2652cfd3bf4",
+      "max_output_tokens": 1200, "initial_call_count": 1, "max_attempts": 9,
+      "retry_policy": "same_binding_provider_or_parse_up_to_3x3", "step_order": []
+    },
+    {
+      "node_key": "script.generation_intent", "source": "application/agents/adapters/script.rs",
+      "agent_key": "video.script", "prompt_key": "script.generation_intent",
+      "system_prompt": "你是短视频脚本生成 Agent。你必须只输出合法 JSON，不要输出 Markdown 或解释。",
+      "system_sha256": "962a872d901c36b39d9a35047c954608409a6b1ba5951c4f92fcbf6b9658f20d",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "compiled_output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "max_output_tokens": 800, "initial_call_count": 1, "max_attempts": 1,
+      "retry_policy": "none", "step_order": ["parse_generation_intent", "generate_script"]
+    },
+    {
+      "node_key": "script.scene_patch", "source": "application/agents/adapters/script.rs",
+      "agent_key": "video.script", "prompt_key": "script.scene_patch",
+      "system_prompt": "你是短视频脚本改稿 Agent。你必须只输出合法 JSON，不要输出 Markdown 或解释。",
+      "system_sha256": "3306ecf47fc687094cf606fd0b2662d005a66954bc84bd38a17427598767281b",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "compiled_output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "max_output_tokens": 1200, "initial_call_count": 1, "max_attempts": 1,
+      "retry_policy": "none", "step_order": ["read_script", "llm_scene_patch", "update_scene"]
+    },
+    {
+      "node_key": "topic.generate", "source": "application/agents/adapters/topic_generation.rs",
+      "agent_key": "video.topic", "prompt_key": "topic.generate",
+      "system_prompt": "你是短视频内容策略选题 Agent。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。",
+      "system_sha256": "fb8f6e9ca40a893c01055cb02a2d56d6aaf1b7a8176fd910c633385537426626",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "236105d4ede46faf18625e3f58094b21f7f442cbf6c3ec90ddadb3ee2949299f",
+      "compiled_output_schema_sha256": "236105d4ede46faf18625e3f58094b21f7f442cbf6c3ec90ddadb3ee2949299f",
+      "max_output_tokens": 2000, "initial_call_count": 1, "max_attempts": 1,
+      "retry_policy": "none", "step_order": ["read_project_context", "generate_topics"]
+    },
+    {
+      "node_key": "topic.supplement", "source": "application/agents/adapters/topic_generation.rs",
+      "agent_key": "video.topic", "prompt_key": "topic.generate",
+      "system_prompt": "你是短视频内容策略选题 Agent。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。",
+      "system_sha256": "fb8f6e9ca40a893c01055cb02a2d56d6aaf1b7a8176fd910c633385537426626",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "236105d4ede46faf18625e3f58094b21f7f442cbf6c3ec90ddadb3ee2949299f",
+      "compiled_output_schema_sha256": "236105d4ede46faf18625e3f58094b21f7f442cbf6c3ec90ddadb3ee2949299f",
+      "max_output_tokens": 2000, "initial_call_count": 1, "max_attempts": 1,
+      "retry_policy": "none", "step_order": ["read_project_context", "generate_topics"]
+    },
+    {
+      "node_key": "topic.quality_review", "source": "application/agents/adapters/topic_quality.rs",
+      "agent_key": "video.topic", "prompt_key": "topic.quality",
+      "system_prompt": "你是短视频内容策略质量闸门。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。",
+      "system_sha256": "87b63ac63b9911a5409ff6b63806aa440020ffe2bedc44750d3f8ced492e4f92",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "c0ca3c9fdefea529dd23285c54346ca8d4af605c6e06b4e0b22c4471fbd94cae",
+      "compiled_output_schema_sha256": "c0ca3c9fdefea529dd23285c54346ca8d4af605c6e06b4e0b22c4471fbd94cae",
+      "max_output_tokens": 2000, "initial_call_count": 1, "max_attempts": 1,
+      "retry_policy": "none", "step_order": ["evaluate_topic_quality"]
+    },
+    {
+      "node_key": "topic.rewrite", "source": "application/agents/adapters/topic_generation.rs",
+      "agent_key": "video.topic", "prompt_key": "topic.generate",
+      "system_prompt": "你是短视频内容策略选题 Agent。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。",
+      "system_sha256": "fb8f6e9ca40a893c01055cb02a2d56d6aaf1b7a8176fd910c633385537426626",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "236105d4ede46faf18625e3f58094b21f7f442cbf6c3ec90ddadb3ee2949299f",
+      "compiled_output_schema_sha256": "236105d4ede46faf18625e3f58094b21f7f442cbf6c3ec90ddadb3ee2949299f",
+      "max_output_tokens": 2000, "initial_call_count": 1, "max_attempts": 1,
+      "retry_policy": "none", "step_order": ["rewrite_topics", "evaluate_topic_quality"]
+    },
+    {
+      "node_key": "topic.group_review", "source": "application/agents/adapters/topic_review.rs",
+      "agent_key": "video.topic", "prompt_key": "topic.group_review",
+      "system_prompt": "你是短视频内容策略评审 Agent。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。",
+      "system_sha256": "c03d5433d32d6e92fad108f8d33aa3373171f3226f859db2df8bffc3cc28c983",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "29033e4e0dbae873e35c2a03880cf91ab144437bb985f3bbb747e3474aee7c7c",
+      "compiled_output_schema_sha256": "29033e4e0dbae873e35c2a03880cf91ab144437bb985f3bbb747e3474aee7c7c",
+      "max_output_tokens": 2000, "initial_call_count": 1, "max_attempts": 1,
+      "retry_policy": "none", "step_order": ["read_topic_group", "review_topic_group", "persist_topic_review_snapshot"]
+    },
+    {
+      "node_key": "sound.recommend", "source": "application/agents/adapters/sound.rs",
+      "agent_key": "video.sound", "prompt_key": "sound.recommend",
+      "system_prompt": "你是声音 Agent。必须结合当前编辑上下文理解用户要求；只能从给定的完整可用目录推荐音色和语言，只能推荐模型声明的声音参数。当前 TTS 协议不支持结构化情绪字段，不得虚构能力或把会被朗读的情绪标签擅自写入旁白。只输出建议，不执行 TTS/ASR。字幕断句必须完整覆盖 TTS 文本。",
+      "system_sha256": "c49ef23e18ca3b0e9148ba92b8bb67fb80aa165db1cf8830931bddc325c3c85b",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "compiled_output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "max_output_tokens": 1500, "initial_call_count": 1, "max_attempts": 1,
+      "retry_policy": "none", "step_order": ["read_voice_catalog", "recommend_sound"]
+    },
+    {
+      "node_key": "work.plan", "source": "application/agents/adapters/work.rs",
+      "agent_key": "video.work", "prompt_key": "work.plan",
+      "system_prompt": "你是作品生成 Agent。只提供可见的全片方案、分段提示词和模型建议，不调用视频模型；必须等待用户确认后才生成。",
+      "system_sha256": "f20c7bdd24423fcb586beb6f5776e8bc2416c28ced78f9abd8d8dc6c050b8d03",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "compiled_output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "max_output_tokens": 1200, "initial_call_count": 1, "max_attempts": 1,
+      "retry_policy": "none", "step_order": ["recommend_work_plan"]
+    },
+    {
+      "node_key": "work.patch", "source": "application/agents/adapters/work.rs",
+      "agent_key": "video.work", "prompt_key": "work.patch",
+      "system_prompt": "你是作品修改 Agent。只输出一个 JSON object，不要 Markdown。字段只能包含 assistant_message、input_snapshot_patch、model_snapshot_patch、parameter_snapshot_patch、prompt_snapshot_patch、timeline_snapshot_patch。assistant_message 用简体中文说明修改；至少提供一个非空 patch object。只修改用户明确要求的字段，不调用视频、TTS、ASR 或发布能力。",
+      "system_sha256": "bdd77cd6325fc171d1e8523a235a83076fdac059c0c7ac4e538278e539cdf9e6",
+      "user_prompt_template": "{{fragments}}", "user_prompt_template_sha256": "63088cde3c37fffe6ed14f0697579248ceba7117e818770d42d571c683382a0f",
+      "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "compiled_output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "max_output_tokens": 1800, "initial_call_count": 1, "max_attempts": 1,
+      "retry_policy": "none", "step_order": ["read_work_manifest", "apply_work_patch"]
+    }
+  ],
+  "pi_nodes": [
+    { "node_key": "personal.turn", "phase": "turn" },
+    { "node_key": "personal.tool_followup", "phase": "tool_loop" },
+    { "node_key": "personal.compaction", "phase": "compaction" },
+    { "node_key": "personal.branch_summary", "phase": "branch_summary" }
+  ]
+}

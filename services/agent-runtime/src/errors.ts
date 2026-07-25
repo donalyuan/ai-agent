@@ -3,13 +3,20 @@ import { redactUnknown } from "./redaction.js";
 export type RuntimeErrorCode =
   | "bad_request"
   | "config_invalid"
+  | "definition_contract_error"
+  | "definition_rebind_required"
   | "internal_error"
+  | "audit_persistence_failed"
+  | "audit_terminal_conflict"
+  | "model_capability_mismatch"
   | "model_incompatible"
   | "model_not_found"
   | "not_found"
   | "session_busy"
   | "session_not_found"
   | "session_not_running"
+  | "session_migration_required"
+  | "model_rebind_required"
   | "storage_unavailable";
 
 export class RuntimeError extends Error {

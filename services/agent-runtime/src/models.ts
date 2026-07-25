@@ -3,7 +3,7 @@ import {
   createProvider,
   type Api,
   type Model,
-  type Models,
+  type MutableModels,
 } from "@earendil-works/pi-ai";
 import * as openAiCompletionsApi from "@earendil-works/pi-ai/api/openai-completions";
 import * as openAiResponsesApi from "@earendil-works/pi-ai/api/openai-responses";
@@ -11,7 +11,9 @@ import type { Pool, QueryResultRow } from "pg";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 import { RuntimeError } from "./errors.js";
+import { behaviorFingerprint, type ModelBehavior } from "./definitions.js";
 import { redactUrl } from "./redaction.js";
+import { createAuditedModels } from "./audited-models.js";
 
 export type SupportedTextProtocol = "openai_responses" | "openai_chat_completions";
 
@@ -40,6 +42,7 @@ export interface ResolvedTextModel {
   reasoningEffort?: string;
   maxOutputTokens: number;
   contextWindow: number;
+  settings: unknown;
 }
 
 export interface ModelSnapshot {
@@ -51,21 +54,29 @@ export interface ModelSnapshot {
   reasoning_effort: string | null;
   max_output_tokens: number;
   timeout_seconds: number;
+  context_window: number;
+  behavior_settings: unknown;
+  behavior_fingerprint: string;
 }
 
 export interface PiModelRuntime {
-  models: Models;
+  models: MutableModels;
   model: Model<Api>;
-  streamOptions: { timeoutMs: number };
+  streamOptions: { timeoutMs: number; maxRetries: 0 };
   thinkingLevel: ThinkingLevel;
   snapshot: ModelSnapshot;
   secrets: readonly string[];
 }
 
-function positiveSetting(settings: unknown, key: string, fallback: number): number {
-  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) return fallback;
+function requiredPositiveSetting(settings: unknown, key: string): number {
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
+    throw new RuntimeError("model_incompatible", 422, `模型缺少显式 ${key} 行为配置`);
+  }
   const value = (settings as Record<string, unknown>)[key];
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : fallback;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new RuntimeError("model_incompatible", 422, `模型缺少有效 ${key} 行为配置`);
+  }
+  return value;
 }
 
 function mapRow(row: AiModelRow): ResolvedTextModel {
@@ -81,6 +92,9 @@ function mapRow(row: AiModelRow): ResolvedTextModel {
   if (!apiKey || !baseUrl || !upstreamModel) {
     throw new RuntimeError("model_incompatible", 422, "模型运行配置不完整");
   }
+  if (row.max_output_tokens === null || !Number.isSafeInteger(row.max_output_tokens) || row.max_output_tokens <= 0) {
+    throw new RuntimeError("model_incompatible", 422, "模型缺少有效 max_output_tokens 行为配置");
+  }
 
   return {
     id: row.id,
@@ -91,9 +105,22 @@ function mapRow(row: AiModelRow): ResolvedTextModel {
     apiKey,
     timeoutMs: row.timeout_seconds * 1_000,
     ...(row.reasoning_effort ? { reasoningEffort: row.reasoning_effort } : {}),
-    maxOutputTokens: row.max_output_tokens ?? 4_096,
-    contextWindow: positiveSetting(row.settings, "context_window", 128_000),
+    maxOutputTokens: row.max_output_tokens,
+    contextWindow: requiredPositiveSetting(row.settings, "context_window"),
+    settings: row.settings,
   };
+}
+
+/** Refreshes credentials and non-fingerprinted transport settings after binding validation. */
+export function refreshPiModelRuntime(target: PiModelRuntime, refreshed: PiModelRuntime): void {
+  if (target === refreshed) return;
+  target.models.clearProviders();
+  for (const provider of refreshed.models.getProviders()) target.models.setProvider(provider);
+  target.model = refreshed.model;
+  target.streamOptions = refreshed.streamOptions;
+  target.thinkingLevel = refreshed.thinkingLevel;
+  target.snapshot = refreshed.snapshot;
+  target.secrets = refreshed.secrets;
 }
 
 export class ModelConfigRepository {
@@ -151,13 +178,23 @@ export function createPiModelRuntime(config: ResolvedTextModel): PiModelRuntime 
     models: [model],
     api: config.protocol === "openai_responses" ? openAiResponsesApi : openAiCompletionsApi,
   });
-  const models = createModels();
+  const models = createAuditedModels(createModels());
   models.setProvider(provider);
+  const behavior: ModelBehavior = {
+    protocol: config.protocol,
+    request_base_url: config.requestBaseUrl,
+    upstream_model: config.upstreamModel,
+    reasoning_effort: config.reasoningEffort ?? null,
+    max_output_tokens: config.maxOutputTokens,
+    context_window: config.contextWindow,
+    settings: config.settings,
+  };
+  const fingerprint = behaviorFingerprint(behavior);
 
   return {
     models,
     model,
-    streamOptions: { timeoutMs: config.timeoutMs },
+    streamOptions: { timeoutMs: config.timeoutMs, maxRetries: 0 },
     thinkingLevel: parseThinkingLevel(config.reasoningEffort),
     snapshot: {
       model_id: config.id,
@@ -168,6 +205,9 @@ export function createPiModelRuntime(config: ResolvedTextModel): PiModelRuntime 
       reasoning_effort: config.reasoningEffort ?? null,
       max_output_tokens: config.maxOutputTokens,
       timeout_seconds: config.timeoutMs / 1_000,
+      context_window: config.contextWindow,
+      behavior_settings: fingerprint.normalized.settings,
+      behavior_fingerprint: fingerprint.digest,
     },
     secrets: [config.apiKey],
   };

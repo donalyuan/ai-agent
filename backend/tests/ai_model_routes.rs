@@ -120,7 +120,7 @@ fn text_payload(name: &str) -> Value {
         "timeout_seconds": 120,
         "reasoning_effort": "high",
         "max_output_tokens": 4096,
-        "settings": {},
+        "settings": {"context_window": 128000},
         "sort_order": 10,
         "remark": "测试模型",
         "is_default": false

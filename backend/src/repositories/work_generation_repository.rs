@@ -950,6 +950,7 @@ fn generation_requirements(mode: &str) -> (bool, bool, bool) {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod generation_requirement_tests {
     use super::generation_requirements;
 
@@ -963,6 +964,7 @@ mod generation_requirement_tests {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn insert_generation_step(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,

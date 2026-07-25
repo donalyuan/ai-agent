@@ -60,6 +60,7 @@ fn complete_config() -> LegacyModelImportConfig {
         text_timeout_seconds: 120,
         text_reasoning_effort: Some("high".to_string()),
         text_max_output_tokens: Some(3000),
+        text_context_window: Some(128000),
         image_api_key: Some("image-secret".to_string()),
         image_base_url: Some("https://images.example/v1/images/generations".to_string()),
         image_model: Some("image-upstream".to_string()),

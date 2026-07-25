@@ -132,7 +132,7 @@ impl LLMClient for ScriptedLlm {
     }
 }
 
-fn runtime(
+async fn runtime(
     pool: PgPool,
     llm: Arc<ScriptedLlm>,
 ) -> (TestAgentExecutor, Arc<PostgresConversationRepository>) {
@@ -141,10 +141,11 @@ fn runtime(
     registry
         .register(Arc::new(WorkAgentAdapter::new(
             Arc::new(PostgresProjectRepository::new(pool.clone())),
-            Arc::new(PostgresWorkLibraryRepository::new(pool)),
+            Arc::new(PostgresWorkLibraryRepository::new(pool.clone())),
         )))
         .unwrap();
-    let runtime = TestAgentExecutor::new(registry, (*conversations).clone(), llm, None);
+    let runtime =
+        TestAgentExecutor::new(registry, (*conversations).clone(), pool, llm, "video.work").await;
     (runtime, conversations)
 }
 
@@ -175,7 +176,7 @@ async fn work_agent_reuses_current_draft_and_returns_confirmable_diff() {
         "assistant_message": "已保留配音并收紧画面节奏，请确认影响范围。",
         "prompt_snapshot_patch": {"full_prompt": "保留配音，画面切换更紧凑"}
     })));
-    let (runtime, conversations) = runtime(pool.clone(), llm.clone());
+    let (runtime, conversations) = runtime(pool.clone(), llm.clone()).await;
     let conversation_id = conversation(&conversations, project_id, work_id).await;
 
     let response = runtime
@@ -233,7 +234,7 @@ async fn work_agent_rejects_invalid_unknown_and_empty_patches_without_writing() 
         let (_admin_pool, pool, _database) = migrated_pool().await;
         let (project_id, work_id, draft_id) = seed_work(&pool).await;
         let llm = Arc::new(ScriptedLlm::raw(response));
-        let (runtime, conversations) = runtime(pool.clone(), llm);
+        let (runtime, conversations) = runtime(pool.clone(), llm).await;
         let conversation_id = conversation(&conversations, project_id, work_id).await;
 
         let result = runtime
@@ -284,7 +285,7 @@ async fn work_agent_rejects_work_from_another_project_before_model_call() {
         "assistant_message": "不应执行",
         "prompt_snapshot_patch": {"full_prompt": "不应写入"}
     })));
-    let (runtime, conversations) = runtime(pool, llm.clone());
+    let (runtime, conversations) = runtime(pool, llm.clone()).await;
     let conversation_id = conversation(&conversations, other_project_id, work_id).await;
 
     let result = runtime

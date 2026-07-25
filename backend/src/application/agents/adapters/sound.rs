@@ -1,11 +1,14 @@
 use super::{record_step, AgentRuntimeError, SoundAgentAdapter, SoundAgentContext};
 use crate::domain::conversation::CreateAgentStepInput;
 use crate::repositories::VoiceCatalogEntry;
-use novex_agent::{AgentOutcome, AgentSession, StepRecorder, StoredMessage};
-use novex_model::{LLMClient, LLMPrompt};
+use novex_agent::{
+    AgentOutcome, AgentSession, AuditedCallOwner, AuditedModelError, AuditedModelRequest,
+    ModelExecutionRef, StepRecorder, StoredMessage,
+};
+use novex_ai_core::{DynamicFragment, PromptCompileInput, TrustLevel};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -16,7 +19,7 @@ impl SoundAgentAdapter {
         user_message: &StoredMessage,
         run_id: Uuid,
         sound_context: &SoundAgentContext,
-        llm_client: Arc<dyn LLMClient>,
+        model: ModelExecutionRef,
         steps: Arc<dyn StepRecorder>,
     ) -> Result<AgentOutcome, AgentRuntimeError> {
         let model_id = speech_model_id(conversation)?;
@@ -42,15 +45,56 @@ impl SoundAgentAdapter {
             })
             .await?;
 
-        let raw = llm_client
-            .generate_script(sound_recommendation_prompt(
-                &user_message.content,
-                sound_context,
-                &catalog.voices,
-                &catalog.model_settings,
-            ))
-            .await?;
-        let recommendation = SoundRecommendation::parse(&raw)?;
+        let prompt = sound_recommendation_prompt(
+            &user_message.content,
+            sound_context,
+            &catalog.voices,
+            &catalog.model_settings,
+        );
+        let audited = model.audited.as_ref().ok_or_else(|| {
+            AgentRuntimeError::Kernel("audited model execution is required".into())
+        })?;
+        let fragment_id = format!("voice-catalog:{model_id}:recommendation");
+        let response = audited
+            .executor
+            .execute_parsed(
+                        AuditedModelRequest {
+                            owner: AuditedCallOwner::AgentRun(run_id),
+                            step_id: None,
+                            root_call_id: None,
+                            parent_call_id: None,
+                            attempt: 1,
+                            agent_key: audited.agent_key.clone(),
+                            agent_version: audited.agent_version.clone(),
+                            node_key: "sound.recommend".into(),
+                            compile_input: PromptCompileInput {
+                                schema_version: "1".into(),
+                                variables: BTreeMap::new(),
+                                fragments: vec![DynamicFragment {
+                                    id: fragment_id.clone(),
+                                    trust: TrustLevel::Reference,
+                                    source: "sound_recommendation_context".into(),
+                                    content: Some(prompt),
+                                    asset: None,
+                                }],
+                            },
+                            tool_profile: "chat".into(),
+                            tool_schema: None,
+                            binding: audited.binding.clone(),
+                            context_sources: json!([
+                                {"id": format!("message:{}", user_message.id), "trust": "user_instruction", "source": "conversation_user_message"},
+                                {"id": format!("voice-catalog:{model_id}"), "trust": "confirmed_fact", "source": "voice_catalog"},
+                                {"id": fragment_id, "trust": "reference", "source": "sound_recommendation_context"}
+                            ]),
+                            memory_sources: json!([]),
+                            parameters: json!({"max_output_tokens": 1500}),
+                            asset_references: json!([]),
+                        },
+                        |raw| SoundRecommendation::parse(raw).map_err(|error| error.to_string()),
+            )
+            .await
+            .map_err(sound_audited_error)?;
+        let (recommendation, model_call_id) = (response.output, response.model_call_id);
         let voice = catalog
             .voices
             .iter()
@@ -59,7 +103,7 @@ impl SoundAgentAdapter {
                 AgentRuntimeError::InvalidLlmOutput("声音 Agent 推荐了目录外音色".to_string())
             })?;
         validate_recommendation(&recommendation, voice, &catalog.model_settings)?;
-        record_step(
+        let recommendation_step_id = record_step(
             steps.as_ref(),
             CreateAgentStepInput {
                 agent_run_id: run_id,
@@ -78,6 +122,11 @@ impl SoundAgentAdapter {
             },
         )
         .await?;
+        audited
+            .executor
+            .associate_step(model_call_id, recommendation_step_id)
+            .await
+            .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
 
         Ok(AgentOutcome::new(
             recommendation.reply,
@@ -93,6 +142,16 @@ impl SoundAgentAdapter {
                 "tool_execution": false,
             }),
         ))
+    }
+}
+
+fn sound_audited_error(error: AuditedModelError) -> AgentRuntimeError {
+    match error {
+        AuditedModelError::Provider { source, .. } => AgentRuntimeError::Llm(source),
+        AuditedModelError::StructuredParse { message, .. } => {
+            AgentRuntimeError::InvalidLlmOutput(message)
+        }
+        error => AgentRuntimeError::Kernel(error.to_string()),
     }
 }
 
@@ -258,7 +317,7 @@ fn sound_recommendation_prompt(
     sound_context: &SoundAgentContext,
     voices: &[VoiceCatalogEntry],
     model_settings: &Value,
-) -> LLMPrompt {
+) -> String {
     let voices = voices
         .iter()
         .map(|voice| {
@@ -275,21 +334,15 @@ fn sound_recommendation_prompt(
         .cloned()
         .unwrap_or_else(|| json!({}));
     let output_schema = sound_recommendation_schema();
-    LLMPrompt {
-        system: "你是声音 Agent。必须结合当前编辑上下文理解用户要求；只能从给定的完整可用目录推荐音色和语言，只能推荐模型声明的声音参数。当前 TTS 协议不支持结构化情绪字段，不得虚构能力或把会被朗读的情绪标签擅自写入旁白。只输出建议，不执行 TTS/ASR。字幕断句必须完整覆盖 TTS 文本。".to_string(),
-        user: format!(
+    format!(
             "用户要求：\n{}\n\n当前编辑上下文：\n{}\n\n模型可调参数定义：\n{}\n\n完整可用音色目录（共 {} 项）：\n{}\n\n声音建议 JSON 输出契约：\n{}\n\n只输出符合契约的 JSON object。",
             user_message,
             serde_json::to_string(sound_context).unwrap_or_else(|_| "{}".to_string()),
             serde_json::to_string(&parameter_definitions).unwrap_or_else(|_| "{}".to_string()),
             voices.len(),
             serde_json::to_string(&voices).unwrap_or_else(|_| "[]".to_string()),
-            serde_json::to_string(&output_schema).unwrap_or_else(|_| "{}".to_string())
-        ),
-        max_output_tokens: Some(1_500),
-        // 真实供应商对严格 json_schema 返回 502；json_object + 本地严格校验是固定协议。
-        output_schema: None,
-    }
+        serde_json::to_string(&output_schema).unwrap_or_else(|_| "{}".to_string())
+    )
 }
 
 fn sound_recommendation_schema() -> Value {

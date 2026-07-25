@@ -13,26 +13,16 @@ use novex_api::repositories::{
     PostgresConversationRepository, PostgresProjectRepository, PostgresScriptRepository,
     PostgresTopicRepository, PostgresVoiceCatalogRepository, PostgresWorkLibraryRepository,
 };
-use novex_model::{LLMClient, LLMError, LLMPrompt};
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use uuid::Uuid;
 
-struct NoopLlm;
-
-#[async_trait]
-impl LLMClient for NoopLlm {
-    async fn generate_script(&self, _: LLMPrompt) -> Result<String, LLMError> {
-        panic!("payload validation must happen before LLM execution")
-    }
-}
-
 struct NoopSteps;
 
 #[async_trait]
 impl StepRecorder for NoopSteps {
-    async fn record_step(&self, _: AgentStep) -> Result<(), BoxError> {
+    async fn record_step(&self, _: AgentStep) -> Result<Uuid, BoxError> {
         panic!("payload validation must happen before step recording")
     }
 }
@@ -94,8 +84,8 @@ async fn all_business_adapters_declare_stable_keys_and_reject_unknown_payload_fi
             },
             run_id: Uuid::new_v4(),
             model: ModelExecutionRef {
-                client: Arc::new(NoopLlm),
                 snapshot: None,
+                audited: None,
             },
             steps: Arc::new(NoopSteps),
         };

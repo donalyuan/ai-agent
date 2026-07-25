@@ -1,6 +1,8 @@
 //! 建立生产数据库与 Redis 依赖，并在 Router 启动前完成必要初始化。
 
 use super::{AppConfig, AppState};
+use crate::repositories::PostgresDefinitionReleaseRepository;
+use novex_ai_core::{DefinitionRegistry, ExecutorOwner};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 /// 构建生产运行时依赖，并在服务启动前完成数据库迁移和菜单状态同步。
@@ -9,7 +11,61 @@ pub async fn build_runtime_state() -> Result<AppState, Box<dyn std::error::Error
     let pg_pool = connect_runtime_pg_pool(&config.database_url, 5).await?;
     let redis_client = redis::Client::open(config.redis_url.clone())?;
 
-    AppState::new(config, pg_pool, Some(redis_client))
+    let state = AppState::new(config, pg_pool.clone(), Some(redis_client))?;
+    let definitions = state.definition_registry()?;
+    validate_production_execution_integrity(definitions.as_ref())?;
+    PostgresDefinitionReleaseRepository::new(pg_pool)
+        .publish_registry(definitions.as_ref())
+        .await?;
+    Ok(state)
+}
+
+/// 启动时固定核对全部 Rust 生产节点，防止仅靠测试 inventory 而在部署产物中漏装定义。
+fn validate_production_execution_integrity(
+    registry: &DefinitionRegistry,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    const INVENTORY: &[(&str, &[&str])] = &[
+        ("video.project-strategy", &["project.strategy_draft"]),
+        (
+            "video.script",
+            &[
+                "script.complete",
+                "script.metadata",
+                "script.single_scene",
+                "script.generation_intent",
+                "script.scene_patch",
+            ],
+        ),
+        (
+            "video.topic",
+            &[
+                "topic.generate",
+                "topic.supplement",
+                "topic.quality_review",
+                "topic.rewrite",
+                "topic.group_review",
+            ],
+        ),
+        ("video.sound", &["sound.recommend"]),
+        ("video.work", &["work.plan", "work.patch"]),
+    ];
+
+    for (agent_key, node_keys) in INVENTORY {
+        let agent = registry.active_agent(agent_key)?;
+        if agent.executor_owner != ExecutorOwner::Rust {
+            return Err(format!("production definition {agent_key} is not owned by Rust").into());
+        }
+        for node_key in *node_keys {
+            if !agent.nodes.contains_key(*node_key) {
+                return Err(format!(
+                    "production definition {agent_key}@{} is missing node {node_key}",
+                    agent.version
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
 }
 
 pub async fn connect_runtime_pg_pool(

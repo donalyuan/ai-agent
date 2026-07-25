@@ -38,4 +38,9 @@ impl AppConfig {
             asset_generation_providers: Vec::new(),
         }
     }
+
+    pub fn agent_definitions_dir(&self) -> String {
+        std::env::var("NOVEX_AGENT_DEFINITIONS_DIR")
+            .unwrap_or_else(|_| "/app/agent-definitions".to_string())
+    }
 }

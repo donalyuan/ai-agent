@@ -9,9 +9,7 @@ use crate::domain::topic::{
     TopicQualityGateResult,
 };
 use crate::repositories::{CreateTopicQualityEvaluationInput, TopicRepository};
-use novex_model::{LLMJsonSchema, LLMPrompt};
 use serde::Deserialize;
-use serde_json::json;
 use std::fmt;
 use uuid::Uuid;
 
@@ -221,15 +219,12 @@ pub(super) fn build_topic_quality_gate_prompt(
     user_message: &str,
     candidates: &[TopicLlmOutput],
     supplement_context: Option<&TopicSupplementPromptContext>,
-) -> LLMPrompt {
+) -> String {
     let existing_topic_context = supplement_context
         .map(format_existing_topic_context)
         .unwrap_or_else(|| "- 无".to_string());
-    LLMPrompt {
-        system: "你是短视频内容策略质量闸门。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。"
-            .to_string(),
-        user: format!(
-            r#"请评估候选选题是否允许进入选题池。质量闸门只做入库前筛选，不允许自动确认、归档、删除选题或生成脚本。
+    format!(
+        r#"请评估候选选题是否允许进入选题池。质量闸门只做入库前筛选，不允许自动确认、归档、删除选题或生成脚本。
 
 账号策略资料：
 {account_strategy_context}
@@ -273,14 +268,11 @@ JSON Schema：
     }}
   ]
 }}"#,
-            account_strategy_context = account_strategy_context,
-            user_message = user_message,
-            existing_topic_context = existing_topic_context,
-            candidate_context = format_topic_quality_candidate_context(candidates)
-        ),
-        max_output_tokens: Some(2_000),
-        output_schema: Some(topic_quality_gate_output_schema()),
-    }
+        account_strategy_context = account_strategy_context,
+        user_message = user_message,
+        existing_topic_context = existing_topic_context,
+        candidate_context = format_topic_quality_candidate_context(candidates)
+    )
 }
 
 fn format_topic_quality_candidate_context(candidates: &[TopicLlmOutput]) -> String {
@@ -314,49 +306,6 @@ fn format_topic_quality_candidate_context(candidates: &[TopicLlmOutput]) -> Stri
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn topic_quality_gate_output_schema() -> LLMJsonSchema {
-    LLMJsonSchema {
-        name: "topic_quality_gate".to_string(),
-        strict: true,
-        schema: json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["summary", "items"],
-            "properties": {
-                "summary": { "type": "string", "minLength": 1 },
-                "items": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": [
-                            "candidate_key", "title", "decision", "quality_score", "flags", "reason"
-                        ],
-                        "properties": {
-                            "candidate_key": { "type": "string", "minLength": 1 },
-                            "title": { "type": "string", "minLength": 1 },
-                            "decision": { "type": "string", "enum": ["pass", "reject"] },
-                            "quality_score": { "type": "integer", "minimum": 0, "maximum": 100 },
-                            "flags": {
-                                "type": "array",
-                                "items": {
-                                    "type": "string",
-                                    "enum": [
-                                        "too_generic", "duplicate", "off_positioning",
-                                        "hard_to_script", "compliance_risk", "score_untrusted"
-                                    ]
-                                }
-                            },
-                            "reason": { "type": "string", "minLength": 1 }
-                        }
-                    }
-                }
-            }
-        }),
-    }
 }
 
 fn extract_topic_quality_json_object(raw: &str) -> Result<&str, TopicQualityError> {

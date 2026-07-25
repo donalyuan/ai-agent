@@ -9,18 +9,19 @@ Novex 面向个人本地使用，统一沉淀模型调用、Agent Runtime、Tool
 ## 目录结构
 
 ```text
+agent-definitions/        版本化 Agent/Prompt Registry、schema、模板和发布索引
 backend/                 Rust 控制面 API
 admin/                   Next.js 管理后台
 apps/
   video-agent/           视频内容生产业务应用
 crates/
-  novex-ai-core/         Run Graph、Trace、Policy 等通用 AI 领域边界
+  novex-ai-core/         Definition、Prompt 编译、审计与通用 AI 领域边界
   novex-model/           模型注册、路由、能力描述和用量边界
-  novex-agent/           Agent runtime、planner、tool loop 边界
+  novex-agent/           受审计模型执行与 Agent Run 生命周期边界
   novex-rag/             chunk、embedding、retrieval、rerank、citation 边界
   novex-tools/           tool registry、executor、permission、audit 边界
   novex-memory/          session/user/org/project memory 边界
-  novex-eval/            eval runner、指标和报告边界
+  novex-eval/            版本门禁、eval runner、指标和报告边界
 services/
   agent-runtime/         Node.js 24 + Pi 的通用 Turn/Tool/Session Runtime
   video-worker/          Python 视频生成和平台发布 sidecar
@@ -65,15 +66,16 @@ docker run --rm novex-agent-runtime-test npm test
 openspec validate realign-video-agent-workspace-boundary --json
 ```
 
-Agent Runtime 使用 Pi `0.82.0`、PostgreSQL `ai_models` 解析模型，并将会话树持久化到 `ai-agent-session-data` 卷中的 `/data/agent-sessions.sqlite`。Runtime 已采用 `toolContext + AgentHarnessTool` 契约，同时保留 Novex 自有工具 schema。仅运行 `npm run test` 会使用 fake provider，不调用真实模型、不触发视频生成或发布费用；Runtime API 和请求示例见 [`services/agent-runtime/README.md`](./services/agent-runtime/README.md)。
+Agent Runtime 使用 Pi `0.82.0`、代码级 `agent-definitions/` 与 PostgreSQL `ai_models`，并将 Session Tree、固定 Definition/模型 binding 和 namespaced `ModelCall` 审计持久化到 `ai-agent-session-data` 卷中的 `/data/agent-sessions.sqlite`。Runtime 已采用 `toolContext + AgentHarnessTool` 契约，同时保留 Novex 自有工具 schema。仅运行 `npm run test` 会使用 fake provider，不调用真实模型、不触发视频生成或发布费用；Runtime API 和请求示例见 [`services/agent-runtime/README.md`](./services/agent-runtime/README.md)。
 
 ## 架构原则
 
 1. Pi Runtime 承担新工作台的通用 Turn、Tool Loop、SSE 和 Session Tree。
 2. Rust backend 继续拥有视频领域 Adapter、Run/Step、领域状态和高风险 Gate。
-3. PostgreSQL `ai_models` 是模型配置唯一来源；SQLite 只保存 Pi Session。
-4. 业务应用放入 `apps/*`；video-agent 是第一个领域应用。
-5. 后续功能新增、行为修改、协议改造和测试规则变化必须走 OpenSpec。
+3. `agent-definitions/` 是 Agent/Prompt 唯一事实源；数据库不得保存模板正文或覆盖代码定义。
+4. PostgreSQL `ai_models` 是模型配置唯一来源；Rust/Pi 每次模型调用都经固定 binding 和独立 `ModelCall` 审计。
+5. 业务应用放入 `apps/*`；video-agent 是第一个领域应用。
+6. 后续功能新增、行为修改、协议改造和测试规则变化必须走 OpenSpec。
 
 ## 文档导航
 

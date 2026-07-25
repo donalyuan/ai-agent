@@ -16,6 +16,7 @@ pub struct LegacyModelImportConfig {
     pub text_timeout_seconds: i32,
     pub text_reasoning_effort: Option<String>,
     pub text_max_output_tokens: Option<i32>,
+    pub text_context_window: Option<u64>,
     pub image_api_key: Option<String>,
     pub image_base_url: Option<String>,
     pub image_model: Option<String>,
@@ -30,6 +31,7 @@ impl LegacyModelImportConfig {
             text_timeout_seconds: env_i32("OPENAI_TIMEOUT_SECONDS", 120),
             text_reasoning_effort: env_non_empty("OPENAI_REASONING_EFFORT"),
             text_max_output_tokens: Some(env_i32("OPENAI_MAX_OUTPUT_TOKENS", 3000)),
+            text_context_window: env_u64("OPENAI_CONTEXT_WINDOW"),
             image_api_key: env_non_empty("OPENAI_IMAGE_KEY"),
             image_base_url: env_non_empty("OPENAI_IMAGE_BASE_URL"),
             image_model: env_non_empty("OPENAI_IMAGE_MODEL"),
@@ -56,10 +58,11 @@ pub async fn import_legacy_model_config(
     let repository = PostgresAiModelRepository::new(pool.clone());
     let mut outcome = ModelImportOutcome::default();
 
-    if let (Some(api_key), Some(base_url), Some(upstream_model)) = (
+    if let (Some(api_key), Some(base_url), Some(upstream_model), Some(context_window)) = (
         non_empty(config.text_api_key),
         non_empty(config.text_base_url),
         non_empty(config.text_model),
+        config.text_context_window,
     ) {
         let (api_protocol, request_base_url) = normalize_text_url(&base_url)?;
         create_or_skip(
@@ -84,7 +87,7 @@ pub async fn import_legacy_model_config(
                 timeout_seconds: config.text_timeout_seconds,
                 reasoning_effort: non_empty(config.text_reasoning_effort),
                 max_output_tokens: config.text_max_output_tokens,
-                settings: json!({}),
+                settings: json!({"context_window": context_window}),
                 sort_order: 0,
                 remark: "由一次性环境配置导入命令创建".to_string(),
                 status: AiModelStatus::Enabled,
@@ -227,6 +230,12 @@ fn env_i32(name: &str, fallback: i32) -> i32 {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(fallback)
+}
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {

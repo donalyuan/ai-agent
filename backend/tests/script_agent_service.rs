@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use novex_api::agents::{LLMClient, LLMError, ScriptAgentError, ScriptAgentService};
+use novex_api::agents::{
+    LLMError, ScriptAgentError, ScriptAgentService, ScriptModelCall, ScriptModelExecutionError,
+    ScriptModelExecutor, ScriptModelResponse,
+};
 use novex_api::domain::script::{
     Scene, Script, ScriptGenerationInput, ScriptListFilter, ScriptStatus, ScriptStyle,
     ScriptSummary,
@@ -9,7 +12,6 @@ use novex_api::repositories::{
     AccountStrategyProfile, CreateProjectInput, Project, ProjectRepository, ProjectRepositoryError,
     ScriptRepository, ScriptRepositoryError, UpdateProjectStrategyProfileInput,
 };
-use novex_model::LLMPrompt;
 use serde_json::json;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -233,18 +235,29 @@ impl ScriptRepository for MemoryScriptRepository {
 
 struct ScriptedLLMClient {
     responses: Mutex<VecDeque<Result<String, LLMError>>>,
-    prompts: Mutex<Vec<LLMPrompt>>,
+    prompts: Mutex<Vec<String>>,
 }
 
 #[async_trait]
-impl LLMClient for ScriptedLLMClient {
-    async fn generate_script(&self, prompt: LLMPrompt) -> Result<String, LLMError> {
-        self.prompts.lock().unwrap().push(prompt);
-        self.responses
+impl ScriptModelExecutor for ScriptedLLMClient {
+    async fn execute(
+        &self,
+        call: ScriptModelCall,
+    ) -> Result<ScriptModelResponse, ScriptModelExecutionError> {
+        self.prompts
+            .lock()
+            .unwrap()
+            .push(call.content().to_string());
+        match self
+            .responses
             .lock()
             .unwrap()
             .pop_front()
             .expect("test LLM response should exist")
+        {
+            Ok(output) => Ok(ScriptModelResponse::new(output)),
+            Err(error) => Err(ScriptModelExecutionError::provider(error)),
+        }
     }
 }
 
@@ -359,7 +372,7 @@ async fn generate_script_retries_invalid_llm_json_then_persists_script() {
         vec![Ok("不是 JSON".to_string()), Ok(valid_llm_json())],
     );
 
-    let script = service.generate_script(request(project_id)).await.unwrap();
+    let script = service.generate(request(project_id)).await.unwrap();
 
     assert_eq!(script.project_id, project_id);
     assert_eq!(script.scenes.len(), 5);
@@ -380,7 +393,7 @@ async fn generate_script_retries_transient_provider_errors_then_persists_script(
         ],
     );
 
-    let script = service.generate_script(request(project_id)).await.unwrap();
+    let script = service.generate(request(project_id)).await.unwrap();
 
     assert_eq!(script.scenes.len(), 5);
     assert_eq!(script.content["metadata"]["retry_count"], 1);
@@ -401,7 +414,7 @@ async fn generate_script_retries_stream_body_provider_errors_then_persists_scrip
         ],
     );
 
-    let script = service.generate_script(request(project_id)).await.unwrap();
+    let script = service.generate(request(project_id)).await.unwrap();
 
     assert_eq!(script.scenes.len(), 5);
     assert_eq!(script.content["metadata"]["retry_count"], 1);
@@ -444,10 +457,10 @@ async fn generate_script_stepwise_requests_metadata_then_single_scenes() {
 
     let prompts = llm.prompts.lock().unwrap();
     assert_eq!(prompts.len(), 4);
-    assert!(prompts[0].user.contains("只输出 title 和 hook"));
-    assert!(prompts[1].user.contains("当前分镜序号：1"));
-    assert!(prompts[2].user.contains("当前分镜序号：2"));
-    assert!(prompts[3].user.contains("当前分镜序号：3"));
+    assert!(prompts[0].contains("只输出 title 和 hook"));
+    assert!(prompts[1].contains("当前分镜序号：1"));
+    assert!(prompts[2].contains("当前分镜序号：2"));
+    assert!(prompts[3].contains("当前分镜序号：3"));
 }
 
 #[tokio::test]
@@ -488,7 +501,7 @@ async fn generate_script_returns_project_not_found_before_calling_llm() {
     let (service, _repository, _llm) = service(HashSet::new(), vec![Ok(valid_llm_json())]);
 
     let error = service
-        .generate_script(request(missing_project_id))
+        .generate(request(missing_project_id))
         .await
         .unwrap_err();
 
@@ -503,7 +516,7 @@ async fn service_reads_lists_and_updates_script_status() {
     let project_id = Uuid::new_v4();
     let (service, _repository, _llm) =
         service(HashSet::from([project_id]), vec![Ok(valid_llm_json())]);
-    let script = service.generate_script(request(project_id)).await.unwrap();
+    let script = service.generate(request(project_id)).await.unwrap();
 
     let fetched = service.get_script(script.id).await.unwrap();
     assert_eq!(fetched.id, script.id);

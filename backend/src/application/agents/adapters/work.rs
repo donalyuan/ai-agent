@@ -2,10 +2,14 @@
 
 use super::{record_step, AgentRuntimeError, WorkAgentAdapter};
 use crate::domain::conversation::CreateAgentStepInput;
-use novex_agent::{AgentOutcome, AgentSession, StepRecorder, StoredMessage};
-use novex_model::{LLMClient, LLMPrompt};
+use novex_agent::{
+    AgentOutcome, AgentSession, AuditedCallOwner, AuditedModelError, AuditedModelRequest,
+    ModelExecutionRef, StepRecorder, StoredMessage,
+};
+use novex_ai_core::{DynamicFragment, PromptCompileInput, TrustLevel};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -65,7 +69,7 @@ impl WorkAgentAdapter {
         conversation: &AgentSession,
         user_message: &StoredMessage,
         run_id: Uuid,
-        llm_client: Arc<dyn LLMClient>,
+        model: ModelExecutionRef,
         steps: Arc<dyn StepRecorder>,
     ) -> Result<AgentOutcome, AgentRuntimeError> {
         let project_id = conversation
@@ -77,7 +81,7 @@ impl WorkAgentAdapter {
                     "作品会话绑定项目不存在".to_string(),
                 ));
             }
-            record_step(
+            let plan_step_id = record_step(
                 steps.as_ref(),
                 CreateAgentStepInput {
                     agent_run_id: run_id,
@@ -92,12 +96,42 @@ impl WorkAgentAdapter {
                 },
             )
             .await?;
-            let reply = llm_client.generate_script(LLMPrompt {
-                system: "你是作品生成 Agent。只提供可见的全片方案、分段提示词和模型建议，不调用视频模型；必须等待用户确认后才生成。".into(),
-                user: user_message.content.clone(),
-                max_output_tokens: Some(1200),
-                output_schema: None,
-            }).await?;
+            let audited = model.audited.as_ref().ok_or_else(|| {
+                AgentRuntimeError::Kernel("audited model execution is required".into())
+            })?;
+            let reply = audited
+                .executor
+                .execute(AuditedModelRequest {
+                        owner: AuditedCallOwner::AgentRun(run_id),
+                        step_id: Some(plan_step_id),
+                        root_call_id: None,
+                        parent_call_id: None,
+                        attempt: 1,
+                        agent_key: audited.agent_key.clone(),
+                        agent_version: audited.agent_version.clone(),
+                        node_key: "work.plan".into(),
+                        compile_input: PromptCompileInput {
+                            schema_version: "1".into(),
+                            variables: BTreeMap::new(),
+                            fragments: vec![DynamicFragment {
+                                id: format!("message:{}", user_message.id),
+                                trust: TrustLevel::UserInstruction,
+                                source: "conversation_user_message".into(),
+                                content: Some(user_message.content.clone()),
+                                asset: None,
+                            }],
+                        },
+                        tool_profile: "chat".into(),
+                        tool_schema: None,
+                        binding: audited.binding.clone(),
+                        context_sources: json!([{"id": format!("message:{}", user_message.id), "trust": "user_instruction", "source": "conversation_user_message"}]),
+                        memory_sources: json!([]),
+                        parameters: json!({"max_output_tokens": 1200}),
+                        asset_references: json!([]),
+                })
+                .await
+                .map(|response| response.output)
+                .map_err(work_audited_error)?;
             return Ok(AgentOutcome::new(
                 reply.trim(),
                 json!({"intent": "recommend_work_plan", "requires_confirmation": true, "downstream_called": false}),
@@ -123,25 +157,59 @@ impl WorkAgentAdapter {
                 error_message: None,
             })
             .await?;
-        let prompt = LLMPrompt {
-            system: "你是作品修改 Agent。只输出一个 JSON object，不要 Markdown。字段只能包含 assistant_message、input_snapshot_patch、model_snapshot_patch、parameter_snapshot_patch、prompt_snapshot_patch、timeline_snapshot_patch。assistant_message 用简体中文说明修改；至少提供一个非空 patch object。只修改用户明确要求的字段，不调用视频、TTS、ASR 或发布能力。".into(),
-            user: format!(
-                "当前作品和草稿：\n{}\n\n用户修改要求：\n{}",
-                serde_json::to_string_pretty(&context).unwrap_or_else(|_| "{}".to_string()),
-                user_message.content
-            ),
-            max_output_tokens: Some(1800),
-            output_schema: None,
-        };
-        let raw = llm_client.generate_script(prompt).await?;
-        let output: WorkAgentOutput = serde_json::from_str(raw.trim()).map_err(|error| {
-            AgentRuntimeError::InvalidLlmOutput(format!("作品补丁 JSON 无效: {error}"))
+        let node_input = format!(
+            "当前作品和草稿：\n{}\n\n用户修改要求：\n{}",
+            serde_json::to_string_pretty(&context).unwrap_or_else(|_| "{}".to_string()),
+            user_message.content
+        );
+        let audited = model.audited.as_ref().ok_or_else(|| {
+            AgentRuntimeError::Kernel("audited model execution is required".into())
         })?;
-        output.validate()?;
+        let fragment_id = format!("work:{work_id}:draft-edit");
+        let response = audited
+            .executor
+            .execute_parsed(
+                        AuditedModelRequest {
+                            owner: AuditedCallOwner::AgentRun(run_id),
+                            step_id: None,
+                            root_call_id: None,
+                            parent_call_id: None,
+                            attempt: 1,
+                            agent_key: audited.agent_key.clone(),
+                            agent_version: audited.agent_version.clone(),
+                            node_key: "work.patch".into(),
+                            compile_input: PromptCompileInput {
+                                schema_version: "1".into(),
+                                variables: BTreeMap::new(),
+                                fragments: vec![DynamicFragment {
+                                    id: fragment_id.clone(),
+                                    trust: TrustLevel::Reference,
+                                    source: "work_draft_edit_context".into(),
+                                    content: Some(node_input),
+                                    asset: None,
+                                }],
+                            },
+                            tool_profile: "chat".into(),
+                            tool_schema: None,
+                            binding: audited.binding.clone(),
+                            context_sources: json!([
+                                {"id": format!("work:{work_id}:manifest"), "trust": "confirmed_fact", "source": "work_manifest"},
+                                {"id": format!("message:{}", user_message.id), "trust": "user_instruction", "source": "conversation_user_message"},
+                                {"id": fragment_id, "trust": "reference", "source": "work_draft_edit_context"}
+                            ]),
+                            memory_sources: json!([]),
+                            parameters: json!({"max_output_tokens": 1800}),
+                            asset_references: json!([]),
+                        },
+                        parse_work_agent_output,
+            )
+            .await
+            .map_err(work_audited_error)?;
+        let (output, model_call_id) = (response.output, response.model_call_id);
         let (draft, diff) = repository
             .apply_agent_edit(work_id, project_id, output.patches())
             .await?;
-        record_step(steps.as_ref(), CreateAgentStepInput {
+        let patch_step_id = record_step(steps.as_ref(), CreateAgentStepInput {
                 agent_run_id: run_id,
                 step_order: 2,
                 step_type: "apply_work_patch".into(),
@@ -151,6 +219,11 @@ impl WorkAgentAdapter {
                 error_message: None,
             })
             .await?;
+        audited
+            .executor
+            .associate_step(model_call_id, patch_step_id)
+            .await
+            .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
         Ok(AgentOutcome::new(
             output.assistant_message.trim(),
             json!({
@@ -162,5 +235,22 @@ impl WorkAgentAdapter {
                 "downstream_called": false,
             }),
         ))
+    }
+}
+
+fn parse_work_agent_output(raw: &str) -> Result<WorkAgentOutput, String> {
+    let output: WorkAgentOutput =
+        serde_json::from_str(raw.trim()).map_err(|error| format!("作品补丁 JSON 无效: {error}"))?;
+    output.validate().map_err(|error| error.to_string())?;
+    Ok(output)
+}
+
+fn work_audited_error(error: AuditedModelError) -> AgentRuntimeError {
+    match error {
+        AuditedModelError::Provider { source, .. } => AgentRuntimeError::Llm(source),
+        AuditedModelError::StructuredParse { message, .. } => {
+            AgentRuntimeError::InvalidLlmOutput(message)
+        }
+        error => AgentRuntimeError::Kernel(error.to_string()),
     }
 }

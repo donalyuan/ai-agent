@@ -41,6 +41,10 @@ fn protocol_must_match_model_type_and_auth_scheme() {
 
 #[test]
 fn settings_are_deserialized_into_model_specific_types() {
+    assert!(ModelSettings::parse(ModelType::Text, json!({"context_window": 128000})).is_ok());
+    assert!(ModelSettings::parse(ModelType::Text, json!({})).is_err());
+    assert!(ModelSettings::parse(ModelType::Text, json!({"context_window": 0})).is_err());
+
     let image = ModelSettings::parse(
         ModelType::Image,
         json!({

@@ -1,14 +1,18 @@
 //! 处理脚本首次生成与已有脚本分镜修改，保持会话绑定和 step 记录语义一致。
 
 use super::{record_step, AgentRuntimeError, ScriptAgentAdapter};
-use crate::agents::ScriptAgentService;
+use crate::agents::{AuditedScriptModelExecutor, ScriptAgentService};
 use crate::domain::conversation::{BindAgentConversationSubjectInput, CreateAgentStepInput};
 use crate::domain::script::{Scene, Script, ScriptGenerationInput, ScriptStyle};
-use novex_agent::{AgentOutcome, AgentSession, StepRecorder, StoredMessage};
-use novex_model::{LLMClient, LLMPrompt};
+use novex_agent::{
+    AgentOutcome, AgentSession, AuditedCallOwner, AuditedModelRequest, ModelExecutionRef,
+    StepRecorder, StoredMessage,
+};
+use novex_ai_core::{DynamicFragment, PromptCompileInput, TrustLevel};
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 impl ScriptAgentAdapter {
@@ -17,18 +21,12 @@ impl ScriptAgentAdapter {
         conversation: &AgentSession,
         user_message: &StoredMessage,
         run_id: Uuid,
-        llm_client: Arc<dyn LLMClient>,
+        model: ModelExecutionRef,
         steps: Arc<dyn StepRecorder>,
     ) -> Result<AgentOutcome, AgentRuntimeError> {
         if conversation.subject_id.is_none() && conversation.subject_type.is_none() {
             return self
-                .handle_script_generation_turn(
-                    conversation,
-                    user_message,
-                    run_id,
-                    llm_client,
-                    steps,
-                )
+                .handle_script_generation_turn(conversation, user_message, run_id, model, steps)
                 .await;
         }
 
@@ -56,9 +54,53 @@ impl ScriptAgentAdapter {
         )
         .await?;
 
-        let prompt = build_script_scene_patch_prompt(&script, &user_message.content);
-        let raw = llm_client.generate_script(prompt).await?;
-        let patch = ScriptScenePatch::parse(&raw)?;
+        let audited = model.audited.as_ref().ok_or_else(|| {
+            AgentRuntimeError::Kernel("audited model execution is required".into())
+        })?;
+        let fragment_id = format!("script:{script_id}:user-message:{}", user_message.id);
+        let response = audited
+            .executor
+            .execute_parsed(
+                AuditedModelRequest {
+                    owner: AuditedCallOwner::AgentRun(run_id),
+                    step_id: None,
+                    root_call_id: None,
+                    parent_call_id: None,
+                    attempt: 1,
+                    agent_key: audited.agent_key.clone(),
+                    agent_version: audited.agent_version.clone(),
+                    node_key: "script.scene_patch".into(),
+                    compile_input: PromptCompileInput {
+                        schema_version: "1".into(),
+                        variables: BTreeMap::new(),
+                        fragments: vec![DynamicFragment {
+                            id: fragment_id.clone(),
+                            trust: TrustLevel::UserInstruction,
+                            source: "conversation_script_scene_patch".into(),
+                            content: Some(build_script_scene_patch_input(
+                                &script,
+                                &user_message.content,
+                            )),
+                            asset: None,
+                        }],
+                    },
+                    tool_profile: "chat".into(),
+                    tool_schema: None,
+                    binding: audited.binding.clone(),
+                    context_sources: json!([{
+                        "id": fragment_id,
+                        "trust": "user_instruction",
+                        "source": "conversation_script_scene_patch"
+                    }]),
+                    memory_sources: json!([]),
+                    parameters: json!({ "max_output_tokens": 1200 }),
+                    asset_references: json!([]),
+                },
+                |raw| ScriptScenePatch::parse(raw).map_err(|error| error.to_string()),
+            )
+            .await
+            .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
+        let (patch, model_call_id) = (response.output, response.model_call_id);
         let existing_scene = script
             .scenes
             .iter()
@@ -69,7 +111,7 @@ impl ScriptAgentAdapter {
                 sequence: patch.scene_sequence,
             })?;
 
-        record_step(
+        let step_id = record_step(
             steps.as_ref(),
             CreateAgentStepInput {
                 agent_run_id: run_id,
@@ -82,6 +124,11 @@ impl ScriptAgentAdapter {
             },
         )
         .await?;
+        audited
+            .executor
+            .associate_step(model_call_id, step_id)
+            .await
+            .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
 
         let updated_scene = Scene {
             id: existing_scene.id,
@@ -134,18 +181,63 @@ impl ScriptAgentAdapter {
         conversation: &AgentSession,
         user_message: &StoredMessage,
         run_id: Uuid,
-        llm_client: Arc<dyn LLMClient>,
+        model: ModelExecutionRef,
         steps: Arc<dyn StepRecorder>,
     ) -> Result<AgentOutcome, AgentRuntimeError> {
         let project_id = conversation.project_id.ok_or_else(|| {
             AgentRuntimeError::Validation("脚本生成会话缺少 project_id".to_string())
         })?;
 
-        let raw = llm_client
-            .generate_script(build_script_generation_intent_prompt(&user_message.content))
-            .await?;
-        let intent = ScriptGenerationIntent::parse(&raw)?;
-        record_step(
+        let audited = model.audited.as_ref().ok_or_else(|| {
+            AgentRuntimeError::Kernel("audited model execution is required".into())
+        })?;
+        let fragment_id = format!(
+            "conversation:{}:user-message:{}",
+            conversation.id, user_message.id
+        );
+        let response = audited
+            .executor
+            .execute_parsed(
+                AuditedModelRequest {
+                    owner: AuditedCallOwner::AgentRun(run_id),
+                    step_id: None,
+                    root_call_id: None,
+                    parent_call_id: None,
+                    attempt: 1,
+                    agent_key: audited.agent_key.clone(),
+                    agent_version: audited.agent_version.clone(),
+                    node_key: "script.generation_intent".into(),
+                    compile_input: PromptCompileInput {
+                        schema_version: "1".into(),
+                        variables: BTreeMap::new(),
+                        fragments: vec![DynamicFragment {
+                            id: fragment_id.clone(),
+                            trust: TrustLevel::UserInstruction,
+                            source: "conversation_user_message".into(),
+                            content: Some(build_script_generation_intent_input(
+                                &user_message.content,
+                            )),
+                            asset: None,
+                        }],
+                    },
+                    tool_profile: "chat".into(),
+                    tool_schema: None,
+                    binding: audited.binding.clone(),
+                    context_sources: json!([{
+                        "id": fragment_id,
+                        "trust": "user_instruction",
+                        "source": "conversation_user_message"
+                    }]),
+                    memory_sources: json!([]),
+                    parameters: json!({ "max_output_tokens": 800 }),
+                    asset_references: json!([]),
+                },
+                |raw| ScriptGenerationIntent::parse(raw).map_err(|error| error.to_string()),
+            )
+            .await
+            .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
+        let (intent, intent_model_call_id) = (response.output, response.model_call_id);
+        let intent_step_id = record_step(
             steps.as_ref(),
             CreateAgentStepInput {
                 agent_run_id: run_id,
@@ -161,6 +253,11 @@ impl ScriptAgentAdapter {
             },
         )
         .await?;
+        audited
+            .executor
+            .associate_step(intent_model_call_id, intent_step_id)
+            .await
+            .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
 
         if intent.needs_input() {
             let content = if intent.reply.trim().is_empty() {
@@ -182,13 +279,23 @@ impl ScriptAgentAdapter {
 
         let reply = intent.reply.clone();
         let request = intent.into_generate_request(project_id)?;
+        let audited_generation_calls = Arc::new(Mutex::new(Vec::new()));
         let service = ScriptAgentService::new(
-            llm_client,
+            Arc::new(
+                AuditedScriptModelExecutor::new(
+                    audited.executor.clone(),
+                    AuditedCallOwner::AgentRun(run_id),
+                    audited.agent_key.clone(),
+                    audited.agent_version.clone(),
+                    audited.binding.clone(),
+                )
+                .with_call_ids(audited_generation_calls.clone()),
+            ),
             self.script_repository.clone(),
             self.project_repository.clone(),
         );
-        let script = service.generate_script(request).await?;
-        record_step(
+        let script = service.generate(request).await?;
+        let generation_step_id = record_step(
             steps.as_ref(),
             CreateAgentStepInput {
                 agent_run_id: run_id,
@@ -201,6 +308,17 @@ impl ScriptAgentAdapter {
             },
         )
         .await?;
+        let call_ids = audited_generation_calls
+            .lock()
+            .map_err(|_| AgentRuntimeError::Kernel("audited call IDs lock poisoned".into()))?
+            .clone();
+        for model_call_id in call_ids {
+            audited
+                .executor
+                .associate_step(model_call_id, generation_step_id)
+                .await
+                .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
+        }
 
         self.conversation_repository
             .bind_conversation_subject(BindAgentConversationSubjectInput {
@@ -380,12 +498,9 @@ fn parse_script_style(style: &str) -> Result<ScriptStyle, AgentRuntimeError> {
     }
 }
 
-fn build_script_generation_intent_prompt(user_message: &str) -> LLMPrompt {
-    LLMPrompt {
-        system: "你是短视频脚本生成 Agent。你必须只输出合法 JSON，不要输出 Markdown 或解释。"
-            .to_string(),
-        user: format!(
-            r#"请从用户消息中提取生成脚本参数。生成脚本参数包括 topic、style、scene_count。
+fn build_script_generation_intent_input(user_message: &str) -> String {
+    format!(
+        r#"请从用户消息中提取生成脚本参数。生成脚本参数包括 topic、style、scene_count。
 
 规则：
 1. intent 固定输出 generate_script。
@@ -405,14 +520,11 @@ JSON Schema：
   "reply": "面向用户的简短中文回复或追问",
   "missing_fields": []
 }}"#,
-            user_message = user_message
-        ),
-        max_output_tokens: Some(800),
-        output_schema: None,
-    }
+        user_message = user_message
+    )
 }
 
-fn build_script_scene_patch_prompt(script: &Script, user_message: &str) -> LLMPrompt {
+fn build_script_scene_patch_input(script: &Script, user_message: &str) -> String {
     let scenes = script
         .scenes
         .iter()
@@ -429,11 +541,8 @@ fn build_script_scene_patch_prompt(script: &Script, user_message: &str) -> LLMPr
         .collect::<Vec<_>>()
         .join("\n");
 
-    LLMPrompt {
-        system: "你是短视频脚本改稿 Agent。你必须只输出合法 JSON，不要输出 Markdown 或解释。"
-            .to_string(),
-        user: format!(
-            r#"用户希望修改当前脚本的某个分镜。请根据用户指令和当前脚本，输出一个结构化分镜补丁。
+    format!(
+        r#"用户希望修改当前脚本的某个分镜。请根据用户指令和当前脚本，输出一个结构化分镜补丁。
 
 当前脚本：
 标题：{title}
@@ -452,14 +561,11 @@ hook：{hook}
   "duration_sec": 10,
   "reply": "面向用户的简短中文回复"
 }}"#,
-            title = script.title,
-            hook = script.hook,
-            scenes = scenes,
-            user_message = user_message
-        ),
-        max_output_tokens: Some(1_200),
-        output_schema: None,
-    }
+        title = script.title,
+        hook = script.hook,
+        scenes = scenes,
+        user_message = user_message
+    )
 }
 
 fn extract_json_object(raw: &str) -> Result<&str, AgentRuntimeError> {

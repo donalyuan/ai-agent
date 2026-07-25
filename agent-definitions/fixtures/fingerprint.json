@@ -1,0 +1,21 @@
+{
+  "input": {
+    "protocol": "openai_responses",
+    "request_base_url": "HTTPS://Example.COM:443/v1/?api_key=secret",
+    "upstream_model": "gpt-fixture",
+    "reasoning_effort": null,
+    "max_output_tokens": 4096,
+    "context_window": 128000,
+    "settings": { "temperature": 0, "api_key": "must-not-participate" }
+  },
+  "normalized": {
+    "protocol": "openai_responses",
+    "request_base_url": "https://example.com/v1",
+    "upstream_model": "gpt-fixture",
+    "reasoning_effort": null,
+    "max_output_tokens": 4096,
+    "context_window": 128000,
+    "settings": { "temperature": 0 }
+  },
+  "sha256": "684931a430acf9520289f994d234bf25913e5b48e7475308f6027f9561b96880"
+}

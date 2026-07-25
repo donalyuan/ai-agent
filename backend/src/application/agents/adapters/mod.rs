@@ -12,6 +12,7 @@ mod work;
 
 pub use error::AgentRuntimeError;
 pub use prompt::format_account_strategy_context;
+pub use topic_review::AuditedTopicReviewExecution;
 pub use types::{AgentTurnResponse, SoundAgentContext};
 
 use crate::domain::conversation::CreateAgentStepInput;
@@ -145,7 +146,7 @@ impl AgentAdapter for ScriptAgentAdapter {
             &context.session,
             &context.user_message,
             context.run_id,
-            context.model.client.clone(),
+            context.model.clone(),
             context.steps.clone(),
         )
         .await
@@ -170,7 +171,7 @@ impl AgentAdapter for TopicAgentAdapter {
             &context.user_message,
             context.run_id,
             payload.supplement_of_batch_id,
-            context.model.client.clone(),
+            context.model.clone(),
             context.steps.clone(),
         )
         .await
@@ -196,7 +197,7 @@ impl AgentAdapter for SoundAgentAdapter {
             &context.user_message,
             context.run_id,
             &payload.sound_context,
-            context.model.client.clone(),
+            context.model.clone(),
             context.steps.clone(),
         )
         .await
@@ -220,7 +221,7 @@ impl AgentAdapter for WorkAgentAdapter {
             &context.session,
             &context.user_message,
             context.run_id,
-            context.model.client.clone(),
+            context.model.clone(),
             context.steps.clone(),
         )
         .await
@@ -235,7 +236,7 @@ fn boxed(error: AgentRuntimeError) -> BoxError {
 async fn record_step(
     recorder: &dyn StepRecorder,
     input: CreateAgentStepInput,
-) -> Result<(), AgentRuntimeError> {
+) -> Result<Uuid, AgentRuntimeError> {
     recorder
         .record_step(AgentStep {
             run_id: input.agent_run_id,

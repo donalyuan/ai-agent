@@ -1,0 +1,79 @@
+{
+  "schema_version": "1",
+  "source_runtimes": ["rust", "pi"],
+  "list_envelope_fields": [
+    "schema_version",
+    "source_runtime",
+    "items",
+    "total",
+    "limit",
+    "offset"
+  ],
+  "summary_fields": [
+    "id",
+    "owner",
+    "execution",
+    "node_key",
+    "attempt",
+    "status",
+    "definition",
+    "model",
+    "usage",
+    "prepared_at",
+    "completed_at"
+  ],
+  "owner_fields": ["type", "id"],
+  "execution_fields": ["phase", "entry_id", "step_id"],
+  "definition_fields": [
+    "agent_key",
+    "agent_version",
+    "prompt_key",
+    "prompt_version",
+    "registry_digest"
+  ],
+  "summary_model_fields": ["id", "behavior_fingerprint"],
+  "usage_fields": ["input_tokens", "output_tokens", "total_tokens", "cost_usd"],
+  "default_usage": {
+    "input_tokens": null,
+    "output_tokens": null,
+    "total_tokens": null,
+    "cost_usd": null
+  },
+  "detail_envelope_fields": ["schema_version", "source_runtime", "record_hash", "record"],
+  "record_fields": [
+    "id",
+    "owner",
+    "execution",
+    "root_call_id",
+    "parent_call_id",
+    "node_key",
+    "attempt",
+    "status",
+    "definition",
+    "prompt_snapshot",
+    "context_sources",
+    "memory_sources",
+    "tool_schema",
+    "model",
+    "parameters",
+    "asset_references",
+    "output_snapshot",
+    "usage_snapshot",
+    "error_snapshot",
+    "structured_parse_status",
+    "prepared_at",
+    "completed_at"
+  ],
+  "detail_model_fields": ["id", "behavior_fingerprint", "snapshot"],
+  "replay_fields": [
+    "schema_version",
+    "mode",
+    "source_model_call_id",
+    "source_record_hash",
+    "definition_resolved",
+    "compile_succeeded",
+    "side_effects",
+    "diff"
+  ],
+  "side_effect_fields": ["model_calls", "tools", "session_writes", "run_writes", "domain_writes"]
+}

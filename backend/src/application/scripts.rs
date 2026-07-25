@@ -1,17 +1,22 @@
 //! 脚本用例，负责模型选择、Agent 组装和直接调用的 run 生命周期。
 
-use crate::agents::{ScriptAgentError, ScriptAgentService, ScriptGenerationMode, ScriptListResult};
-use crate::application::agents::adapters::AgentRuntimeError;
-use crate::application::agents::kernel::{run_lifecycle, run_lifecycle_error};
-use crate::domain::script::{Script, ScriptGenerationInput, ScriptListFilter, ScriptStatus};
-use crate::model_routing::{ModelClientResolver, ModelResolveError};
-use crate::repositories::{
-    ConversationRepositoryError, PostgresConversationRepository, PostgresProjectRepository,
-    PostgresScriptRepository, PostgresTopicRepository,
+use crate::agents::{
+    AuditedScriptModelExecutor, ScriptAgentError, ScriptAgentService, ScriptGenerationMode,
+    ScriptListResult,
 };
-use novex_agent::StartRun;
-use novex_ai_core::AgentKey;
-use novex_model::{LLMClient, LLMError, LLMPrompt};
+use crate::application::agents::adapters::AgentRuntimeError;
+use crate::application::agents::kernel::{
+    active_rust_definition_binding, run_lifecycle, run_lifecycle_error,
+};
+use crate::domain::conversation::ModelBindingEvidence;
+use crate::domain::script::{Script, ScriptGenerationInput, ScriptListFilter, ScriptStatus};
+use crate::model_routing::{model_behavior_evidence, ModelClientResolver, ModelResolveError};
+use crate::repositories::{
+    AgentBindingError, ConversationRepositoryError, PostgresConversationRepository,
+    PostgresProjectRepository, PostgresScriptRepository, PostgresTopicRepository,
+};
+use novex_agent::{AuditedCallOwner, AuditedModelExecutor, FixedModelBinding, StartRun};
+use novex_ai_core::{validate_model_capabilities, AgentKey, DefinitionRegistry};
 use serde_json::json;
 use std::{fmt, sync::Arc};
 use uuid::Uuid;
@@ -24,6 +29,8 @@ pub struct ScriptService {
     topic_repository: PostgresTopicRepository,
     conversation_repository: PostgresConversationRepository,
     model_resolver: Arc<dyn ModelClientResolver>,
+    definition_registry: Arc<DefinitionRegistry>,
+    audited_model_executor: Arc<AuditedModelExecutor>,
 }
 
 impl ScriptService {
@@ -33,6 +40,8 @@ impl ScriptService {
         topic_repository: PostgresTopicRepository,
         conversation_repository: PostgresConversationRepository,
         model_resolver: Arc<dyn ModelClientResolver>,
+        definition_registry: Arc<DefinitionRegistry>,
+        audited_model_executor: Arc<AuditedModelExecutor>,
     ) -> Self {
         Self {
             script_repository,
@@ -40,6 +49,8 @@ impl ScriptService {
             topic_repository,
             conversation_repository,
             model_resolver,
+            definition_registry,
+            audited_model_executor,
         }
     }
 
@@ -50,10 +61,33 @@ impl ScriptService {
     ) -> Result<Script, ScriptApplicationError> {
         let project_id = input.project_id;
         let resolved = self.model_resolver.text_client(model_id).await?;
+        let evidence = model_behavior_evidence(&resolved.snapshot)?;
+        let agent = self
+            .definition_registry
+            .active_agent("video.script")
+            .map_err(|error| ScriptApplicationError::Definition(error.to_string()))?;
+        validate_model_capabilities(&agent.model_requirements, &evidence.capabilities)
+            .map_err(|_| ScriptApplicationError::ModelCapabilityMismatch)?;
+        let definition = active_rust_definition_binding(&self.definition_registry, "video.script")
+            .map_err(ScriptApplicationError::Definition)?;
+        let model_binding = ModelBindingEvidence {
+            model_id,
+            behavior_fingerprint: evidence.behavior_fingerprint.clone(),
+            model_capabilities: serde_json::to_value(&evidence.capabilities)
+                .map_err(|error| ScriptApplicationError::Serialization(error.to_string()))?,
+        };
+        let fixed_binding = FixedModelBinding {
+            model_id,
+            behavior_fingerprint: evidence.behavior_fingerprint,
+        };
         let model_snapshot = serde_json::to_value(&resolved.snapshot)
             .map_err(|error| ScriptApplicationError::Serialization(error.to_string()))?;
         let generation_mode = script_generation_mode(resolved.snapshot.reasoning_effort.as_deref());
-        let agent_service = self.agent_service(resolved.client, generation_mode, true);
+        let repository = self.conversation_repository.clone();
+        let executor = self.audited_model_executor.clone();
+        let script_repository = self.script_repository.clone();
+        let project_repository = self.project_repository.clone();
+        let topic_repository = self.topic_repository.clone();
         run_lifecycle(self.conversation_repository.clone())
             .execute(
                 StartRun {
@@ -64,9 +98,26 @@ impl ScriptService {
                     model_id: Some(model_id),
                     model_snapshot: Some(model_snapshot),
                 },
-                |_| async move {
+                |run_id| async move {
+                    repository
+                        .create_run_binding(run_id, definition.clone(), model_binding, false)
+                        .await?;
+                    let model_executor = Arc::new(AuditedScriptModelExecutor::new(
+                        executor,
+                        AuditedCallOwner::AgentRun(run_id),
+                        definition.agent_key,
+                        definition.agent_version,
+                        fixed_binding,
+                    ));
+                    let agent_service = ScriptAgentService::new(
+                        model_executor,
+                        Arc::new(script_repository),
+                        Arc::new(project_repository),
+                    )
+                    .with_generation_mode(generation_mode)
+                    .with_topic_repository(Arc::new(topic_repository));
                     agent_service
-                        .generate_script(input)
+                        .generate(input)
                         .await
                         .map_err(ScriptApplicationError::from)
                 },
@@ -107,31 +158,12 @@ impl ScriptService {
     }
 
     fn read_service(&self) -> ScriptAgentService {
-        self.agent_service(
-            Arc::new(UnconfiguredLlmClient),
-            ScriptGenerationMode::Complete,
-            false,
-        )
-    }
-
-    fn agent_service(
-        &self,
-        llm_client: Arc<dyn LLMClient>,
-        generation_mode: ScriptGenerationMode,
-        with_topic_repository: bool,
-    ) -> ScriptAgentService {
-        let service = ScriptAgentService::new(
-            llm_client,
+        ScriptAgentService::new(
+            Arc::new(UnavailableScriptModelExecutor),
             Arc::new(self.script_repository.clone()),
             Arc::new(self.project_repository.clone()),
         )
-        .with_generation_mode(generation_mode);
-
-        if with_topic_repository {
-            service.with_topic_repository(Arc::new(self.topic_repository.clone()))
-        } else {
-            service
-        }
+        .with_generation_mode(ScriptGenerationMode::Complete)
     }
 }
 
@@ -144,13 +176,16 @@ fn script_generation_mode(reasoning_effort: Option<&str>) -> ScriptGenerationMod
     }
 }
 
-struct UnconfiguredLlmClient;
+struct UnavailableScriptModelExecutor;
 
 #[async_trait::async_trait]
-impl LLMClient for UnconfiguredLlmClient {
-    async fn generate_script(&self, _prompt: LLMPrompt) -> Result<String, LLMError> {
-        Err(LLMError::Config(
-            "LLM client is not configured for this route".to_string(),
+impl crate::agents::ScriptModelExecutor for UnavailableScriptModelExecutor {
+    async fn execute(
+        &self,
+        _call: crate::agents::ScriptModelCall,
+    ) -> Result<crate::agents::ScriptModelResponse, crate::agents::ScriptModelExecutionError> {
+        Err(crate::agents::ScriptModelExecutionError::Execution(
+            "script model execution is unavailable for read operations".into(),
         ))
     }
 }
@@ -161,6 +196,9 @@ pub enum ScriptApplicationError {
     Runtime(AgentRuntimeError),
     ConversationRepository(ConversationRepositoryError),
     ModelResolve(ModelResolveError),
+    AgentBinding(AgentBindingError),
+    ModelCapabilityMismatch,
+    Definition(String),
     Serialization(String),
 }
 
@@ -188,6 +226,12 @@ impl From<ModelResolveError> for ScriptApplicationError {
     }
 }
 
+impl From<AgentBindingError> for ScriptApplicationError {
+    fn from(error: AgentBindingError) -> Self {
+        Self::AgentBinding(error)
+    }
+}
+
 impl fmt::Display for ScriptApplicationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -195,6 +239,9 @@ impl fmt::Display for ScriptApplicationError {
             Self::Runtime(error) => write!(formatter, "{error}"),
             Self::ConversationRepository(error) => write!(formatter, "{error}"),
             Self::ModelResolve(error) => write!(formatter, "{error}"),
+            Self::AgentBinding(error) => write!(formatter, "{error}"),
+            Self::ModelCapabilityMismatch => formatter.write_str("model_capability_mismatch"),
+            Self::Definition(message) => write!(formatter, "definition error: {message}"),
             Self::Serialization(message) => formatter.write_str(message),
         }
     }

@@ -268,6 +268,7 @@ impl PostgresPublicationRepository {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn save_package(
         &self,
         target_id: Uuid,

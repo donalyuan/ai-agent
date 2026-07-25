@@ -5,28 +5,45 @@ use super::{
     TopicAgentAdapter,
 };
 use crate::application::agents::kernel::run_lifecycle_error;
-use crate::domain::conversation::CreateAgentStepInput;
+use crate::domain::conversation::{
+    AgentConversationDefinitionBindingInput, CreateAgentStepInput, ModelBindingEvidence,
+};
 use crate::domain::topic::{
     ContentTopic, TopicGenerationBatch, TopicReviewItem, TopicReviewResult, TopicReviewSnapshot,
     TopicReviewSnapshotStatus,
 };
-use crate::repositories::{CreateTopicReviewSnapshotInput, TopicRepository, TopicRepositoryError};
-use novex_agent::{RunLifecycleCoordinator, RunRecorder, StartRun, StepRecorder};
-use novex_ai_core::AgentKey;
-use novex_model::{LLMClient, LLMJsonSchema, LLMPrompt, ModelExecutionSnapshot};
+use crate::repositories::{
+    CreateTopicReviewSnapshotInput, PostgresConversationRepository, TopicRepository,
+    TopicRepositoryError,
+};
+use novex_agent::{
+    AuditedCallOwner, AuditedExecutionBinding, AuditedModelError, AuditedModelRequest,
+    RunLifecycleCoordinator, RunRecorder, StartRun, StepRecorder,
+};
+use novex_ai_core::{AgentKey, DynamicFragment, PromptCompileInput, TrustLevel};
+use novex_model::ModelExecutionSnapshot;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use uuid::Uuid;
 
+pub struct AuditedTopicReviewExecution {
+    pub definition: AgentConversationDefinitionBindingInput,
+    pub model_binding: ModelBindingEvidence,
+    pub audited: AuditedExecutionBinding,
+}
+
 impl TopicAgentAdapter {
-    pub async fn review_topic_group(
+    #[allow(clippy::too_many_arguments)]
+    pub async fn review_topic_group_audited(
         &self,
         project_id: Uuid,
         root_batch_id: Uuid,
-        llm_client: Arc<dyn LLMClient>,
-        model_execution: Option<ModelExecutionSnapshot>,
+        model_execution: ModelExecutionSnapshot,
+        execution: AuditedTopicReviewExecution,
+        run_repository: PostgresConversationRepository,
         runs: Arc<dyn RunRecorder>,
         steps: Arc<dyn StepRecorder>,
     ) -> Result<TopicReviewSnapshot, AgentRuntimeError> {
@@ -47,6 +64,9 @@ impl TopicAgentAdapter {
             ));
         }
         let account_strategy_context = format_account_strategy_context(&project);
+        let model_id = model_execution.model_id;
+        let model_snapshot = serde_json::to_value(model_execution)
+            .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
 
         RunLifecycleCoordinator::new(runs)
             .execute(
@@ -58,21 +78,29 @@ impl TopicAgentAdapter {
                         "intent": "review_topic_group",
                         "root_batch_id": root_batch_id
                     }),
-                    model_id: model_execution.as_ref().map(|snapshot| snapshot.model_id),
-                    model_snapshot: model_execution
-                        .as_ref()
-                        .and_then(|snapshot| serde_json::to_value(snapshot).ok()),
+                    model_id: Some(model_id),
+                    model_snapshot: Some(model_snapshot),
                 },
-                |run_id| {
+                |run_id| async move {
+                    run_repository
+                        .create_run_binding(
+                            run_id,
+                            execution.definition,
+                            execution.model_binding,
+                            false,
+                        )
+                        .await
+                        .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
                     self.review_topic_group_with_run(
                         topic_repository.as_ref(),
                         &account_strategy_context,
                         &root_batch,
                         &topics,
                         run_id,
-                        llm_client,
+                        execution.audited,
                         steps,
                     )
+                    .await
                 },
                 |snapshot| Some(json!({ "topic_review_snapshot_id": snapshot.id })),
                 |error| error.to_string(),
@@ -81,6 +109,7 @@ impl TopicAgentAdapter {
             .map_err(run_lifecycle_error)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn review_topic_group_with_run(
         &self,
         topic_repository: &dyn TopicRepository,
@@ -88,7 +117,7 @@ impl TopicAgentAdapter {
         root_batch: &TopicGenerationBatch,
         topics: &[ContentTopic],
         run_id: Uuid,
-        llm_client: Arc<dyn LLMClient>,
+        audited: AuditedExecutionBinding,
         steps: Arc<dyn StepRecorder>,
     ) -> Result<TopicReviewSnapshot, AgentRuntimeError> {
         record_step(
@@ -106,31 +135,52 @@ impl TopicAgentAdapter {
         .await?;
 
         let prompt = build_topic_group_review_prompt(account_strategy_context, root_batch, topics);
-        let raw = llm_client.generate_script(prompt).await;
-        let review_output = match raw {
-            Ok(raw) => match TopicReviewLlmOutput::parse_and_validate(&raw, topics) {
-                Ok(output) => output,
-                Err(error) => {
-                    let message = error.to_string();
-                    self.record_failed_topic_step(
-                        steps.as_ref(),
-                        run_id,
-                        2,
-                        "review_topic_group",
-                        message.clone(),
-                    )
-                    .await;
-                    self.save_failed_topic_review_snapshot(
-                        topic_repository,
-                        root_batch.project_id,
-                        root_batch.id,
-                        run_id,
-                        message.clone(),
-                    )
-                    .await;
-                    return Err(AgentRuntimeError::InvalidLlmOutput(message));
-                }
-            },
+        let fragment_id = format!("topic-group:{}:review", root_batch.id);
+        let reviewed = audited
+            .executor
+            .execute_parsed(
+                        AuditedModelRequest {
+                            owner: AuditedCallOwner::AgentRun(run_id),
+                            step_id: None,
+                            root_call_id: None,
+                            parent_call_id: None,
+                            attempt: 1,
+                            agent_key: audited.agent_key.clone(),
+                            agent_version: audited.agent_version.clone(),
+                            node_key: "topic.group_review".into(),
+                            compile_input: PromptCompileInput {
+                                schema_version: "1".into(),
+                                variables: BTreeMap::new(),
+                                fragments: vec![DynamicFragment {
+                                    id: fragment_id.clone(),
+                                    trust: TrustLevel::Candidate,
+                                    source: "topic_group_review_context".into(),
+                                    content: Some(prompt),
+                                    asset: None,
+                                }],
+                            },
+                            tool_profile: "chat".into(),
+                            tool_schema: None,
+                            binding: audited.binding.clone(),
+                            context_sources: json!([
+                                {"id": format!("project:{}:account-strategy", root_batch.project_id), "trust": "confirmed_fact", "source": "project_account_strategy"},
+                                {"id": format!("topic-batch:{}:group", root_batch.id), "trust": "candidate", "source": "topic_batch_group"},
+                                {"id": fragment_id, "trust": "candidate", "source": "topic_group_review_context"}
+                            ]),
+                            memory_sources: json!([]),
+                            parameters: json!({"max_output_tokens": 2000}),
+                            asset_references: json!([]),
+                        },
+                        |raw| {
+                            TopicReviewLlmOutput::parse_and_validate(raw, topics)
+                                .map_err(|error| error.to_string())
+                        },
+            )
+            .await
+            .map(|response| (response.output, response.model_call_id))
+            .map_err(topic_review_audited_error);
+        let (review_output, model_call_id) = match reviewed {
+            Ok(reviewed) => reviewed,
             Err(error) => {
                 let message = error.to_string();
                 self.record_failed_topic_step(
@@ -146,14 +196,14 @@ impl TopicAgentAdapter {
                     root_batch.project_id,
                     root_batch.id,
                     run_id,
-                    message,
+                    message.clone(),
                 )
                 .await;
-                return Err(AgentRuntimeError::Llm(error));
+                return Err(error);
             }
         };
 
-        record_step(
+        let review_step_id = record_step(
             steps.as_ref(),
             CreateAgentStepInput {
                 agent_run_id: run_id,
@@ -168,6 +218,11 @@ impl TopicAgentAdapter {
             },
         )
         .await?;
+        audited
+            .executor
+            .associate_step(model_call_id, review_step_id)
+            .await
+            .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
 
         let review_summary = review_output.review_summary.clone();
         let review_result = review_output.result();
@@ -220,6 +275,16 @@ impl TopicAgentAdapter {
                 metadata: json!({}),
             })
             .await;
+    }
+}
+
+fn topic_review_audited_error(error: AuditedModelError) -> AgentRuntimeError {
+    match error {
+        AuditedModelError::Provider { source, .. } => AgentRuntimeError::Llm(source),
+        AuditedModelError::StructuredParse { message, .. } => {
+            AgentRuntimeError::InvalidLlmOutput(message)
+        }
+        error => AgentRuntimeError::Kernel(error.to_string()),
     }
 }
 
@@ -330,12 +395,9 @@ fn build_topic_group_review_prompt(
     account_strategy_context: &str,
     root_batch: &TopicGenerationBatch,
     topics: &[ContentTopic],
-) -> LLMPrompt {
-    LLMPrompt {
-        system: "你是短视频内容策略评审 Agent。你必须只输出符合 JSON Schema 的合法 JSON 对象，不要输出 Markdown 或解释。"
-            .to_string(),
-        user: format!(
-            r#"请评审当前主题组内的候选选题，帮助运营人员快速筛选优先推荐、可备选、建议淘汰和疑似重复项。
+) -> String {
+    format!(
+        r#"请评审当前主题组内的候选选题，帮助运营人员快速筛选优先推荐、可备选、建议淘汰和疑似重复项。
 
 评审只作为决策辅助，不允许自动确认、归档、删除选题或生成脚本。
 
@@ -368,13 +430,10 @@ JSON Schema：
     }}
   ]
 }}"#,
-            account_strategy_context = account_strategy_context,
-            original_prompt = truncate_for_prompt(&root_batch.prompt, 500),
-            topic_context = format_topic_group_review_topic_context(root_batch, topics)
-        ),
-        max_output_tokens: Some(2_000),
-        output_schema: Some(topic_review_output_schema()),
-    }
+        account_strategy_context = account_strategy_context,
+        original_prompt = truncate_for_prompt(&root_batch.prompt, 500),
+        topic_context = format_topic_group_review_topic_context(root_batch, topics)
+    )
 }
 
 fn format_topic_group_review_topic_context(
@@ -412,61 +471,6 @@ fn format_topic_group_review_topic_context(
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn topic_review_output_schema() -> LLMJsonSchema {
-    LLMJsonSchema {
-        name: "topic_group_review".to_string(),
-        strict: true,
-        schema: json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["review_summary", "topic_reviews"],
-            "properties": {
-                "review_summary": { "type": "string", "minLength": 1 },
-                "topic_reviews": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": [
-                            "topic_id",
-                            "priority",
-                            "reason",
-                            "risk_flags",
-                            "similar_topic_ids"
-                        ],
-                        "properties": {
-                            "topic_id": { "type": "string", "format": "uuid" },
-                            "priority": {
-                                "type": "string",
-                                "enum": ["priority", "backup", "reject"]
-                            },
-                            "reason": { "type": "string", "minLength": 1 },
-                            "risk_flags": {
-                                "type": "array",
-                                "items": {
-                                    "type": "string",
-                                    "enum": [
-                                        "too_generic",
-                                        "duplicate",
-                                        "hard_to_script",
-                                        "off_positioning",
-                                        "compliance_risk"
-                                    ]
-                                }
-                            },
-                            "similar_topic_ids": {
-                                "type": "array",
-                                "items": { "type": "string", "format": "uuid" }
-                            }
-                        }
-                    }
-                }
-            }
-        }),
-    }
 }
 
 fn extract_topic_review_json_object(raw: &str) -> Result<&str, TopicReviewError> {

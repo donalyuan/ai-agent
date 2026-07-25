@@ -7,6 +7,7 @@ use novex_api::build_app_with_state;
 use novex_model::LLMPrompt;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -111,21 +112,28 @@ fn app_state(test_url: String, pool: PgPool) -> AppState {
 }
 
 struct RecordingLLMClient {
-    response: Mutex<Result<String, LLMError>>,
+    responses: Mutex<VecDeque<Result<String, LLMError>>>,
     prompts: Mutex<Vec<LLMPrompt>>,
 }
 
 impl RecordingLLMClient {
     fn returning(response: Value) -> Self {
         Self {
-            response: Mutex::new(Ok(response.to_string())),
+            responses: Mutex::new(VecDeque::from([Ok(response.to_string())])),
             prompts: Mutex::new(Vec::new()),
         }
     }
 
     fn returning_raw(response: &str) -> Self {
         Self {
-            response: Mutex::new(Ok(response.to_string())),
+            responses: Mutex::new(VecDeque::from([Ok(response.to_string())])),
+            prompts: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn returning_sequence(responses: Vec<Result<String, LLMError>>) -> Self {
+        Self {
+            responses: Mutex::new(responses.into()),
             prompts: Mutex::new(Vec::new()),
         }
     }
@@ -135,7 +143,11 @@ impl RecordingLLMClient {
 impl LLMClient for RecordingLLMClient {
     async fn generate_script(&self, prompt: LLMPrompt) -> Result<String, LLMError> {
         self.prompts.lock().unwrap().push(prompt);
-        self.response.lock().unwrap().clone()
+        self.responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("fixture must provide one response per model call")
     }
 }
 
@@ -484,18 +496,49 @@ async fn project_routes_generate_strategy_profile_draft_without_saving() {
             .await
             .unwrap();
     assert_eq!(stored_profile, json!({}));
-    let run = sqlx::query_as::<_, (String, Option<Uuid>, Value)>(
-        "SELECT status, model_id, model_snapshot FROM agent_runs WHERE project_id = $1",
+    let run = sqlx::query_as::<_, (Uuid, String, Option<Uuid>, Value)>(
+        "SELECT id, status, model_id, model_snapshot FROM agent_runs WHERE project_id = $1",
     )
     .bind(project_id)
     .fetch_one(&test_pool)
     .await
     .unwrap();
-    assert_eq!(run.0, "succeeded");
-    assert_eq!(run.1, Some(model_id));
-    assert_eq!(run.2["model_id"], model_id.to_string());
-    assert!(run.2.get("api_key").is_none());
-    assert!(run.2.get("api_secret").is_none());
+    assert_eq!(run.1, "succeeded");
+    assert_eq!(run.2, Some(model_id));
+    assert_eq!(run.3["model_id"], model_id.to_string());
+    assert!(run.3.get("api_key").is_none());
+    assert!(run.3.get("api_secret").is_none());
+    let call: (String, i32, String, String, Value, Value) = sqlx::query_as(
+        r#"
+        SELECT node_key, attempt, status, agent_key, prompt_snapshot, context_sources
+        FROM model_calls WHERE agent_run_id = $1
+        "#,
+    )
+    .bind(run.0)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(call.0, "project.strategy_draft");
+    assert_eq!(call.1, 1);
+    assert_eq!(call.2, "succeeded");
+    assert_eq!(call.3, "video.project-strategy");
+    assert_eq!(call.4["fragments"][0]["source"], "project_strategy_context");
+    assert_eq!(call.4["fragments"][0]["trust"], "reference");
+    assert_eq!(call.5[0]["source"], "project_strategy_context");
+    let run_binding: (String, String, Uuid, String) = sqlx::query_as(
+        r#"
+        SELECT agent_key, agent_version, model_id, behavior_fingerprint
+        FROM agent_run_bindings WHERE agent_run_id = $1
+        "#,
+    )
+    .bind(run.0)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(run_binding.0, "video.project-strategy");
+    assert_eq!(run_binding.1, "1.0.0");
+    assert_eq!(run_binding.2, model_id);
+    assert_eq!(run_binding.3.len(), 64);
     {
         let prompts = llm_client.prompts.lock().unwrap();
         assert_eq!(prompts.len(), 1);
@@ -505,6 +548,87 @@ async fn project_routes_generate_strategy_profile_draft_without_saving() {
             .user
             .contains("面向内容运营负责人，不要夸大收益。"));
     }
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn project_strategy_retry_creates_distinct_model_call_attempts_with_one_binding() {
+    let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
+    let project_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO projects (name, positioning) VALUES ('重试账号', '测试审计') RETURNING id",
+    )
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    let success = json!({
+        "draft": {
+            "target_audience": "开发者",
+            "content_pillars": ["工程实践"],
+            "tone_style": "直接",
+            "forbidden_topics": [],
+            "reference_accounts": [],
+            "topic_preferences": "可复现案例"
+        },
+        "draft_summary": "面向开发者的工程实践内容。"
+    })
+    .to_string();
+    let llm_client = Arc::new(RecordingLLMClient::returning_sequence(vec![
+        Err(LLMError::Provider("503 temporarily unavailable".into())),
+        Ok(success),
+    ]));
+    let app = build_app_with_state(
+        app_state(test_url, test_pool.clone()).with_llm_client(llm_client.clone()),
+    );
+    let model_id = insert_enabled_text_model(&test_pool).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/strategy-profile/draft"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "direction_notes": "保留一次重试证据", "model_id": model_id })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(llm_client.prompts.lock().unwrap().len(), 2);
+
+    let rows = sqlx::query_as::<_, (Uuid, Option<Uuid>, i32, String, String, String)>(
+        r#"
+        SELECT id, root_call_id, attempt, status, agent_key, behavior_fingerprint
+        FROM model_calls ORDER BY attempt
+        "#,
+    )
+    .fetch_all(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        (rows[0].1, rows[0].2, rows[0].3.as_str()),
+        (None, 1, "failed")
+    );
+    assert_eq!(
+        (rows[1].1, rows[1].2, rows[1].3.as_str()),
+        (Some(rows[0].0), 2, "succeeded")
+    );
+    assert_eq!(rows[0].4, "video.project-strategy");
+    assert_eq!(rows[1].4, rows[0].4);
+    assert_eq!(rows[1].5, rows[0].5);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_run_bindings")
+            .fetch_one(&test_pool)
+            .await
+            .unwrap(),
+        1
+    );
 
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
