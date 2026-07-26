@@ -1,3 +1,8 @@
+use crate::context::{
+    CompiledContext, ContextCompiler, ContextSnapshot, LogicalMessage, LogicalModelInput,
+    PreparedPromptEnvelope,
+};
+use crate::context::{ContextPolicyDefinition, TokenizerMode, TokenizerProfile};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -97,6 +102,15 @@ pub fn validate_model_capabilities(
 pub struct VersionedReference {
     pub key: String,
     pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_policy: Option<DefinitionReference>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefinitionReference {
+    pub key: String,
+    pub version: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -156,6 +170,10 @@ struct RegistryDocument {
     schema_version: String,
     agents: Vec<AgentDefinition>,
     prompts: Vec<PromptDefinition>,
+    #[serde(default)]
+    context_policies: Vec<ContextPolicyDefinition>,
+    #[serde(default)]
+    tokenizer_profiles: Vec<TokenizerProfile>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -163,6 +181,8 @@ struct RegistryDocument {
 pub enum DefinitionKind {
     Agent,
     Prompt,
+    ContextPolicy,
+    TokenizerProfile,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -174,11 +194,21 @@ pub enum ActivationEvidence {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct LegacyDefinitionDigest {
+    pub algorithm: String,
+    pub registry_digest: String,
+    pub definition_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DefinitionReleaseEvidence {
     pub definition_kind: DefinitionKind,
     pub definition_key: String,
     pub definition_version: String,
     pub definition_digest: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_digests: Vec<LegacyDefinitionDigest>,
     pub activation_evidence: ActivationEvidence,
 }
 
@@ -211,7 +241,7 @@ impl DefinitionRegistry {
         let bytes = fs::read(directory.join("registry.json")).map_err(DefinitionError::Io)?;
         let document: RegistryDocument = serde_json::from_slice(&bytes)
             .map_err(|error| DefinitionError::InvalidRegistry(error.to_string()))?;
-        if document.schema_version != "1" {
+        if !matches!(document.schema_version.as_str(), "1" | "2") {
             return Err(DefinitionError::InvalidRegistry(
                 "unsupported schema_version".into(),
             ));
@@ -240,7 +270,9 @@ impl DefinitionRegistry {
             &fs::read(directory.join("release-index.json")).map_err(DefinitionError::Io)?,
         )
         .map_err(|error| DefinitionError::InvalidRegistry(error.to_string()))?;
-        if release.schema_version != "1" || release.registry_digest != registry.digest {
+        if release.schema_version != registry.document.schema_version
+            || release.registry_digest != registry.digest
+        {
             return Err(DefinitionError::InvalidRegistry(
                 "release index does not match immutable registry digest".into(),
             ));
@@ -261,6 +293,38 @@ impl DefinitionRegistry {
 
     pub fn prompts(&self) -> &[PromptDefinition] {
         &self.document.prompts
+    }
+
+    pub fn context_policies(&self) -> &[ContextPolicyDefinition] {
+        &self.document.context_policies
+    }
+
+    pub fn tokenizer_profiles(&self) -> &[TokenizerProfile] {
+        &self.document.tokenizer_profiles
+    }
+
+    pub fn context_policy(
+        &self,
+        key: &str,
+        version: &str,
+    ) -> Result<&ContextPolicyDefinition, DefinitionError> {
+        self.document
+            .context_policies
+            .iter()
+            .find(|item| item.policy_key == key && item.version == version)
+            .ok_or_else(|| DefinitionError::DefinitionNotFound(format!("{key}@{version}")))
+    }
+
+    pub fn tokenizer_profile(
+        &self,
+        key: &str,
+        version: &str,
+    ) -> Result<&TokenizerProfile, DefinitionError> {
+        self.document
+            .tokenizer_profiles
+            .iter()
+            .find(|item| item.profile_key == key && item.version == version)
+            .ok_or_else(|| DefinitionError::DefinitionNotFound(format!("{key}@{version}")))
     }
 
     pub fn release_evidence(&self) -> &[DefinitionReleaseEvidence] {
@@ -310,6 +374,8 @@ impl DefinitionRegistry {
         let mut agent_versions = BTreeSet::new();
         let mut prompt_versions = BTreeSet::new();
         let mut active_agents = BTreeSet::new();
+        let mut policy_versions = BTreeSet::new();
+        let mut profile_versions = BTreeSet::new();
         for agent in &self.document.agents {
             validate_key_and_version(&agent.agent_key, &agent.version)?;
             if !agent_versions.insert((&agent.agent_key, &agent.version)) {
@@ -417,6 +483,54 @@ impl DefinitionRegistry {
                 )));
             }
         }
+        for policy in &self.document.context_policies {
+            validate_key_and_version(&policy.policy_key, &policy.version)?;
+            if !policy_versions.insert((&policy.policy_key, &policy.version))
+                || policy.executor_owners.is_empty()
+                || policy.allowed_sources.is_empty()
+                || policy.stable_sort
+                    != [
+                        "priority",
+                        "source_kind",
+                        "source_id",
+                        "source_version",
+                        "candidate_id",
+                    ]
+                || policy
+                    .allowed_sources
+                    .iter()
+                    .any(|source| source.trim().is_empty())
+            {
+                return Err(DefinitionError::InvalidRegistry(format!(
+                    "context policy {} has an invalid contract",
+                    policy.policy_key
+                )));
+            }
+        }
+        for profile in &self.document.tokenizer_profiles {
+            validate_key_and_version(&profile.profile_key, &profile.version)?;
+            let valid_mode = match &profile.mode {
+                TokenizerMode::Exact {
+                    encoding,
+                    asset_digest,
+                } => {
+                    matches!(encoding.as_str(), "cl100k_base" | "o200k_base")
+                        && is_sha256(asset_digest)
+                }
+                TokenizerMode::Conservative { algorithm } => algorithm == "utf8-byte-upper-bound@1",
+            };
+            if !profile_versions.insert((&profile.profile_key, &profile.version))
+                || profile.applicable_protocols.is_empty()
+                || profile.applicable_model_families.is_empty()
+                || profile.implementation_version.trim().is_empty()
+                || !valid_mode
+            {
+                return Err(DefinitionError::InvalidRegistry(format!(
+                    "tokenizer profile {} has an invalid contract",
+                    profile.profile_key
+                )));
+            }
+        }
         for agent in &self.document.agents {
             for (node, reference) in &agent.nodes {
                 let prompt = self.prompt(&reference.key, &reference.version)?;
@@ -434,6 +548,35 @@ impl DefinitionRegistry {
                 ) {
                     return Err(DefinitionError::InvalidRegistry(format!(
                         "executable agent references unavailable prompt at {node}"
+                    )));
+                }
+                if self.document.schema_version == "2" && agent.status == DefinitionStatus::Active {
+                    let policy_reference = reference.context_policy.as_ref().ok_or_else(|| {
+                        DefinitionError::InvalidRegistry(format!(
+                            "active agent node {node} is missing context policy"
+                        ))
+                    })?;
+                    let policy =
+                        self.context_policy(&policy_reference.key, &policy_reference.version)?;
+                    if !policy.executor_owners.contains(&agent.executor_owner)
+                        || matches!(
+                            policy.status,
+                            DefinitionStatus::Candidate | DefinitionStatus::Revoked
+                        )
+                    {
+                        return Err(DefinitionError::InvalidRegistry(format!(
+                            "incompatible context policy reference at {node}"
+                        )));
+                    }
+                } else if self.document.schema_version == "2"
+                    && reference.context_policy.is_none()
+                    && !matches!(
+                        agent.status,
+                        DefinitionStatus::Supported | DefinitionStatus::Revoked
+                    )
+                {
+                    return Err(DefinitionError::InvalidRegistry(format!(
+                        "legacy node shape is not supported at {node}"
                     )));
                 }
             }
@@ -465,6 +608,12 @@ impl DefinitionRegistry {
                 DefinitionKind::Prompt => self
                     .prompt(&release.definition_key, &release.definition_version)
                     .and_then(definition_digest),
+                DefinitionKind::ContextPolicy => self
+                    .context_policy(&release.definition_key, &release.definition_version)
+                    .and_then(definition_digest),
+                DefinitionKind::TokenizerProfile => self
+                    .tokenizer_profile(&release.definition_key, &release.definition_version)
+                    .and_then(definition_digest),
             }
             .map_err(|error| DefinitionError::InvalidRegistry(error.to_string()))?;
             if actual_digest != release.definition_digest {
@@ -475,6 +624,24 @@ impl DefinitionRegistry {
                     release.definition_digest,
                     actual_digest
                 )));
+            }
+            let mut legacy_identities = BTreeSet::new();
+            for legacy in &release.legacy_digests {
+                if legacy.algorithm != "canonical-json-with-status@1"
+                    || !is_sha256(&legacy.registry_digest)
+                    || !is_sha256(&legacy.definition_digest)
+                    || legacy.definition_digest == release.definition_digest
+                    || !legacy_identities.insert((
+                        legacy.algorithm.as_str(),
+                        legacy.registry_digest.as_str(),
+                        legacy.definition_digest.as_str(),
+                    ))
+                {
+                    return Err(DefinitionError::InvalidRegistry(format!(
+                        "invalid legacy digest evidence for {}@{}",
+                        release.definition_key, release.definition_version
+                    )));
+                }
             }
             match &release.activation_evidence {
                 ActivationEvidence::GoldenBaseline { reference, sha256 }
@@ -679,7 +846,8 @@ pub struct PromptCompileInput {
     pub fragments: Vec<DynamicFragment>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PromptSnapshot {
     pub schema_version: String,
     pub registry_digest: String,
@@ -696,6 +864,33 @@ pub struct PromptSnapshot {
     pub output_schema: Option<Value>,
     pub tool_schema: Option<Value>,
     pub max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_snapshot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logical_input: Option<LogicalModelInput>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedPrompt {
+    snapshot: PromptSnapshot,
+    placeholder: String,
+    pub envelope: PreparedPromptEnvelope,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FinalizedPrompt {
+    pub prompt_snapshot: PromptSnapshot,
+    pub context_snapshot: ContextSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PromptPrepareInput {
+    pub variables: BTreeMap<String, Value>,
+    pub tool_profile: String,
+    pub tool_schema: Option<Value>,
+    pub model_max_output_tokens: u64,
 }
 
 pub struct PromptCompiler<'a> {
@@ -725,6 +920,126 @@ impl<'a> PromptCompiler<'a> {
             tool_schema,
             false,
         )
+    }
+
+    pub fn prepare(
+        &self,
+        agent_key: &str,
+        agent_version: &str,
+        node_key: &str,
+        input: PromptPrepareInput,
+    ) -> Result<PreparedPrompt, DefinitionError> {
+        const PLACEHOLDER: &str = "__NOVEX_COMPILED_CONTEXT_V2__";
+        let agent = self.registry.agent(agent_key, agent_version)?;
+        let reference = agent
+            .nodes
+            .get(node_key)
+            .ok_or_else(|| DefinitionError::Compile(format!("node {node_key} is not declared")))?;
+        let placeholder_trust = self
+            .registry
+            .prompt(&reference.key, &reference.version)?
+            .fragment_trust()
+            .ok_or_else(|| DefinitionError::Compile("fragments variable is not declared".into()))?;
+        let snapshot = self.compile(
+            agent_key,
+            agent_version,
+            node_key,
+            PromptCompileInput {
+                schema_version: "1".into(),
+                variables: input.variables,
+                fragments: vec![DynamicFragment {
+                    id: "context-placeholder".into(),
+                    trust: placeholder_trust,
+                    source: "context_compiler".into(),
+                    content: Some(PLACEHOLDER.into()),
+                    asset: None,
+                }],
+            },
+            &input.tool_profile,
+            input.tool_schema,
+        )?;
+        if !snapshot.user.contains(PLACEHOLDER) {
+            return Err(DefinitionError::Compile(
+                "dynamic context placeholder is missing".into(),
+            ));
+        }
+        let envelope = PreparedPromptEnvelope {
+            system: snapshot.system.clone(),
+            user_template_fixed: snapshot.user.replace(PLACEHOLDER, ""),
+            tool_schema: snapshot.tool_schema.clone(),
+            output_schema: snapshot.output_schema.clone(),
+            protocol_envelope_tokens: 0,
+            max_output_tokens: snapshot
+                .max_output_tokens
+                .map(u64::from)
+                .map_or(input.model_max_output_tokens, |prompt| {
+                    prompt.min(input.model_max_output_tokens)
+                }),
+        };
+        if envelope.max_output_tokens == 0 {
+            return Err(DefinitionError::Compile(
+                "max_output_tokens is required for governed context".into(),
+            ));
+        }
+        Ok(PreparedPrompt {
+            snapshot,
+            placeholder: PLACEHOLDER.into(),
+            envelope,
+        })
+    }
+
+    pub fn finalize(
+        &self,
+        prepared: PreparedPrompt,
+        context_snapshot_id: impl Into<String>,
+        context: &CompiledContext,
+        tokenizer_profile: &TokenizerProfile,
+    ) -> Result<FinalizedPrompt, DefinitionError> {
+        if prepared.snapshot.node_key != context.node_key
+            || prepared.snapshot.system != context.logical_input.system
+        {
+            return Err(DefinitionError::Compile(
+                "compiled context does not match prepared prompt".into(),
+            ));
+        }
+        let dynamic = render_logical_messages(&context.logical_input.messages);
+        let user = prepared
+            .snapshot
+            .user
+            .replace(&prepared.placeholder, &dynamic);
+        let logical_input = LogicalModelInput {
+            system: prepared.snapshot.system.clone(),
+            messages: vec![LogicalMessage {
+                role: "user".into(),
+                content: Value::String(user.clone()),
+                thinking: None,
+                tool_call_id: None,
+            }],
+            tool_schema: prepared.snapshot.tool_schema.clone(),
+            output_schema: prepared.snapshot.output_schema.clone(),
+        };
+        let context_snapshot_id = context_snapshot_id.into();
+        if context_snapshot_id.trim().is_empty() {
+            return Err(DefinitionError::Compile(
+                "context snapshot id is required".into(),
+            ));
+        }
+        let context_snapshot =
+            ContextCompiler::finalize(context, tokenizer_profile, logical_input.clone())
+                .map_err(|error| DefinitionError::Compile(error.code.into()))?;
+        let prompt_snapshot = PromptSnapshot {
+            schema_version: "2".into(),
+            user,
+            fragments: Vec::new(),
+            context_snapshot_id: Some(context_snapshot_id),
+            context_digest: Some(context_snapshot.digest.clone()),
+            logical_input: Some(logical_input),
+            ..prepared.snapshot
+        };
+        Ok(FinalizedPrompt {
+            prompt_snapshot,
+            context_snapshot,
+        })
     }
 
     /// Recompiles immutable historical input without making that version executable.
@@ -934,8 +1249,84 @@ impl<'a> PromptCompiler<'a> {
             output_schema,
             tool_schema,
             max_output_tokens: prompt.max_output_tokens,
+            context_snapshot_id: None,
+            context_digest: None,
+            logical_input: None,
         })
     }
+}
+
+impl PromptDefinition {
+    pub fn fragment_trust(&self) -> Option<TrustLevel> {
+        self.variables
+            .iter()
+            .find(|variable| variable.value_type == VariableType::Fragments)
+            .map(|variable| variable.trust)
+    }
+}
+
+pub fn read_prompt_snapshot(value: Value) -> Result<PromptSnapshot, DefinitionError> {
+    let snapshot: PromptSnapshot = serde_json::from_value(value)
+        .map_err(|error| DefinitionError::Compile(format!("invalid prompt snapshot: {error}")))?;
+    if !is_sha256(&snapshot.registry_digest)
+        || snapshot.agent_key.trim().is_empty()
+        || snapshot.agent_version.trim().is_empty()
+        || snapshot.prompt_key.trim().is_empty()
+        || snapshot.prompt_version.trim().is_empty()
+        || snapshot.node_key.trim().is_empty()
+        || !matches!(snapshot.tool_profile.as_str(), "chat" | "workspace")
+    {
+        return Err(DefinitionError::Compile(
+            "invalid prompt snapshot contract".into(),
+        ));
+    }
+    match snapshot.schema_version.as_str() {
+        "1" if snapshot.context_snapshot_id.is_none()
+            && snapshot.context_digest.is_none()
+            && snapshot.logical_input.is_none() => {}
+        "2" => {
+            let logical_input = snapshot.logical_input.as_ref().ok_or_else(|| {
+                DefinitionError::Compile("PromptSnapshot v2 logical_input is required".into())
+            })?;
+            let context_snapshot_id = snapshot.context_snapshot_id.as_deref().unwrap_or_default();
+            let context_digest = snapshot.context_digest.as_deref().unwrap_or_default();
+            if context_snapshot_id.trim().is_empty()
+                || !is_sha256(context_digest)
+                || !snapshot.fragments.is_empty()
+                || logical_input.system != snapshot.system
+                || logical_input.tool_schema != snapshot.tool_schema
+                || logical_input.output_schema != snapshot.output_schema
+                || logical_input.messages.as_slice()
+                    != [LogicalMessage {
+                        role: "user".into(),
+                        content: Value::String(snapshot.user.clone()),
+                        thinking: None,
+                        tool_call_id: None,
+                    }]
+            {
+                return Err(DefinitionError::Compile(
+                    "invalid PromptSnapshot v2 contract".into(),
+                ));
+            }
+        }
+        _ => {
+            return Err(DefinitionError::Compile(
+                "unsupported prompt snapshot schema".into(),
+            ))
+        }
+    }
+    Ok(snapshot)
+}
+
+fn render_logical_messages(messages: &[LogicalMessage]) -> String {
+    messages
+        .iter()
+        .map(|message| match &message.content {
+            Value::String(value) => value.clone(),
+            value => canonical_json(value),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -947,6 +1338,8 @@ pub struct ModelBehavior {
     pub reasoning_effort: Option<String>,
     pub max_output_tokens: u32,
     pub context_window: u64,
+    pub tokenizer_profile_key: String,
+    pub tokenizer_profile_version: String,
     pub settings: Value,
 }
 
@@ -989,6 +1382,8 @@ pub fn behavior_fingerprint(
             .map(str::to_ascii_lowercase),
         max_output_tokens: input.max_output_tokens,
         context_window: input.context_window,
+        tokenizer_profile_key: input.tokenizer_profile_key.trim().to_string(),
+        tokenizer_profile_version: input.tokenizer_profile_version.trim().to_string(),
         settings: remove_sensitive_fields(&input.settings),
     };
     if !matches!(
@@ -996,6 +1391,8 @@ pub fn behavior_fingerprint(
         "openai_responses" | "openai_chat_completions"
     ) || normalized.upstream_model.is_empty()
         || normalized.context_window == 0
+        || normalized.tokenizer_profile_key.is_empty()
+        || normalized.tokenizer_profile_version.is_empty()
         || normalized.max_output_tokens == 0
         || normalized
             .reasoning_effort

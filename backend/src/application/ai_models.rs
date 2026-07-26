@@ -5,19 +5,28 @@ use crate::repositories::{
     ChangeAiModelStatusInput, CreateAiModelInput, DeleteAiModelInput, DeleteAiModelOutcome,
     PostgresAiModelRepository, UpdateAiModelInput,
 };
-use novex_model::ModelType;
+use novex_ai_core::{DefinitionRegistry, DefinitionStatus};
+use novex_model::{ApiProtocol, ModelType};
 use std::fmt;
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
 /// 管理 AI 模型配置，并保证默认模型切换与版本检查由同一用例边界执行。
 pub struct AiModelService {
     repository: PostgresAiModelRepository,
+    definitions: Arc<DefinitionRegistry>,
 }
 
 impl AiModelService {
-    pub fn new(repository: PostgresAiModelRepository) -> Self {
-        Self { repository }
+    pub fn new(
+        repository: PostgresAiModelRepository,
+        definitions: Arc<DefinitionRegistry>,
+    ) -> Self {
+        Self {
+            repository,
+            definitions,
+        }
     }
 
     pub async fn list(
@@ -36,6 +45,15 @@ impl AiModelService {
         input: CreateAiModelInput,
         requested_default: bool,
     ) -> Result<AiModel, AiModelApplicationError> {
+        validate_profile_reference(
+            &self.definitions,
+            input.model_type,
+            input.api_protocol,
+            input.context_window,
+            input.tokenizer_profile_key.as_deref(),
+            input.tokenizer_profile_version.as_deref(),
+            input.status == crate::repositories::AiModelStatus::Enabled,
+        )?;
         let mut model = self.repository.create(input).await?;
         if requested_default && !model.is_default {
             model = self.repository.set_default(model.id, model.version).await?;
@@ -50,6 +68,15 @@ impl AiModelService {
         requested_default: bool,
     ) -> Result<AiModel, AiModelApplicationError> {
         let current = self.repository.get(model_id).await?;
+        validate_profile_reference(
+            &self.definitions,
+            input.model_type,
+            input.api_protocol,
+            input.context_window,
+            input.tokenizer_profile_key.as_deref(),
+            input.tokenizer_profile_version.as_deref(),
+            current.status == crate::repositories::AiModelStatus::Enabled,
+        )?;
         let same_default_scope = current.model_type == input.model_type
             && (current.model_type != ModelType::Speech
                 || current.api_protocol == input.api_protocol);
@@ -81,6 +108,18 @@ impl AiModelService {
         &self,
         input: ChangeAiModelStatusInput,
     ) -> Result<AiModel, AiModelApplicationError> {
+        if input.status == crate::repositories::AiModelStatus::Enabled {
+            let current = self.repository.get(input.id).await?;
+            validate_profile_reference(
+                &self.definitions,
+                current.model_type,
+                current.api_protocol,
+                current.context_window,
+                current.tokenizer_profile_key.as_deref(),
+                current.tokenizer_profile_version.as_deref(),
+                true,
+            )?;
+        }
         self.repository
             .change_status(input)
             .await
@@ -103,6 +142,61 @@ impl AiModelService {
             .await
             .map_err(Into::into)
     }
+}
+
+fn validate_profile_reference(
+    definitions: &DefinitionRegistry,
+    model_type: ModelType,
+    protocol: ApiProtocol,
+    context_window: Option<i64>,
+    profile_key: Option<&str>,
+    profile_version: Option<&str>,
+    executable: bool,
+) -> Result<(), AiModelApplicationError> {
+    let complete = context_window.is_some() && profile_key.is_some() && profile_version.is_some();
+    if model_type != ModelType::Text {
+        return if context_window.is_none() && profile_key.is_none() && profile_version.is_none() {
+            Ok(())
+        } else {
+            Err(AiModelApplicationError::InvalidConfig(
+                "非文本模型不得配置 Context window 或 Tokenizer Profile".to_string(),
+            ))
+        };
+    }
+    if !complete {
+        return if executable {
+            Err(AiModelApplicationError::InvalidConfig(
+                "enabled 文本模型必须显式配置 context_window 与 Tokenizer Profile key/version"
+                    .to_string(),
+            ))
+        } else {
+            Ok(())
+        };
+    }
+    let key = profile_key.expect("complete reference").trim();
+    let version = profile_version.expect("complete reference").trim();
+    let profile = definitions.tokenizer_profile(key, version).map_err(|_| {
+        AiModelApplicationError::InvalidConfig(format!("Tokenizer Profile 不存在：{key}@{version}"))
+    })?;
+    if matches!(
+        profile.status,
+        DefinitionStatus::Candidate | DefinitionStatus::Revoked
+    ) {
+        return Err(AiModelApplicationError::InvalidConfig(format!(
+            "Tokenizer Profile 当前不可执行：{key}@{version}"
+        )));
+    }
+    if !profile
+        .applicable_protocols
+        .iter()
+        .any(|item| item == protocol.as_str())
+    {
+        return Err(AiModelApplicationError::InvalidConfig(format!(
+            "Tokenizer Profile 与协议 {} 不兼容",
+            protocol.as_str()
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]

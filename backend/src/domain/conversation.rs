@@ -81,6 +81,7 @@ pub struct AgentConversation {
     pub title: String,
     pub status: AgentConversationStatus,
     pub metadata: Value,
+    pub last_context_compile_attempt_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -104,6 +105,7 @@ pub struct AgentRunRecord {
     pub input: Value,
     pub output: Option<Value>,
     pub error_message: Option<String>,
+    pub context_compile_attempt_id: Option<Uuid>,
     pub model_id: Option<Uuid>,
     pub model_snapshot: Option<Value>,
     pub started_at: DateTime<Utc>,
@@ -117,10 +119,14 @@ pub struct AgentConversationBinding {
     pub agent_version: String,
     pub agent_digest: String,
     pub prompt_bindings: Value,
+    pub context_policy_bindings: Option<Value>,
     pub registry_digest: String,
     pub model_id: Option<Uuid>,
     pub behavior_fingerprint: Option<String>,
     pub model_capabilities: Option<Value>,
+    pub tokenizer_profile_key: Option<String>,
+    pub tokenizer_profile_version: Option<String>,
+    pub tokenizer_profile_digest: Option<String>,
     pub binding_status: String,
     pub migration_source: Option<String>,
     pub parent_conversation_id: Option<Uuid>,
@@ -133,6 +139,7 @@ pub struct AgentConversationDefinitionBindingInput {
     pub agent_version: String,
     pub agent_digest: String,
     pub prompt_bindings: Value,
+    pub context_policy_bindings: Value,
     pub registry_digest: String,
     pub migration_source: Option<String>,
     pub parent_conversation_id: Option<Uuid>,
@@ -143,6 +150,9 @@ pub struct ModelBindingEvidence {
     pub model_id: Uuid,
     pub behavior_fingerprint: String,
     pub model_capabilities: Value,
+    pub tokenizer_profile_key: String,
+    pub tokenizer_profile_version: String,
+    pub tokenizer_profile_digest: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -152,10 +162,15 @@ pub struct AgentRunBinding {
     pub agent_version: String,
     pub agent_digest: String,
     pub prompt_bindings: Value,
+    pub context_policy_bindings: Option<Value>,
     pub registry_digest: String,
     pub model_id: Uuid,
     pub behavior_fingerprint: String,
     pub model_capabilities: Value,
+    pub tokenizer_profile_key: Option<String>,
+    pub tokenizer_profile_version: Option<String>,
+    pub tokenizer_profile_digest: Option<String>,
+    pub context_binding_status: String,
     pub legacy_partial_audit: bool,
     pub created_at: DateTime<Utc>,
 }
@@ -205,6 +220,7 @@ pub struct FinishAgentRunInput {
     pub status: String,
     pub output: Option<Value>,
     pub error_message: Option<String>,
+    pub context_compile_attempt_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

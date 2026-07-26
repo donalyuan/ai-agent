@@ -2,22 +2,20 @@
 
 use crate::application::agents::adapters::AgentRuntimeError;
 use crate::application::agents::kernel::{
-    active_rust_definition_binding, run_lifecycle, run_lifecycle_error,
+    active_rust_definition_binding, fixed_model_binding, run_lifecycle, run_lifecycle_error,
 };
-use crate::domain::conversation::ModelBindingEvidence;
-use crate::model_routing::{model_behavior_evidence, ModelClientResolver, ModelResolveError};
+use crate::model_routing::{model_binding_evidence, ModelClientResolver, ModelResolveError};
 use crate::repositories::{
     AccountStrategyProfile, AgentBindingError, ConversationRepositoryError, CreateProjectInput,
     PostgresConversationRepository, PostgresProjectRepository, Project, ProjectRepository,
     ProjectRepositoryError, UpdateProjectStrategyProfileInput,
 };
+use chrono::Utc;
 use novex_agent::{
-    AuditedCallOwner, AuditedModelError, AuditedModelExecutor, AuditedModelRequest,
-    FixedModelBinding, StartRun,
+    text_context_candidate, AuditedCallOwner, AuditedModelError, AuditedModelExecutor,
+    AuditedModelRequest, StartRun, TextContextCandidateInput,
 };
-use novex_ai_core::{
-    AgentKey, DefinitionRegistry, DynamicFragment, PromptCompileInput, TrustLevel,
-};
+use novex_ai_core::{AgentKey, ContextPriority, DefinitionRegistry, TrustLevel};
 use novex_model::LLMError;
 use serde::Deserialize;
 use serde_json::json;
@@ -92,40 +90,31 @@ impl ProjectService {
     ) -> Result<StrategyProfileDraft, ProjectApplicationError> {
         let project = self.project_repository.get_project(project_id).await?;
         let resolved = self.model_resolver.text_client(model_id).await?;
-        let evidence = model_behavior_evidence(&resolved.snapshot)?;
         let model_snapshot = serde_json::to_value(&resolved.snapshot)
             .map_err(|error| ProjectApplicationError::Serialization(error.to_string()))?;
-        let prompt = build_strategy_profile_draft_prompt(&project, direction_notes);
-        let fragment = DynamicFragment {
-            id: format!("project:{project_id}:strategy-profile-draft"),
-            trust: TrustLevel::Reference,
-            source: "project_strategy_context".into(),
-            content: Some(prompt),
-            asset: None,
-        };
-        let context_sources = json!([{
-            "id": fragment.id,
-            "trust": fragment.trust,
-            "source": fragment.source,
-        }]);
-        let compile_input = PromptCompileInput {
-            schema_version: "1".into(),
-            variables: Default::default(),
-            fragments: vec![fragment],
-        };
+        let (project_context, user_instruction) =
+            build_strategy_profile_draft_context(&project, direction_notes);
+        let project_candidate_id = format!("project:{project_id}:strategy-profile");
+        let instruction_candidate_id = format!("project:{project_id}:strategy-direction");
+        let context_sources = json!([
+            {
+                "id": project_candidate_id,
+                "trust": "confirmed_fact",
+                "source": "project",
+            },
+            {
+                "id": instruction_candidate_id,
+                "trust": "user_instruction",
+                "source": "user_instruction",
+            }
+        ]);
         let definition =
             active_rust_definition_binding(&self.definition_registry, "video.project-strategy")
                 .map_err(ProjectApplicationError::Serialization)?;
-        let model_binding = ModelBindingEvidence {
-            model_id,
-            behavior_fingerprint: evidence.behavior_fingerprint.clone(),
-            model_capabilities: serde_json::to_value(&evidence.capabilities)
-                .map_err(|error| ProjectApplicationError::Serialization(error.to_string()))?,
-        };
-        let fixed_binding = FixedModelBinding {
-            model_id,
-            behavior_fingerprint: evidence.behavior_fingerprint,
-        };
+        let model_binding = model_binding_evidence(&self.definition_registry, &resolved.snapshot)?;
+        let fixed_binding =
+            fixed_model_binding(&definition.context_policy_bindings, &model_binding)
+                .map_err(ProjectApplicationError::Serialization)?;
         let repository = self.conversation_repository.clone();
         let executor = self.audited_model_executor.clone();
         run_lifecycle(self.conversation_repository.clone())
@@ -142,6 +131,8 @@ impl ProjectService {
                     repository
                         .create_run_binding(run_id, definition.clone(), model_binding, false)
                         .await?;
+                    let compiled_at =
+                        Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
                     let request = AuditedModelRequest {
                         owner: AuditedCallOwner::AgentRun(run_id),
                         step_id: None,
@@ -151,7 +142,37 @@ impl ProjectService {
                         agent_key: definition.agent_key,
                         agent_version: definition.agent_version,
                         node_key: "project.strategy_draft".into(),
-                        compile_input,
+                        variables: Default::default(),
+                        context_candidates: vec![
+                            text_context_candidate(TextContextCandidateInput {
+                                candidate_id: project_candidate_id,
+                                source_kind: "project".into(),
+                                source_id: project_id.to_string(),
+                                source_version: project
+                                    .updated_at
+                                    .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+                                trust: TrustLevel::ConfirmedFact,
+                                priority: ContextPriority::P1,
+                                required: true,
+                                render_order: 0,
+                                observed_at: compiled_at.clone(),
+                                text: project_context,
+                            }),
+                            text_context_candidate(TextContextCandidateInput {
+                                candidate_id: instruction_candidate_id,
+                                source_kind: "user_instruction".into(),
+                                source_id: project_id.to_string(),
+                                source_version: "1".into(),
+                                trust: TrustLevel::UserInstruction,
+                                priority: ContextPriority::P0,
+                                required: true,
+                                render_order: 1,
+                                observed_at: compiled_at.clone(),
+                                text: user_instruction,
+                            }),
+                        ],
+                        context_atomic_groups: Vec::new(),
+                        compiled_at,
                         tool_profile: "chat".into(),
                         tool_schema: None,
                         binding: fixed_binding,
@@ -369,8 +390,11 @@ fn is_retryable_strategy_draft_error(error: &LLMError) -> bool {
     }
 }
 
-fn build_strategy_profile_draft_prompt(project: &Project, direction_notes: &str) -> String {
-    format!(
+fn build_strategy_profile_draft_context(
+    project: &Project,
+    direction_notes: &str,
+) -> (String, String) {
+    let project_context = format!(
         r#"请基于当前内容账号资料和补充方向，生成结构化账号策略草稿。
 
 当前账号名称：{name}
@@ -382,15 +406,7 @@ fn build_strategy_profile_draft_prompt(project: &Project, direction_notes: &str)
 当前禁区方向：{forbidden_topics}
 当前参考账号：{reference_accounts}
 当前选题偏好：{topic_preferences}
-
-补充方向：{direction_notes}
-
-输出要求：
-1. 只生成草稿，不要表达已保存或已生效。
-2. draft 必须包含 target_audience、content_pillars、tone_style、forbidden_topics、reference_accounts、topic_preferences。
-3. content_pillars、forbidden_topics、reference_accounts 每组最多 20 项。
-4. 不得生成夸大收益、灰产引流或虚假承诺方向。
-5. draft_summary 用一句中文总结草稿策略取向。"#,
+"#,
         name = project.name,
         positioning = project.positioning,
         description = project.description,
@@ -400,8 +416,19 @@ fn build_strategy_profile_draft_prompt(project: &Project, direction_notes: &str)
         forbidden_topics = format_prompt_list(&project.strategy_profile.forbidden_topics),
         reference_accounts = format_prompt_list(&project.strategy_profile.reference_accounts),
         topic_preferences = project.strategy_profile.topic_preferences,
+    );
+    let user_instruction = format!(
+        r#"补充方向：{direction_notes}
+
+输出要求：
+1. 只生成草稿，不要表达已保存或已生效。
+2. draft 必须包含 target_audience、content_pillars、tone_style、forbidden_topics、reference_accounts、topic_preferences。
+3. content_pillars、forbidden_topics、reference_accounts 每组最多 20 项。
+4. 不得生成夸大收益、灰产引流或虚假承诺方向。
+5. draft_summary 用一句中文总结草稿策略取向。"#,
         direction_notes = direction_notes.trim()
-    )
+    );
+    (project_context, user_instruction)
 }
 
 fn format_prompt_list(values: &[String]) -> String {

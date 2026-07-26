@@ -182,6 +182,7 @@ async fn conversation_repository_persists_conversations_messages_runs_and_steps(
             status: "succeeded".to_string(),
             output: Some(json!({"assistant_message_id": assistant_message.id})),
             error_message: None,
+            context_compile_attempt_id: None,
         })
         .await
         .unwrap();

@@ -290,6 +290,7 @@ async fn migrations_create_video_agent_core_schema() {
         "ai_models_one_default_per_speech_protocol",
         "idx_ai_models_type_status_sort",
         "idx_ai_models_voice_catalog_source",
+        "idx_ai_models_tokenizer_profile",
         "voice_catalog_syncs_one_active_per_model",
         "idx_voice_catalog_entries_available",
         "audio_material_inspections_one_active_per_material",
@@ -323,6 +324,9 @@ async fn migrations_create_video_agent_core_schema() {
         ("ai_models", "catalog_access_key"),
         ("ai_models", "catalog_secret_key"),
         ("ai_models", "voice_catalog_source_model_id"),
+        ("ai_models", "context_window"),
+        ("ai_models", "tokenizer_profile_key"),
+        ("ai_models", "tokenizer_profile_version"),
         ("sound_subtitle_tasks", "tos_staging_config_id"),
         ("sound_subtitle_tasks", "tos_staging_config_version"),
         ("sound_subtitle_tasks", "error_details"),
@@ -351,6 +355,11 @@ async fn migrations_create_video_agent_core_schema() {
         "ai_models_catalog_credentials_pair_check",
         "ai_models_voice_catalog_binding_check",
         "ai_models_voice_catalog_not_self_check",
+        "ai_models_context_window_range_check",
+        "ai_models_tokenizer_profile_key_format_check",
+        "ai_models_tokenizer_profile_version_format_check",
+        "ai_models_context_profile_complete_check",
+        "ai_models_non_text_context_empty_check",
     ] {
         assert!(
             constraint_exists(&test_pool, "ai_models", constraint).await,
@@ -368,6 +377,62 @@ async fn migrations_create_video_agent_core_schema() {
     assert!(!protocol_constraint.contains("jimeng_visual"));
     assert!(type_protocol_constraint.contains("volcengine_ark_images"));
     assert!(type_protocol_constraint.contains("speech"));
+
+    let governed_text = sqlx::query(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key, context_window,
+            tokenizer_profile_key, tokenizer_profile_version
+        ) VALUES (
+            'Governed text', 'text', 'test', 'openai_responses', 'bearer',
+            'https://example.invalid/v1', 'opaque-model', 'secret', 128000,
+            'openai.o200k', '1.0.0'
+        )
+        "#,
+    )
+    .execute(&test_pool)
+    .await;
+    assert!(
+        governed_text.is_ok(),
+        "complete governed text config should be accepted"
+    );
+    let partial_profile = sqlx::query(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key, context_window
+        ) VALUES (
+            'Partial context', 'text', 'test', 'openai_responses', 'bearer',
+            'https://example.invalid/v1', 'opaque-model', 'secret', 128000
+        )
+        "#,
+    )
+    .execute(&test_pool)
+    .await;
+    assert!(
+        partial_profile.is_err(),
+        "partial governed context config must fail closed"
+    );
+    let non_text_profile = sqlx::query(
+        r#"
+        INSERT INTO ai_models (
+            display_name, model_type, provider_name, api_protocol, auth_scheme,
+            request_base_url, upstream_model, api_key, context_window,
+            tokenizer_profile_key, tokenizer_profile_version
+        ) VALUES (
+            'Invalid governed image', 'image', 'test', 'openai_images', 'bearer',
+            'https://example.invalid/v1', 'image-model', 'secret', 128000,
+            'openai.o200k', '1.0.0'
+        )
+        "#,
+    )
+    .execute(&test_pool)
+    .await;
+    assert!(
+        non_text_profile.is_err(),
+        "non-text models must keep governed context fields empty"
+    );
     assert!(type_protocol_constraint.contains("openai_audio_speech"));
     assert!(!type_protocol_constraint.contains("jimeng_visual"));
 

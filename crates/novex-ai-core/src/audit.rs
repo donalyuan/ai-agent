@@ -3,6 +3,7 @@ use std::fmt;
 use url::Url;
 
 pub const MODEL_CALL_SCHEMA_VERSION: &str = "1";
+pub const GOVERNED_MODEL_CALL_SCHEMA_VERSION: &str = "2";
 pub const AUDIT_REDACTED: &str = "[REDACTED]";
 
 /// Redacts a JSON audit value without changing non-sensitive business text.

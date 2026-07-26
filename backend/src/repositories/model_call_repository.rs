@@ -2,16 +2,18 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use novex_agent::{
     AuditedCallOwner, AuditedTerminalStatus, FinishAuditedCall, ModelCallAuditStore,
-    PrepareAuditedCall,
+    PersistContextSnapshot, PrepareAuditedCallWithContext,
 };
 use novex_ai_core::{
-    redact_audit_value, validate_asset_references, validate_audit_payload,
-    MODEL_CALL_SCHEMA_VERSION,
+    read_prompt_snapshot, redact_audit_value, validate_asset_references, validate_audit_payload,
+    GOVERNED_MODEL_CALL_SCHEMA_VERSION, MODEL_CALL_SCHEMA_VERSION,
 };
 use serde_json::Value;
 use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
 use std::fmt;
 use uuid::Uuid;
+
+use super::context_audit_repository::PostgresContextAuditRepository;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModelCallOwner {
@@ -81,6 +83,12 @@ pub struct PrepareModelCall {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct PrepareModelCallWithContext {
+    pub model_call: PrepareModelCall,
+    pub context: PersistContextSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct FinishModelCall {
     pub id: Uuid,
     pub status: ModelCallTerminalStatus,
@@ -116,6 +124,13 @@ pub struct ModelCallRecord {
     pub model_snapshot: Value,
     pub parameters: Value,
     pub asset_references: Value,
+    pub context_snapshot_id: Option<Uuid>,
+    pub context_digest: Option<String>,
+    pub context_policy_key: Option<String>,
+    pub context_policy_version: Option<String>,
+    pub tokenizer_profile_key: Option<String>,
+    pub tokenizer_profile_version: Option<String>,
+    pub context_budget_summary: Option<Value>,
     pub output_snapshot: Option<Value>,
     pub usage_snapshot: Option<Value>,
     pub error_snapshot: Option<Value>,
@@ -143,6 +158,17 @@ pub struct PostgresModelCallRepository {
     pool: PgPool,
 }
 
+struct GovernedContextPreparation {
+    snapshot_id: Uuid,
+    persistence: PersistContextSnapshot,
+    digest: String,
+    policy_key: String,
+    policy_version: String,
+    tokenizer_profile_key: String,
+    tokenizer_profile_version: String,
+    budget_summary: Value,
+}
+
 impl PostgresModelCallRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -152,6 +178,62 @@ impl PostgresModelCallRepository {
     pub async fn prepare(
         &self,
         input: PrepareModelCall,
+    ) -> Result<ModelCallRecord, ModelCallRepositoryError> {
+        self.prepare_internal(input, None).await
+    }
+
+    /// Persists the governed Context and prepared call in one local transaction.
+    pub async fn prepare_with_context(
+        &self,
+        mut input: PrepareModelCallWithContext,
+    ) -> Result<ModelCallRecord, ModelCallRepositoryError> {
+        let prompt = read_prompt_snapshot(input.model_call.prompt_snapshot.clone())
+            .map_err(|error| ModelCallRepositoryError::ContextMismatch(error.to_string()))?;
+        let snapshot_id = prompt
+            .context_snapshot_id
+            .as_deref()
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or_else(|| {
+                ModelCallRepositoryError::ContextMismatch(
+                    "PromptSnapshot v2 context_snapshot_id 必须是 UUID".into(),
+                )
+            })?;
+        if input.model_call.owner != audited_owner_to_model_owner(input.context.owner)
+            || input.model_call.node_key != input.context.snapshot.node_key
+            || prompt.node_key != input.context.snapshot.node_key
+            || prompt.context_digest.as_deref() != Some(input.context.snapshot.digest.as_str())
+            || prompt.logical_input.as_ref() != Some(&input.context.snapshot.logical_input)
+        {
+            return Err(ModelCallRepositoryError::ContextMismatch(
+                "Context、Prompt 与 ModelCall owner/node/digest/logical_input 不一致".into(),
+            ));
+        }
+
+        input
+            .model_call
+            .known_secrets
+            .extend(input.context.known_secrets.iter().cloned());
+        input.model_call.known_secrets.sort();
+        input.model_call.known_secrets.dedup();
+        input.context.known_secrets = input.model_call.known_secrets.clone();
+        let context = GovernedContextPreparation {
+            snapshot_id,
+            digest: input.context.snapshot.digest.clone(),
+            policy_key: input.context.snapshot.policy_key.clone(),
+            policy_version: input.context.snapshot.policy_version.clone(),
+            tokenizer_profile_key: input.context.snapshot.tokenizer_profile_key.clone(),
+            tokenizer_profile_version: input.context.snapshot.tokenizer_profile_version.clone(),
+            budget_summary: serde_json::to_value(&input.context.snapshot.budget)
+                .map_err(ModelCallRepositoryError::Serialization)?,
+            persistence: input.context,
+        };
+        self.prepare_internal(input.model_call, Some(context)).await
+    }
+
+    async fn prepare_internal(
+        &self,
+        input: PrepareModelCall,
+        context: Option<GovernedContextPreparation>,
     ) -> Result<ModelCallRecord, ModelCallRepositoryError> {
         validate_attempt_shape(&input)?;
         let prompt_snapshot = redact_audit_value(&input.prompt_snapshot, &input.known_secrets);
@@ -181,6 +263,15 @@ impl PostgresModelCallRepository {
         validate_asset_references(&asset_references)
             .map_err(|error| ModelCallRepositoryError::UnsafeAudit(error.to_string()))?;
         let mut transaction = self.pool.begin().await?;
+        if let Some(context) = context.as_ref() {
+            PostgresContextAuditRepository::persist_snapshot_in_transaction(
+                &mut transaction,
+                context.snapshot_id,
+                context.persistence.clone(),
+            )
+            .await
+            .map_err(|error| ModelCallRepositoryError::ContextPersistence(error.to_string()))?;
+        }
         if let Some(root_id) = input.root_call_id {
             let root = sqlx::query(
                 r#"
@@ -234,20 +325,29 @@ impl PostgresModelCallRepository {
             .await?;
         }
         let (conversation_id, agent_run_id, eval_run_id) = owner_columns(input.owner);
+        let schema_version = context
+            .as_ref()
+            .map(|_| GOVERNED_MODEL_CALL_SCHEMA_VERSION)
+            .unwrap_or(MODEL_CALL_SCHEMA_VERSION);
         let row = sqlx::query(
             r#"
             INSERT INTO model_calls (
-                conversation_id, agent_run_id, eval_run_id, root_call_id, parent_call_id, node_key,
+                schema_version, conversation_id, agent_run_id, eval_run_id,
+                root_call_id, parent_call_id, node_key,
                 attempt, agent_key, agent_version, prompt_key, prompt_version,
                 registry_digest, prompt_snapshot, context_sources, memory_sources,
                 tool_schema, model_id, behavior_fingerprint, model_snapshot, parameters,
-                asset_references
+                asset_references, context_snapshot_id, context_digest, context_policy_key,
+                context_policy_version, tokenizer_profile_key, tokenizer_profile_version,
+                context_budget_summary
             ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                $21, $22, $23, $24, $25, $26, $27, $28, $29
             ) RETURNING *
             "#,
         )
+        .bind(schema_version)
         .bind(conversation_id)
         .bind(agent_run_id)
         .bind(eval_run_id)
@@ -269,6 +369,21 @@ impl PostgresModelCallRepository {
         .bind(model_snapshot)
         .bind(parameters)
         .bind(asset_references)
+        .bind(context.as_ref().map(|value| value.snapshot_id))
+        .bind(context.as_ref().map(|value| value.digest.as_str()))
+        .bind(context.as_ref().map(|value| value.policy_key.as_str()))
+        .bind(context.as_ref().map(|value| value.policy_version.as_str()))
+        .bind(
+            context
+                .as_ref()
+                .map(|value| value.tokenizer_profile_key.as_str()),
+        )
+        .bind(
+            context
+                .as_ref()
+                .map(|value| value.tokenizer_profile_version.as_str()),
+        )
+        .bind(context.as_ref().map(|value| &value.budget_summary))
         .fetch_one(&mut *transaction)
         .await?;
         let record = model_call_from_row(row)?;
@@ -641,6 +756,14 @@ fn owner_columns(owner: ModelCallOwner) -> (Option<Uuid>, Option<Uuid>, Option<U
     }
 }
 
+fn audited_owner_to_model_owner(owner: AuditedCallOwner) -> ModelCallOwner {
+    match owner {
+        AuditedCallOwner::Conversation(id) => ModelCallOwner::Conversation(id),
+        AuditedCallOwner::AgentRun(id) => ModelCallOwner::AgentRun(id),
+        AuditedCallOwner::EvalRun(id) => ModelCallOwner::EvalRun(id),
+    }
+}
+
 fn owner_from_row(row: &PgRow) -> Result<ModelCallOwner, ModelCallRepositoryError> {
     match (
         row.try_get::<Option<Uuid>, _>("conversation_id")?,
@@ -656,7 +779,9 @@ fn owner_from_row(row: &PgRow) -> Result<ModelCallOwner, ModelCallRepositoryErro
 
 fn model_call_from_row(row: PgRow) -> Result<ModelCallRecord, ModelCallRepositoryError> {
     let schema_version: String = row.try_get("schema_version")?;
-    if schema_version != MODEL_CALL_SCHEMA_VERSION {
+    if schema_version != MODEL_CALL_SCHEMA_VERSION
+        && schema_version != GOVERNED_MODEL_CALL_SCHEMA_VERSION
+    {
         return Err(ModelCallRepositoryError::InvalidSchemaVersion(
             schema_version,
         ));
@@ -692,6 +817,13 @@ fn model_call_from_row(row: PgRow) -> Result<ModelCallRecord, ModelCallRepositor
         model_snapshot: row.try_get("model_snapshot")?,
         parameters: row.try_get("parameters")?,
         asset_references: row.try_get("asset_references")?,
+        context_snapshot_id: row.try_get("context_snapshot_id")?,
+        context_digest: row.try_get("context_digest")?,
+        context_policy_key: row.try_get("context_policy_key")?,
+        context_policy_version: row.try_get("context_policy_version")?,
+        tokenizer_profile_key: row.try_get("tokenizer_profile_key")?,
+        tokenizer_profile_version: row.try_get("tokenizer_profile_version")?,
+        context_budget_summary: row.try_get("context_budget_summary")?,
         output_snapshot: row.try_get("output_snapshot")?,
         usage_snapshot: row.try_get("usage_snapshot")?,
         error_snapshot: row.try_get("error_snapshot")?,
@@ -704,6 +836,7 @@ fn model_call_from_row(row: PgRow) -> Result<ModelCallRecord, ModelCallRepositor
 #[derive(Debug)]
 pub enum ModelCallRepositoryError {
     Storage(sqlx::Error),
+    Serialization(serde_json::Error),
     NotFound(Uuid),
     StepNotFound(Uuid),
     InvalidOwner,
@@ -717,12 +850,17 @@ pub enum ModelCallRepositoryError {
     OwnerNotFound(ModelCallOwner),
     OwnerDeletionUnsupported,
     EvalBudget(String),
+    ContextMismatch(String),
+    ContextPersistence(String),
 }
 
 impl fmt::Display for ModelCallRepositoryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Storage(error) => write!(formatter, "model call storage error: {error}"),
+            Self::Serialization(error) => {
+                write!(formatter, "model call serialization error: {error}")
+            }
             Self::NotFound(id) => write!(formatter, "model call not found: {id}"),
             Self::StepNotFound(id) => write!(formatter, "agent step not found: {id}"),
             Self::InvalidOwner => formatter.write_str("model call must have exactly one owner"),
@@ -748,6 +886,12 @@ impl fmt::Display for ModelCallRepositoryError {
             Self::OwnerDeletionUnsupported => formatter
                 .write_str("EvalRun audit evidence cannot be deleted through owner cleanup"),
             Self::EvalBudget(message) => write!(formatter, "eval budget rejected: {message}"),
+            Self::ContextMismatch(message) => {
+                write!(formatter, "model call Context mismatch: {message}")
+            }
+            Self::ContextPersistence(message) => {
+                write!(formatter, "Context persistence failed: {message}")
+            }
         }
     }
 }
@@ -762,35 +906,45 @@ impl From<sqlx::Error> for ModelCallRepositoryError {
 
 #[async_trait]
 impl ModelCallAuditStore for PostgresModelCallRepository {
-    async fn prepare(&self, input: PrepareAuditedCall) -> Result<Uuid, novex_agent::BoxError> {
+    async fn prepare_with_context(
+        &self,
+        input: PrepareAuditedCallWithContext,
+    ) -> Result<Uuid, novex_agent::BoxError> {
+        let PrepareAuditedCallWithContext {
+            model_call: input,
+            context,
+        } = input;
         let owner = match input.owner {
             AuditedCallOwner::Conversation(id) => ModelCallOwner::Conversation(id),
             AuditedCallOwner::AgentRun(id) => ModelCallOwner::AgentRun(id),
             AuditedCallOwner::EvalRun(id) => ModelCallOwner::EvalRun(id),
         };
-        let record = PostgresModelCallRepository::prepare(
+        let record = PostgresModelCallRepository::prepare_with_context(
             self,
-            PrepareModelCall {
-                owner,
-                root_call_id: input.root_call_id,
-                parent_call_id: input.parent_call_id,
-                node_key: input.snapshot.node_key.clone(),
-                attempt: input.attempt,
-                agent_key: input.snapshot.agent_key.clone(),
-                agent_version: input.snapshot.agent_version.clone(),
-                prompt_key: input.snapshot.prompt_key.clone(),
-                prompt_version: input.snapshot.prompt_version.clone(),
-                registry_digest: input.snapshot.registry_digest.clone(),
-                prompt_snapshot: serde_json::to_value(&input.snapshot)?,
-                context_sources: input.context_sources,
-                memory_sources: input.memory_sources,
-                tool_schema: input.snapshot.tool_schema.clone(),
-                model_id: input.model_id,
-                behavior_fingerprint: input.behavior_fingerprint,
-                model_snapshot: input.model_snapshot,
-                parameters: input.parameters,
-                asset_references: input.asset_references,
-                known_secrets: input.known_secrets,
+            PrepareModelCallWithContext {
+                model_call: PrepareModelCall {
+                    owner,
+                    root_call_id: input.root_call_id,
+                    parent_call_id: input.parent_call_id,
+                    node_key: input.snapshot.node_key.clone(),
+                    attempt: input.attempt,
+                    agent_key: input.snapshot.agent_key.clone(),
+                    agent_version: input.snapshot.agent_version.clone(),
+                    prompt_key: input.snapshot.prompt_key.clone(),
+                    prompt_version: input.snapshot.prompt_version.clone(),
+                    registry_digest: input.snapshot.registry_digest.clone(),
+                    prompt_snapshot: serde_json::to_value(&input.snapshot)?,
+                    context_sources: input.context_sources,
+                    memory_sources: input.memory_sources,
+                    tool_schema: input.snapshot.tool_schema.clone(),
+                    model_id: input.model_id,
+                    behavior_fingerprint: input.behavior_fingerprint,
+                    model_snapshot: input.model_snapshot,
+                    parameters: input.parameters,
+                    asset_references: input.asset_references,
+                    known_secrets: input.known_secrets,
+                },
+                context,
             },
         )
         .await?;

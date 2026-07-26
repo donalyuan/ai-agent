@@ -6,6 +6,8 @@
     "reasoning_effort": null,
     "max_output_tokens": 4096,
     "context_window": 128000,
+    "tokenizer_profile_key": "openai.o200k",
+    "tokenizer_profile_version": "1.0.0",
     "settings": { "temperature": 0, "api_key": "must-not-participate" }
   },
   "normalized": {
@@ -15,7 +17,9 @@
     "reasoning_effort": null,
     "max_output_tokens": 4096,
     "context_window": 128000,
+    "tokenizer_profile_key": "openai.o200k",
+    "tokenizer_profile_version": "1.0.0",
     "settings": { "temperature": 0 }
   },
-  "sha256": "684931a430acf9520289f994d234bf25913e5b48e7475308f6027f9561b96880"
+  "sha256": "280c9d4cf56123865c638197e33b9da14e0daf6207e76f98925707b29e15a4b1"
 }

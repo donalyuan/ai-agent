@@ -1,11 +1,12 @@
 use super::{record_step, AgentRuntimeError, SoundAgentAdapter, SoundAgentContext};
 use crate::domain::conversation::CreateAgentStepInput;
 use crate::repositories::VoiceCatalogEntry;
+use chrono::Utc;
 use novex_agent::{
-    AgentOutcome, AgentSession, AuditedCallOwner, AuditedModelError, AuditedModelRequest,
-    ModelExecutionRef, StepRecorder, StoredMessage,
+    text_context_candidate, AgentOutcome, AgentSession, AuditedCallOwner, AuditedModelError,
+    AuditedModelRequest, ModelExecutionRef, StepRecorder, StoredMessage, TextContextCandidateInput,
 };
-use novex_ai_core::{DynamicFragment, PromptCompileInput, TrustLevel};
+use novex_ai_core::{ContextPriority, TrustLevel};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -45,7 +46,7 @@ impl SoundAgentAdapter {
             })
             .await?;
 
-        let prompt = sound_recommendation_prompt(
+        let prompt_sections = sound_recommendation_sections(
             &user_message.content,
             sound_context,
             &catalog.voices,
@@ -54,7 +55,17 @@ impl SoundAgentAdapter {
         let audited = model.audited.as_ref().ok_or_else(|| {
             AgentRuntimeError::Kernel("audited model execution is required".into())
         })?;
-        let fragment_id = format!("voice-catalog:{model_id}:recommendation");
+        let observed_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let catalog_version = catalog
+            .last_sync
+            .as_ref()
+            .map_or_else(|| "unsynced".to_string(), |sync| sync.id.to_string());
+        let candidate_ids = [
+            format!("message:{}", user_message.id),
+            format!("sound-context:{}", user_message.id),
+            format!("voice-catalog:{model_id}:parameters:{catalog_version}"),
+            format!("voice-catalog:{model_id}:voices:{catalog_version}"),
+        ];
         let response = audited
             .executor
             .execute_parsed(
@@ -67,24 +78,74 @@ impl SoundAgentAdapter {
                             agent_key: audited.agent_key.clone(),
                             agent_version: audited.agent_version.clone(),
                             node_key: "sound.recommend".into(),
-                            compile_input: PromptCompileInput {
-                                schema_version: "1".into(),
-                                variables: BTreeMap::new(),
-                                fragments: vec![DynamicFragment {
-                                    id: fragment_id.clone(),
-                                    trust: TrustLevel::Reference,
-                                    source: "sound_recommendation_context".into(),
-                                    content: Some(prompt),
-                                    asset: None,
-                                }],
-                            },
+                            variables: BTreeMap::new(),
+                            context_candidates: vec![
+                                text_context_candidate(TextContextCandidateInput {
+                                    candidate_id: candidate_ids[0].clone(),
+                                    source_kind: "conversation_entry".into(),
+                                    source_id: user_message.id.to_string(),
+                                    source_version: user_message.created_at.to_rfc3339_opts(
+                                        chrono::SecondsFormat::Nanos,
+                                        true,
+                                    ),
+                                    trust: TrustLevel::UserInstruction,
+                                    priority: ContextPriority::P0,
+                                    required: true,
+                                    render_order: 0,
+                                    observed_at: observed_at.clone(),
+                                    text: prompt_sections[0].clone(),
+                                }),
+                                text_context_candidate(TextContextCandidateInput {
+                                    candidate_id: candidate_ids[1].clone(),
+                                    source_kind: "current_work".into(),
+                                    source_id: conversation.id.to_string(),
+                                    source_version: user_message.created_at.to_rfc3339_opts(
+                                        chrono::SecondsFormat::Nanos,
+                                        true,
+                                    ),
+                                    trust: TrustLevel::ConfirmedFact,
+                                    priority: ContextPriority::P1,
+                                    required: true,
+                                    render_order: 1,
+                                    observed_at: observed_at.clone(),
+                                    text: prompt_sections[1].clone(),
+                                }),
+                                text_context_candidate(TextContextCandidateInput {
+                                    candidate_id: candidate_ids[2].clone(),
+                                    source_kind: "voice_catalog".into(),
+                                    source_id: model_id.to_string(),
+                                    source_version: catalog_version.clone(),
+                                    trust: TrustLevel::ConfirmedFact,
+                                    priority: ContextPriority::P1,
+                                    required: true,
+                                    render_order: 2,
+                                    observed_at: observed_at.clone(),
+                                    text: prompt_sections[2].clone(),
+                                }),
+                                text_context_candidate(TextContextCandidateInput {
+                                    candidate_id: candidate_ids[3].clone(),
+                                    source_kind: "voice_catalog".into(),
+                                    source_id: model_id.to_string(),
+                                    source_version: catalog_version,
+                                    trust: TrustLevel::ConfirmedFact,
+                                    priority: ContextPriority::P1,
+                                    required: true,
+                                    render_order: 3,
+                                    observed_at,
+                                    text: prompt_sections[3].clone(),
+                                }),
+                            ],
+                            context_atomic_groups: Vec::new(),
+                            compiled_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
                             tool_profile: "chat".into(),
                             tool_schema: None,
                             binding: audited.binding.clone(),
                             context_sources: json!([
                                 {"id": format!("message:{}", user_message.id), "trust": "user_instruction", "source": "conversation_user_message"},
                                 {"id": format!("voice-catalog:{model_id}"), "trust": "confirmed_fact", "source": "voice_catalog"},
-                                {"id": fragment_id, "trust": "reference", "source": "sound_recommendation_context"}
+                                {"id": candidate_ids[1], "trust": "confirmed_fact", "source": "sound_edit_context"},
+                                {"id": candidate_ids[2], "trust": "confirmed_fact", "source": "voice_model_parameters"},
+                                {"id": candidate_ids[3], "trust": "confirmed_fact", "source": "voice_catalog"}
                             ]),
                             memory_sources: json!([]),
                             parameters: json!({"max_output_tokens": 1500}),
@@ -312,12 +373,12 @@ fn alignment_text(value: &str) -> String {
         .collect()
 }
 
-fn sound_recommendation_prompt(
+fn sound_recommendation_sections(
     user_message: &str,
     sound_context: &SoundAgentContext,
     voices: &[VoiceCatalogEntry],
     model_settings: &Value,
-) -> String {
+) -> [String; 4] {
     let voices = voices
         .iter()
         .map(|voice| {
@@ -334,15 +395,23 @@ fn sound_recommendation_prompt(
         .cloned()
         .unwrap_or_else(|| json!({}));
     let output_schema = sound_recommendation_schema();
-    format!(
-            "用户要求：\n{}\n\n当前编辑上下文：\n{}\n\n模型可调参数定义：\n{}\n\n完整可用音色目录（共 {} 项）：\n{}\n\n声音建议 JSON 输出契约：\n{}\n\n只输出符合契约的 JSON object。",
-            user_message,
-            serde_json::to_string(sound_context).unwrap_or_else(|_| "{}".to_string()),
-            serde_json::to_string(&parameter_definitions).unwrap_or_else(|_| "{}".to_string()),
+    [
+        format!("用户要求：\n{user_message}\n"),
+        format!(
+            "当前编辑上下文：\n{}\n",
+            serde_json::to_string(sound_context).unwrap_or_else(|_| "{}".to_string())
+        ),
+        format!(
+            "模型可调参数定义：\n{}\n",
+            serde_json::to_string(&parameter_definitions).unwrap_or_else(|_| "{}".to_string())
+        ),
+        format!(
+            "完整可用音色目录（共 {} 项）：\n{}\n\n声音建议 JSON 输出契约：\n{}\n\n只输出符合契约的 JSON object。",
             voices.len(),
             serde_json::to_string(&voices).unwrap_or_else(|_| "[]".to_string()),
-        serde_json::to_string(&output_schema).unwrap_or_else(|_| "{}".to_string())
-    )
+            serde_json::to_string(&output_schema).unwrap_or_else(|_| "{}".to_string())
+        ),
+    ]
 }
 
 fn sound_recommendation_schema() -> Value {

@@ -430,6 +430,11 @@ fn model_resolve_error_response(error: ModelResolveError) -> (StatusCode, Json<s
             "invalid_model_config",
             "模型配置无效",
         ),
+        ModelResolveError::TokenizerProfileUnavailable(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "tokenizer_profile_unavailable",
+            "模型 Tokenizer Profile 不可用或不兼容",
+        ),
         ModelResolveError::Storage => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "model_storage_error",

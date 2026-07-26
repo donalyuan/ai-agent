@@ -62,6 +62,9 @@ pub struct AiModel {
     pub timeout_seconds: i32,
     pub reasoning_effort: Option<String>,
     pub max_output_tokens: Option<i32>,
+    pub context_window: Option<i64>,
+    pub tokenizer_profile_key: Option<String>,
+    pub tokenizer_profile_version: Option<String>,
     pub settings: Value,
     pub sort_order: i32,
     pub remark: String,
@@ -105,6 +108,9 @@ pub struct CreateAiModelInput {
     pub timeout_seconds: i32,
     pub reasoning_effort: Option<String>,
     pub max_output_tokens: Option<i32>,
+    pub context_window: Option<i64>,
+    pub tokenizer_profile_key: Option<String>,
+    pub tokenizer_profile_version: Option<String>,
     pub settings: Value,
     pub sort_order: i32,
     pub remark: String,
@@ -137,6 +143,9 @@ pub struct UpdateAiModelInput {
     pub timeout_seconds: i32,
     pub reasoning_effort: Option<String>,
     pub max_output_tokens: Option<i32>,
+    pub context_window: Option<i64>,
+    pub tokenizer_profile_key: Option<String>,
+    pub tokenizer_profile_version: Option<String>,
     pub settings: Value,
     pub sort_order: i32,
     pub remark: String,
@@ -212,6 +221,13 @@ pub trait AiModelRepository: Send + Sync {
 #[async_trait]
 impl AiModelRepository for PostgresAiModelRepository {
     async fn create(&self, input: CreateAiModelInput) -> Result<AiModel, AiModelRepositoryError> {
+        validate_context_reference(
+            input.model_type,
+            input.status,
+            input.context_window,
+            input.tokenizer_profile_key.as_deref(),
+            input.tokenizer_profile_version.as_deref(),
+        )?;
         let request_base_url =
             normalize_request_base_url(input.api_protocol, &input.request_base_url)?;
         let api_secret = if input.auth_scheme == AuthScheme::AccessKeySecret {
@@ -284,13 +300,14 @@ impl AiModelRepository for PostgresAiModelRepository {
                 display_name, model_type, provider_name, api_protocol, protocol_version,
                 auth_scheme, request_base_url, upstream_model, api_key, api_secret,
                 catalog_access_key, catalog_secret_key, voice_catalog_source_model_id,
-                timeout_seconds, reasoning_effort, max_output_tokens, settings, sort_order,
+                timeout_seconds, reasoning_effort, max_output_tokens, context_window,
+                tokenizer_profile_key, tokenizer_profile_version, settings, sort_order,
                 remark, status, is_default, source, source_key
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                 $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                $21, $22, $23
+                $21, $22, $23, $24, $25, $26
             )
             RETURNING {MODEL_COLUMNS}
             "#
@@ -311,6 +328,9 @@ impl AiModelRepository for PostgresAiModelRepository {
         .bind(input.timeout_seconds)
         .bind(normalize_optional(input.reasoning_effort))
         .bind(input.max_output_tokens)
+        .bind(input.context_window)
+        .bind(normalize_optional(input.tokenizer_profile_key))
+        .bind(normalize_optional(input.tokenizer_profile_version))
         .bind(input.settings)
         .bind(input.sort_order)
         .bind(input.remark)
@@ -398,6 +418,13 @@ impl AiModelRepository for PostgresAiModelRepository {
         if current.status == AiModelStatus::Deleted {
             return Err(AiModelRepositoryError::Disabled(id));
         }
+        validate_context_reference(
+            input.model_type,
+            current.status,
+            input.context_window,
+            input.tokenizer_profile_key.as_deref(),
+            input.tokenizer_profile_version.as_deref(),
+        )?;
         let api_key = input
             .api_key
             .as_ref()
@@ -546,10 +573,11 @@ impl AiModelRepository for PostgresAiModelRepository {
                 upstream_model = $9, api_key = $10, api_secret = $11,
                 catalog_access_key = $12, catalog_secret_key = $13,
                 voice_catalog_source_model_id = $14, timeout_seconds = $15,
-                reasoning_effort = $16, max_output_tokens = $17,
-                settings = $18, sort_order = $19, remark = $20, is_default = $21,
+                reasoning_effort = $16, max_output_tokens = $17, context_window = $18,
+                tokenizer_profile_key = $19, tokenizer_profile_version = $20,
+                settings = $21, sort_order = $22, remark = $23, is_default = $24,
                 version = version + 1
-            WHERE id = $1 AND version = $22
+            WHERE id = $1 AND version = $25
             RETURNING {MODEL_COLUMNS}
             "#
         ))
@@ -570,6 +598,9 @@ impl AiModelRepository for PostgresAiModelRepository {
         .bind(input.timeout_seconds)
         .bind(normalize_optional(input.reasoning_effort))
         .bind(input.max_output_tokens)
+        .bind(input.context_window)
+        .bind(normalize_optional(input.tokenizer_profile_key))
+        .bind(normalize_optional(input.tokenizer_profile_version))
         .bind(input.settings)
         .bind(input.sort_order)
         .bind(input.remark)
@@ -630,6 +661,15 @@ impl AiModelRepository for PostgresAiModelRepository {
         ensure_version(&current, input.version)?;
         if current.status == AiModelStatus::Deleted {
             return Err(AiModelRepositoryError::Disabled(input.id));
+        }
+        if input.status == AiModelStatus::Enabled {
+            validate_context_reference(
+                current.model_type,
+                input.status,
+                current.context_window,
+                current.tokenizer_profile_key.as_deref(),
+                current.tokenizer_profile_version.as_deref(),
+            )?;
         }
         lock_model_scope(&mut transaction, current.model_type, current.api_protocol).await?;
         if input.status == AiModelStatus::Disabled {
@@ -790,6 +830,9 @@ impl AiModelRepository for PostgresAiModelRepository {
                 reasoning_effort: model.reasoning_effort,
                 timeout_seconds: model.timeout_seconds as u64,
                 max_output_tokens: model.max_output_tokens.map(|value| value as u32),
+                context_window: model.context_window.map(|value| value as u64),
+                tokenizer_profile_key: model.tokenizer_profile_key,
+                tokenizer_profile_version: model.tokenizer_profile_version,
                 settings: model.settings,
             },
             auth_scheme: model.auth_scheme,
@@ -821,7 +864,8 @@ const MODEL_COLUMNS: &str = r#"
     id, display_name, model_type, provider_name, api_protocol, protocol_version,
     auth_scheme, request_base_url, upstream_model, api_key, api_secret,
     catalog_access_key, catalog_secret_key, voice_catalog_source_model_id,
-    timeout_seconds, reasoning_effort, max_output_tokens, settings, sort_order, remark, status, is_default,
+    timeout_seconds, reasoning_effort, max_output_tokens, context_window,
+    tokenizer_profile_key, tokenizer_profile_version, settings, sort_order, remark, status, is_default,
     last_call_status, last_call_at, last_error_summary, source, source_key,
     version, deleted_at, created_at, updated_at
 "#;
@@ -850,6 +894,67 @@ struct ModelConfiguration<'a> {
     reasoning_effort: Option<&'a str>,
     max_output_tokens: Option<i32>,
     settings: &'a Value,
+}
+
+fn validate_context_reference(
+    model_type: ModelType,
+    status: AiModelStatus,
+    context_window: Option<i64>,
+    profile_key: Option<&str>,
+    profile_version: Option<&str>,
+) -> Result<(), AiModelRepositoryError> {
+    let key = profile_key.map(str::trim).filter(|value| !value.is_empty());
+    let version = profile_version
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let all_empty = context_window.is_none() && key.is_none() && version.is_none();
+    let complete = context_window.is_some() && key.is_some() && version.is_some();
+    if !all_empty && !complete {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "context_window and tokenizer profile key/version must be configured together"
+                .to_string(),
+        ));
+    }
+    if model_type != ModelType::Text && !all_empty {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "governed context fields are only valid for text models".to_string(),
+        ));
+    }
+    if model_type == ModelType::Text && status == AiModelStatus::Enabled && !complete {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "enabled text model requires explicit context_window and tokenizer profile".to_string(),
+        ));
+    }
+    if context_window.is_some_and(|value| !(1..=2_147_483_647).contains(&value)) {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "context_window must be between 1 and 2147483647".to_string(),
+        ));
+    }
+    if let Some(key) = key {
+        let valid = key.len() <= 128
+            && key.bytes().enumerate().all(|(index, byte)| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || (index > 0 && matches!(byte, b'.' | b'_' | b'-'))
+            });
+        if !valid {
+            return Err(AiModelRepositoryError::InvalidConfig(
+                "tokenizer_profile_key format is invalid".to_string(),
+            ));
+        }
+    }
+    if version.is_some_and(|value| {
+        let parts = value.split('.').collect::<Vec<_>>();
+        parts.len() != 3
+            || parts
+                .iter()
+                .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    }) {
+        return Err(AiModelRepositoryError::InvalidConfig(
+            "tokenizer_profile_version must be a numeric semantic version".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_configuration(config: ModelConfiguration<'_>) -> Result<(), AiModelRepositoryError> {
@@ -1320,6 +1425,9 @@ fn model_from_row(row: sqlx::postgres::PgRow) -> Result<AiModel, AiModelReposito
         timeout_seconds: row.get("timeout_seconds"),
         reasoning_effort: row.get("reasoning_effort"),
         max_output_tokens: row.get("max_output_tokens"),
+        context_window: row.get("context_window"),
+        tokenizer_profile_key: row.get("tokenizer_profile_key"),
+        tokenizer_profile_version: row.get("tokenizer_profile_version"),
         settings: row.get("settings"),
         sort_order: row.get("sort_order"),
         remark: row.get("remark"),

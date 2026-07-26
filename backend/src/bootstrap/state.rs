@@ -20,12 +20,12 @@ use crate::model_routing::{
     ModelClientResolver, PostgresModelClientResolver, StaticModelClientResolver,
 };
 use crate::repositories::{
-    PostgresAiModelRepository, PostgresAssetGenerationRepository, PostgresConversationRepository,
-    PostgresMaterialRepository, PostgresModelCallRepository, PostgresProjectRepository,
-    PostgresPublicationRepository, PostgresScriptRepository, PostgresSoundSubtitleRepository,
-    PostgresTopicRepository, PostgresTosStagingToolRepository, PostgresVoiceCatalogRepository,
-    PostgresWorkGenerationRepository, PostgresWorkLibraryRepository,
-    PostgresWorkspaceMenuRepository,
+    PostgresAiModelRepository, PostgresAssetGenerationRepository, PostgresContextAuditRepository,
+    PostgresConversationRepository, PostgresMaterialRepository, PostgresModelCallRepository,
+    PostgresProjectRepository, PostgresPublicationRepository, PostgresScriptRepository,
+    PostgresSoundSubtitleRepository, PostgresTopicRepository, PostgresTosStagingToolRepository,
+    PostgresVoiceCatalogRepository, PostgresWorkGenerationRepository,
+    PostgresWorkLibraryRepository, PostgresWorkspaceMenuRepository,
 };
 use sqlx::PgPool;
 use std::{fmt, sync::Arc};
@@ -86,6 +86,12 @@ impl AppState {
         Ok(PostgresModelCallRepository::new(self.database_pool()?))
     }
 
+    pub(crate) fn context_audit_repository(
+        &self,
+    ) -> Result<PostgresContextAuditRepository, AppStateError> {
+        Ok(PostgresContextAuditRepository::new(self.database_pool()?))
+    }
+
     fn audited_model_executor(
         &self,
         pool: PgPool,
@@ -96,6 +102,7 @@ impl AppState {
             self.definition_registry()?,
             bound_resolver,
             Arc::new(PostgresModelCallRepository::new(pool)),
+            Arc::new(PostgresContextAuditRepository::new(self.database_pool()?)),
         )))
     }
 
@@ -202,7 +209,10 @@ impl AppState {
     }
 
     pub(crate) fn ai_model_service(&self) -> Result<AiModelService, AppStateError> {
-        Ok(AiModelService::new(self.ai_model_repository()?))
+        Ok(AiModelService::new(
+            self.ai_model_repository()?,
+            self.definition_registry()?,
+        ))
     }
 
     pub(crate) fn voice_catalog_service(&self) -> Result<VoiceCatalogService, AppStateError> {
@@ -263,6 +273,9 @@ impl AppState {
         self.model_client_resolver.clone().unwrap_or_else(|| {
             Arc::new(PostgresModelClientResolver::new(
                 PostgresAiModelRepository::new(pool),
+                self.definition_registry
+                    .clone()
+                    .expect("production state has definition registry"),
             ))
         })
     }

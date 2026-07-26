@@ -1,8 +1,7 @@
 //! 评审完整主题组并保存快照；评审结果只辅助决策，不改变选题生命周期状态。
 
 use super::{
-    format_account_strategy_context, record_step, truncate_for_prompt, AgentRuntimeError,
-    TopicAgentAdapter,
+    prompt::account_strategy_context_fields, record_step, AgentRuntimeError, TopicAgentAdapter,
 };
 use crate::application::agents::kernel::run_lifecycle_error;
 use crate::domain::conversation::{
@@ -13,14 +12,16 @@ use crate::domain::topic::{
     TopicReviewSnapshotStatus,
 };
 use crate::repositories::{
-    CreateTopicReviewSnapshotInput, PostgresConversationRepository, TopicRepository,
+    CreateTopicReviewSnapshotInput, PostgresConversationRepository, Project, TopicRepository,
     TopicRepositoryError,
 };
+use chrono::Utc;
 use novex_agent::{
-    AuditedCallOwner, AuditedExecutionBinding, AuditedModelError, AuditedModelRequest,
-    RunLifecycleCoordinator, RunRecorder, StartRun, StepRecorder,
+    text_context_candidate, AuditedCallOwner, AuditedExecutionBinding, AuditedModelError,
+    AuditedModelRequest, RunLifecycleCoordinator, RunRecorder, StartRun, StepRecorder,
+    TextContextCandidateInput,
 };
-use novex_ai_core::{AgentKey, DynamicFragment, PromptCompileInput, TrustLevel};
+use novex_ai_core::{AgentKey, ContextCandidate, ContextPriority, TrustLevel};
 use novex_model::ModelExecutionSnapshot;
 use serde::Deserialize;
 use serde_json::json;
@@ -63,7 +64,6 @@ impl TopicAgentAdapter {
                 "主题组没有可评审选题".to_string(),
             ));
         }
-        let account_strategy_context = format_account_strategy_context(&project);
         let model_id = model_execution.model_id;
         let model_snapshot = serde_json::to_value(model_execution)
             .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
@@ -93,7 +93,7 @@ impl TopicAgentAdapter {
                         .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
                     self.review_topic_group_with_run(
                         topic_repository.as_ref(),
-                        &account_strategy_context,
+                        &project,
                         &root_batch,
                         &topics,
                         run_id,
@@ -113,7 +113,7 @@ impl TopicAgentAdapter {
     async fn review_topic_group_with_run(
         &self,
         topic_repository: &dyn TopicRepository,
-        account_strategy_context: &str,
+        project: &Project,
         root_batch: &TopicGenerationBatch,
         topics: &[ContentTopic],
         run_id: Uuid,
@@ -134,47 +134,36 @@ impl TopicAgentAdapter {
         )
         .await?;
 
-        let prompt = build_topic_group_review_prompt(account_strategy_context, root_batch, topics);
-        let fragment_id = format!("topic-group:{}:review", root_batch.id);
+        let compiled_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let context = build_topic_group_review_context(project, root_batch, topics, &compiled_at);
         let reviewed = audited
             .executor
             .execute_parsed(
-                        AuditedModelRequest {
-                            owner: AuditedCallOwner::AgentRun(run_id),
-                            step_id: None,
-                            root_call_id: None,
-                            parent_call_id: None,
-                            attempt: 1,
-                            agent_key: audited.agent_key.clone(),
-                            agent_version: audited.agent_version.clone(),
-                            node_key: "topic.group_review".into(),
-                            compile_input: PromptCompileInput {
-                                schema_version: "1".into(),
-                                variables: BTreeMap::new(),
-                                fragments: vec![DynamicFragment {
-                                    id: fragment_id.clone(),
-                                    trust: TrustLevel::Candidate,
-                                    source: "topic_group_review_context".into(),
-                                    content: Some(prompt),
-                                    asset: None,
-                                }],
-                            },
-                            tool_profile: "chat".into(),
-                            tool_schema: None,
-                            binding: audited.binding.clone(),
-                            context_sources: json!([
-                                {"id": format!("project:{}:account-strategy", root_batch.project_id), "trust": "confirmed_fact", "source": "project_account_strategy"},
-                                {"id": format!("topic-batch:{}:group", root_batch.id), "trust": "candidate", "source": "topic_batch_group"},
-                                {"id": fragment_id, "trust": "candidate", "source": "topic_group_review_context"}
-                            ]),
-                            memory_sources: json!([]),
-                            parameters: json!({"max_output_tokens": 2000}),
-                            asset_references: json!([]),
-                        },
-                        |raw| {
-                            TopicReviewLlmOutput::parse_and_validate(raw, topics)
-                                .map_err(|error| error.to_string())
-                        },
+                AuditedModelRequest {
+                    owner: AuditedCallOwner::AgentRun(run_id),
+                    step_id: None,
+                    root_call_id: None,
+                    parent_call_id: None,
+                    attempt: 1,
+                    agent_key: audited.agent_key.clone(),
+                    agent_version: audited.agent_version.clone(),
+                    node_key: "topic.group_review".into(),
+                    variables: BTreeMap::new(),
+                    context_candidates: context.candidates,
+                    context_atomic_groups: Vec::new(),
+                    compiled_at,
+                    tool_profile: "chat".into(),
+                    tool_schema: None,
+                    binding: audited.binding.clone(),
+                    context_sources: serde_json::Value::Array(context.sources),
+                    memory_sources: json!([]),
+                    parameters: json!({"max_output_tokens": 2000}),
+                    asset_references: json!([]),
+                },
+                |raw| {
+                    TopicReviewLlmOutput::parse_and_validate(raw, topics)
+                        .map_err(|error| error.to_string())
+                },
             )
             .await
             .map(|response| (response.output, response.model_call_id))
@@ -391,86 +380,151 @@ impl fmt::Display for TopicReviewError {
 
 impl std::error::Error for TopicReviewError {}
 
-fn build_topic_group_review_prompt(
-    account_strategy_context: &str,
-    root_batch: &TopicGenerationBatch,
-    topics: &[ContentTopic],
-) -> String {
-    format!(
-        r#"请评审当前主题组内的候选选题，帮助运营人员快速筛选优先推荐、可备选、建议淘汰和疑似重复项。
-
-评审只作为决策辅助，不允许自动确认、归档、删除选题或生成脚本。
-
-账号策略资料：
-{account_strategy_context}
-
-原始生成要求：{original_prompt}
-
-当前主题组选题：
-{topic_context}
-
-输出要求：
-1. 必须只输出一个 JSON 对象。
-2. review_summary 用一句中文总结本主题组的筛选建议。
-3. topic_reviews 必须覆盖当前主题组全部选题。
-4. priority 只能是 priority、backup、reject。
-5. risk_flags 只能使用 too_generic、duplicate、hard_to_script、off_positioning、compliance_risk。
-6. similar_topic_ids 只能引用当前主题组内的 topic_id。
-
-JSON Schema：
-{{
-  "review_summary": "本主题组更适合优先制作工具落地和真实案例方向。",
-  "topic_reviews": [
-    {{
-      "topic_id": "uuid",
-      "priority": "priority",
-      "reason": "账号匹配度高，脚本化路径清晰。",
-      "risk_flags": ["duplicate"],
-      "similar_topic_ids": ["uuid"]
-    }}
-  ]
-}}"#,
-        account_strategy_context = account_strategy_context,
-        original_prompt = truncate_for_prompt(&root_batch.prompt, 500),
-        topic_context = format_topic_group_review_topic_context(root_batch, topics)
-    )
+#[derive(Default)]
+struct TopicReviewContext {
+    candidates: Vec<ContextCandidate>,
+    sources: Vec<serde_json::Value>,
 }
 
-fn format_topic_group_review_topic_context(
+#[allow(clippy::too_many_arguments)]
+fn push_topic_review_context(
+    context: &mut TopicReviewContext,
+    candidate_id: String,
+    source_kind: &str,
+    source_id: String,
+    source_version: String,
+    trust: TrustLevel,
+    priority: ContextPriority,
+    required: bool,
+    compiled_at: &str,
+    content: String,
+) {
+    context.sources.push(json!({
+        "id": candidate_id,
+        "trust": trust,
+        "source": source_kind,
+    }));
+    context
+        .candidates
+        .push(text_context_candidate(TextContextCandidateInput {
+            candidate_id,
+            source_kind: source_kind.into(),
+            source_id,
+            source_version,
+            trust,
+            priority,
+            required,
+            render_order: context.candidates.len() as u32,
+            observed_at: compiled_at.into(),
+            text: content,
+        }));
+}
+
+fn build_topic_group_review_context(
+    project: &Project,
     root_batch: &TopicGenerationBatch,
     topics: &[ContentTopic],
-) -> String {
-    topics
-        .iter()
-        .enumerate()
-        .map(|(index, topic)| {
-            let source = if topic.batch_id == Some(root_batch.id) {
-                "原始生成"
-            } else {
-                "补充生成"
-            };
-            let tags = if topic.tags.is_empty() {
-                "无".to_string()
-            } else {
-                topic.tags.join("、")
-            };
+    compiled_at: &str,
+) -> TopicReviewContext {
+    let mut context = TopicReviewContext::default();
+    let root_version = root_batch
+        .updated_at
+        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    push_topic_review_context(
+        &mut context,
+        format!("topic-group:{}:header", root_batch.id),
+        "topic_batch",
+        root_batch.id.to_string(),
+        root_version.clone(),
+        TrustLevel::Reference,
+        ContextPriority::P1,
+        true,
+        compiled_at,
+        "请评审当前主题组内的候选选题，帮助运营人员快速筛选优先推荐、可备选、建议淘汰和疑似重复项。\n\n评审只作为决策辅助，不允许自动确认、归档、删除选题或生成脚本。\n\n账号策略资料：".to_string(),
+    );
+    let project_version = project
+        .updated_at
+        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    for field in account_strategy_context_fields(project) {
+        push_topic_review_context(
+            &mut context,
+            format!("project:{}:account-strategy:{}", project.id, field.key),
+            "account_strategy",
+            format!("{}:{}", project.id, field.key),
+            project_version.clone(),
+            TrustLevel::ConfirmedFact,
+            ContextPriority::P1,
+            true,
+            compiled_at,
+            field.rendered,
+        );
+    }
+    push_topic_review_context(
+        &mut context,
+        format!("topic-group:{}:original-request", root_batch.id),
+        "topic_batch",
+        root_batch.id.to_string(),
+        root_version,
+        TrustLevel::ConfirmedFact,
+        ContextPriority::P1,
+        true,
+        compiled_at,
+        format!(
+            "\n原始生成要求：{}\n\n当前主题组选题：",
+            root_batch.prompt.trim()
+        ),
+    );
+    for (index, topic) in topics.iter().enumerate() {
+        let source = if topic.batch_id == Some(root_batch.id) {
+            "原始生成"
+        } else {
+            "补充生成"
+        };
+        push_topic_review_context(
+            &mut context,
+            format!("topic:{}:group-review", topic.id),
+            "existing_topic",
+            topic.id.to_string(),
+            topic
+                .updated_at
+                .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            TrustLevel::ConfirmedFact,
+            ContextPriority::P1,
+            true,
+            compiled_at,
             format!(
                 "{}. [{}] topic_id={}；标题：{}；角度：{}；评分：{}；状态：{}；标签：{}",
                 index + 1,
                 source,
                 topic.id,
-                truncate_for_prompt(&topic.title, 120),
-                truncate_for_prompt(&topic.angle, 180),
+                topic.title.trim(),
+                topic.angle.trim(),
                 topic
                     .score
                     .map(|score| score.to_string())
                     .unwrap_or_else(|| "无".to_string()),
                 topic.status.as_str(),
-                truncate_for_prompt(&tags, 160)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+                if topic.tags.is_empty() {
+                    "无".to_string()
+                } else {
+                    topic.tags.join("、")
+                }
+            ),
+        );
+    }
+    push_topic_review_context(
+        &mut context,
+        format!("topic-group:{}:output-contract", root_batch.id),
+        "user_instruction",
+        root_batch.id.to_string(),
+        compiled_at.to_string(),
+        TrustLevel::UserInstruction,
+        ContextPriority::P0,
+        true,
+        compiled_at,
+        "\n输出要求：\n1. 必须只输出一个 JSON 对象。\n2. review_summary 用一句中文总结本主题组的筛选建议。\n3. topic_reviews 必须覆盖当前主题组全部选题。\n4. priority 只能是 priority、backup、reject。\n5. risk_flags 只能使用 too_generic、duplicate、hard_to_script、off_positioning、compliance_risk。\n6. similar_topic_ids 只能引用当前主题组内的 topic_id。\n\nJSON Schema：\n{\n  \"review_summary\": \"本主题组更适合优先制作工具落地和真实案例方向。\",\n  \"topic_reviews\": [\n    {\n      \"topic_id\": \"uuid\",\n      \"priority\": \"priority\",\n      \"reason\": \"账号匹配度高，脚本化路径清晰。\",\n      \"risk_flags\": [\"duplicate\"],\n      \"similar_topic_ids\": [\"uuid\"]\n    }\n  ]\n}".to_string(),
+    );
+    context
 }
 
 fn extract_topic_review_json_object(raw: &str) -> Result<&str, TopicReviewError> {

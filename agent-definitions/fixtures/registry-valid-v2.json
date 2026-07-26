@@ -1,0 +1,28 @@
+{
+  "schema_version": "2",
+  "agents": [{
+    "agent_key": "fixture.agent", "version": "2.0.0", "status": "active", "executor_owner": "rust",
+    "role": "fixture", "goals": ["validate"], "constraints": [],
+    "model_requirements": { "text": true, "tool_calling": false, "structured_output": false, "vision": false, "reasoning": false, "min_context_window": 1024 },
+    "tool_profiles": ["chat"], "tools": [],
+    "nodes": { "fixture.node": { "key": "fixture.prompt", "version": "1.0.0", "context_policy": { "key": "fixture.policy", "version": "1.0.0" } } }
+  }],
+  "prompts": [{
+    "prompt_key": "fixture.prompt", "version": "1.0.0", "status": "active", "executor_owner": "rust",
+    "system_template": "templates/fixture.system.txt", "user_template": "templates/fixture.user.txt",
+    "variables": [{ "name": "fragments", "value_type": "fragments", "required": true, "trust": "user_instruction", "max_bytes": 4096 }],
+    "output_schema": null, "tool_profile": "chat", "max_output_tokens": 128
+  }],
+  "context_policies": [{
+    "policy_key": "fixture.policy", "version": "1.0.0", "status": "active", "executor_owners": ["rust"],
+    "allowed_sources": ["user_instruction"], "required_sources": ["user_instruction"],
+    "stable_sort": ["priority", "source_kind", "source_id", "source_version", "candidate_id"]
+  }],
+  "tokenizer_profiles": [{
+    "profile_key": "fixture.profile", "version": "1.0.0", "status": "active", "implementation_version": "utf8-byte-upper-bound@1",
+    "mode": { "mode": "conservative", "algorithm": "utf8-byte-upper-bound@1" },
+    "applicable_protocols": ["openai_responses"], "applicable_model_families": ["fixture"],
+    "framing": { "per_message_tokens": 3, "per_tool_tokens": 4, "request_tokens": 3, "reply_priming_tokens": 3 },
+    "safety_reserve_tokens": 16
+  }]
+}

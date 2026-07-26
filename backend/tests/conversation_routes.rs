@@ -593,7 +593,7 @@ async fn conversation_routes_create_unbound_script_generation_conversation() {
     .await
     .unwrap();
     assert_eq!(definition_binding.0, "video.script");
-    assert_eq!(definition_binding.1, "1.0.0");
+    assert_eq!(definition_binding.1, "2.0.0");
     assert_eq!(definition_binding.2, None);
     assert_eq!(definition_binding.3, "definition_bound");
 
@@ -765,24 +765,24 @@ async fn topic_conversation_audits_normal_and_supplement_generation_context() {
     assert!(calls
         .iter()
         .all(|call| call.2.as_deref() == Some("succeeded")));
-    assert!(calls.iter().all(|call| call.3 == "1.0.0"));
+    assert!(calls.iter().all(|call| call.3 == "2.0.0"));
     assert_eq!(calls[0].5, "generate_topics");
     assert_eq!(calls[1].5, "evaluate_topic_quality");
     assert_eq!(calls[2].5, "generate_topics");
     assert_eq!(calls[3].5, "evaluate_topic_quality");
-    assert_eq!(calls[0].4[1]["source"], "project_account_strategy");
+    assert_eq!(calls[0].4[1]["source"], "account_strategy");
     assert!(calls[2]
         .4
         .as_array()
         .unwrap()
         .iter()
-        .any(|source| source["source"] == "topic_batch_group"));
+        .any(|source| source["source"] == "topic_batch"));
     assert!(calls[2]
         .4
         .as_array()
         .unwrap()
         .iter()
-        .any(|source| source["source"] == "conversation_history"));
+        .any(|source| source["source"] == "conversation_entry"));
     assert_eq!(openai_requests.lock().unwrap().len(), 4);
 
     test_pool.close().await;
@@ -989,9 +989,9 @@ async fn conversation_routes_create_send_and_list_messages() {
     assert_eq!(call.2.as_deref(), Some("succeeded"));
     assert!(call.3.is_some());
     assert_eq!(call.4["agent_key"], "video.script");
-    assert_eq!(call.4["agent_version"], "1.0.0");
+    assert_eq!(call.4["agent_version"], "2.0.0");
     assert_eq!(call.4["node_key"], "script.scene_patch");
-    assert_eq!(call.5[0]["source"], "conversation_script_scene_patch");
+    assert_eq!(call.5[0]["source"], "current_script");
 
     let list_response = app
         .clone()
@@ -1156,7 +1156,7 @@ async fn conversation_script_generation_audits_intent_and_complete_calls_with_fi
         .all(|call| call.2.as_deref() == Some("succeeded")));
     assert!(calls
         .iter()
-        .all(|call| call.3 == "video.script" && call.4 == "1.0.0"));
+        .all(|call| call.3 == "video.script" && call.4 == "2.0.0"));
     assert_eq!(calls[0].6, "parse_generation_intent");
     assert_eq!(calls[1].6, "generate_script");
 
@@ -1173,7 +1173,7 @@ async fn conversation_script_generation_audits_intent_and_complete_calls_with_fi
     .unwrap();
     assert_eq!(model_binding.0, model_id);
     assert_eq!(model_binding.2, "video.script");
-    assert_eq!(model_binding.3, "1.0.0");
+    assert_eq!(model_binding.3, "2.0.0");
     assert_eq!(model_binding.1.len(), 64);
     assert_eq!(openai_requests.lock().unwrap().len(), 2);
 
@@ -1520,7 +1520,7 @@ async fn work_patch_is_audited_and_keeps_confirmation_gate() {
     assert_eq!(call.2.as_deref(), Some("succeeded"));
     assert_eq!(call.3["agent_key"], "video.work");
     assert_eq!(call.3["prompt_key"], "work.patch");
-    assert_eq!(call.3["prompt_version"], "1.0.0");
+    assert_eq!(call.3["prompt_version"], "2.0.0");
     assert!(call.3["output_schema"].is_null());
     assert!(call
         .4
@@ -1696,12 +1696,26 @@ async fn sound_agent_recommends_only_catalog_voice_and_never_executes_speech_too
     .await
     .unwrap();
     assert_eq!(step_types, vec!["read_voice_catalog", "recommend_sound"]);
-    let sound_call = sqlx::query_as::<_, (String, String, Option<String>, Value, Value, String)>(
+    let sound_call = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<String>,
+            Value,
+            Value,
+            String,
+            Value,
+            Value,
+        ),
+    >(
         r#"
         SELECT mc.node_key, mc.status, mc.structured_parse_status,
-               mc.prompt_snapshot, mc.context_sources, steps.step_type
+               mc.prompt_snapshot, mc.context_sources, steps.step_type,
+               cs.decisions, cs.selected_order
         FROM model_calls mc
         JOIN agent_steps steps ON steps.id = mc.agent_step_id
+        JOIN context_snapshots cs ON cs.id = mc.context_snapshot_id
         WHERE mc.agent_run_id = $1
         "#,
     )
@@ -1713,7 +1727,7 @@ async fn sound_agent_recommends_only_catalog_voice_and_never_executes_speech_too
     assert_eq!(sound_call.1, "succeeded");
     assert_eq!(sound_call.2.as_deref(), Some("succeeded"));
     assert_eq!(sound_call.3["agent_key"], "video.sound");
-    assert_eq!(sound_call.3["prompt_version"], "1.0.0");
+    assert_eq!(sound_call.3["prompt_version"], "2.0.0");
     assert!(sound_call
         .4
         .as_array()
@@ -1721,6 +1735,19 @@ async fn sound_agent_recommends_only_catalog_voice_and_never_executes_speech_too
         .iter()
         .any(|source| source["source"] == "voice_catalog"));
     assert_eq!(sound_call.5, "recommend_sound");
+    let selected = sound_call
+        .6
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|decision| decision["decision"] == "selected")
+        .collect::<Vec<_>>();
+    for source_kind in ["conversation_entry", "current_work", "voice_catalog"] {
+        assert!(selected
+            .iter()
+            .any(|decision| decision["source_kind"] == source_kind));
+    }
+    assert_eq!(sound_call.7.as_array().unwrap().len(), 4);
     let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sound_subtitle_tasks")
         .fetch_one(&test_pool)
         .await

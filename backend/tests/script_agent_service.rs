@@ -244,10 +244,13 @@ impl ScriptModelExecutor for ScriptedLLMClient {
         &self,
         call: ScriptModelCall,
     ) -> Result<ScriptModelResponse, ScriptModelExecutionError> {
-        self.prompts
-            .lock()
-            .unwrap()
-            .push(call.content().to_string());
+        self.prompts.lock().unwrap().push(
+            call.context_fragments()
+                .iter()
+                .map(|fragment| fragment.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
         match self
             .responses
             .lock()

@@ -6,6 +6,7 @@ import { publicError, RuntimeError } from "../src/errors.js";
 import { createPiModelRuntime, ModelConfigRepository } from "../src/models.js";
 import { MODEL_CALL_SCHEMA_VERSION, REDACTED, redactForAudit, redactUnknown, safeJson } from "../src/redaction.js";
 import { toolsForProfile } from "../src/coordinator.js";
+import type { DefinitionRegistry } from "../src/definitions.js";
 
 function row(protocol: string) {
   return {
@@ -19,13 +20,21 @@ function row(protocol: string) {
     timeout_seconds: 12,
     reasoning_effort: "low",
     max_output_tokens: 2048,
-    settings: { context_window: 64000 },
+    context_window: 64000,
+    tokenizer_profile_key: "openai.o200k",
+    tokenizer_profile_version: "1.0.0",
+    settings: {},
   };
 }
 
 function repositoryWithRows(rows: Record<string, unknown>[]): ModelConfigRepository {
   const pool = { query: async () => ({ rows }) } as unknown as Pool;
-  return new ModelConfigRepository(pool);
+  return new ModelConfigRepository(pool, {
+    tokenizer_profiles: [{
+      profile_key: "openai.o200k", version: "1.0.0", status: "active",
+      applicable_protocols: ["openai_responses", "openai_chat_completions"],
+    }],
+  } as unknown as DefinitionRegistry);
 }
 
 describe("model routing and safety", () => {

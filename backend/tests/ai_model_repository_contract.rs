@@ -1,3 +1,5 @@
+use novex_ai_core::DefinitionRegistry;
+use novex_api::application::ai_models::AiModelService;
 use novex_api::repositories::{
     AiModelListFilter, AiModelRepository, AiModelRepositoryError, AiModelStatus,
     ChangeAiModelStatusInput, CreateAiModelInput, DeleteAiModelInput, DeleteAiModelOutcome,
@@ -6,6 +8,8 @@ use novex_api::repositories::{
 use novex_model::{ApiProtocol, AuthScheme, ModelType};
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
+use std::path::PathBuf;
+use std::sync::Arc;
 use uuid::Uuid;
 
 mod support;
@@ -16,6 +20,15 @@ fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
         "postgres://postgres:postgres@biga-postgres:5432/video_agent".to_string()
     })
+}
+
+fn definition_registry() -> Arc<DefinitionRegistry> {
+    Arc::new(
+        DefinitionRegistry::load(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../agent-definitions"),
+        )
+        .unwrap(),
+    )
 }
 
 fn with_database_name(database_url: &str, database_name: &str) -> String {
@@ -87,7 +100,10 @@ fn text_model(name: &str) -> CreateAiModelInput {
         timeout_seconds: 120,
         reasoning_effort: Some("high".to_string()),
         max_output_tokens: Some(4096),
-        settings: json!({"context_window": 128000}),
+        context_window: Some(128000),
+        tokenizer_profile_key: Some("openai.o200k".to_string()),
+        tokenizer_profile_version: Some("1.0.0".to_string()),
+        settings: json!({}),
         sort_order: 10,
         remark: String::new(),
         status: AiModelStatus::Enabled,
@@ -114,6 +130,9 @@ fn image_model(name: &str) -> CreateAiModelInput {
         timeout_seconds: 180,
         reasoning_effort: None,
         max_output_tokens: None,
+        context_window: None,
+        tokenizer_profile_key: None,
+        tokenizer_profile_version: None,
         settings: json!({
             "supported_sizes": ["1024x1024"],
             "default_size": "1024x1024",
@@ -146,12 +165,56 @@ fn update_from(model: &novex_api::repositories::AiModel) -> UpdateAiModelInput {
         timeout_seconds: model.timeout_seconds,
         reasoning_effort: model.reasoning_effort.clone(),
         max_output_tokens: model.max_output_tokens,
+        context_window: model.context_window,
+        tokenizer_profile_key: model.tokenizer_profile_key.clone(),
+        tokenizer_profile_version: model.tokenizer_profile_version.clone(),
         settings: model.settings.clone(),
         sort_order: model.sort_order,
         remark: model.remark.clone(),
         replacement_model_id: None,
         allow_no_default: false,
     }
+}
+
+#[tokio::test]
+async fn governed_context_fields_are_required_only_for_enabled_text_models() {
+    let (admin_pool, pool, database_name) = migrated_pool().await;
+    let repository = PostgresAiModelRepository::new(pool.clone());
+
+    let mut missing = text_model("Missing Context");
+    missing.context_window = None;
+    missing.tokenizer_profile_key = None;
+    missing.tokenizer_profile_version = None;
+    assert!(matches!(
+        repository.create(missing.clone()).await,
+        Err(AiModelRepositoryError::InvalidConfig(_))
+    ));
+
+    missing.status = AiModelStatus::Disabled;
+    let historical = repository.create(missing).await.unwrap();
+    assert_eq!(historical.context_window, None);
+
+    let mut unknown = text_model("Unknown Profile");
+    unknown.tokenizer_profile_key = Some("unknown.profile".to_string());
+    assert!(matches!(
+        AiModelService::new(repository.clone(), definition_registry())
+            .create(unknown, false)
+            .await,
+        Err(novex_api::application::ai_models::AiModelApplicationError::InvalidConfig(_))
+    ));
+
+    let mut image = image_model("Image With Context");
+    image.context_window = Some(128000);
+    image.tokenizer_profile_key = Some("openai.o200k".to_string());
+    image.tokenizer_profile_version = Some("1.0.0".to_string());
+    assert!(matches!(
+        repository.create(image).await,
+        Err(AiModelRepositoryError::InvalidConfig(_))
+    ));
+
+    pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
 }
 
 #[tokio::test]
@@ -167,6 +230,9 @@ async fn changing_model_type_reconciles_old_and_new_type_defaults() {
     update.api_protocol = ApiProtocol::OpenAiImages;
     update.reasoning_effort = None;
     update.max_output_tokens = None;
+    update.context_window = None;
+    update.tokenizer_profile_key = None;
+    update.tokenizer_profile_version = None;
     update.settings = json!({
         "supported_sizes": ["1024x1024"],
         "default_size": "1024x1024",

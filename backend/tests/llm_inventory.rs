@@ -111,6 +111,19 @@ fn production_model_calls_are_restricted_to_provider_and_audited_executor() {
             "生产 Adapter 不得获得裸模型客户端: {}",
             path.display()
         );
+        for forbidden_context_path in [
+            "PromptCompileInput",
+            "DynamicFragment",
+            "truncate_for_prompt",
+            "generation_prompt",
+            "context_blob",
+        ] {
+            assert!(
+                !source.contains(forbidden_context_path),
+                "生产 Adapter 不得保留旧 Context 装配入口 {forbidden_context_path}: {}",
+                path.display()
+            );
+        }
     }
 
     let kernel_source = std::fs::read_to_string(workspace.join("crates/novex-agent/src/lib.rs"))
@@ -163,6 +176,7 @@ fn production_model_calls_are_restricted_to_provider_and_audited_executor() {
     }
     assert!(backend_text.contains("AuditedModelRequest"));
     assert!(backend_text.contains("FixedModelBinding"));
+    assert!(backend_text.contains("context_candidates"));
 }
 
 #[test]
@@ -302,10 +316,11 @@ fn baseline_fixtures_cover_golden_contract_and_zero_external_effects() {
         .map(|node| node["node_key"].as_str().unwrap().to_string())
         .collect::<BTreeSet<_>>();
     assert_eq!(golden_pi_nodes, personal.nodes.keys().cloned().collect());
-    assert!(personal
-        .nodes
-        .values()
-        .all(|reference| { reference.key == "personal.general" && reference.version == "1.0.0" }));
+    assert!(personal.nodes.values().all(|reference| {
+        reference.key == "personal.general"
+            && reference.version == "2.0.0"
+            && reference.context_policy.is_some()
+    }));
 
     let safety: Value = serde_json::from_str(include_str!("fixtures/model_call_safety.json"))
         .expect("safety fixture must be valid JSON");

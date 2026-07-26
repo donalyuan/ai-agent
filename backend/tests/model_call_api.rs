@@ -297,6 +297,10 @@ async fn rust_dry_run_replay_recompiles_without_model_tool_run_or_domain_writes(
         contract_fields(&contract(), "replay_fields")
     );
     assert_eq!(replay["definition_resolved"], true);
+    assert_eq!(
+        replay["validation_order"],
+        json!(["context", "prompt", "model_call"])
+    );
     assert_eq!(replay["compile_succeeded"], true);
     assert!(replay["diff"].as_array().is_some_and(|diff| diff
         .iter()

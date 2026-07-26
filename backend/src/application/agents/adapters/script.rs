@@ -1,14 +1,18 @@
 //! 处理脚本首次生成与已有脚本分镜修改，保持会话绑定和 step 记录语义一致。
 
 use super::{record_step, AgentRuntimeError, ScriptAgentAdapter};
+use crate::agents::llm::ScriptContextFragment;
 use crate::agents::{AuditedScriptModelExecutor, ScriptAgentService};
-use crate::domain::conversation::{BindAgentConversationSubjectInput, CreateAgentStepInput};
-use crate::domain::script::{Scene, Script, ScriptGenerationInput, ScriptStyle};
-use novex_agent::{
-    AgentOutcome, AgentSession, AuditedCallOwner, AuditedModelRequest, ModelExecutionRef,
-    StepRecorder, StoredMessage,
+use crate::domain::conversation::{
+    AgentMessage, AgentMessageRole, BindAgentConversationSubjectInput, CreateAgentStepInput,
 };
-use novex_ai_core::{DynamicFragment, PromptCompileInput, TrustLevel};
+use crate::domain::script::{Scene, Script, ScriptGenerationInput, ScriptStyle};
+use chrono::Utc;
+use novex_agent::{
+    text_context_candidate, AgentOutcome, AgentSession, AuditedCallOwner, AuditedModelRequest,
+    ModelExecutionRef, StepRecorder, StoredMessage, TextContextCandidateInput,
+};
+use novex_ai_core::{ContextCandidate, ContextPriority, TrustLevel};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -57,7 +61,42 @@ impl ScriptAgentAdapter {
         let audited = model.audited.as_ref().ok_or_else(|| {
             AgentRuntimeError::Kernel("audited model execution is required".into())
         })?;
-        let fragment_id = format!("script:{script_id}:user-message:{}", user_message.id);
+        let compiled_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let history = self
+            .conversation_repository
+            .list_messages(conversation.id)
+            .await?;
+        let mut context = AuditedScriptContext::default();
+        append_history_context(&mut context, &history, user_message.id, &compiled_at);
+        let render_start = context.candidates.len() as u32;
+        for fragment in
+            build_script_scene_patch_context(&script, &user_message.content, render_start)
+        {
+            let (source_id, source_version) = if fragment.source_kind == "user_instruction" {
+                (
+                    format!("{}:{}", user_message.id, fragment.key),
+                    user_message
+                        .created_at
+                        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+                )
+            } else {
+                (
+                    format!("{script_id}:{}", fragment.key),
+                    script
+                        .updated_at
+                        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+                )
+            };
+            let candidate_id = format!("script:{script_id}:{}", fragment.key);
+            push_script_context(
+                &mut context,
+                candidate_id,
+                fragment,
+                source_id,
+                source_version,
+                &compiled_at,
+            );
+        }
         let response = audited
             .executor
             .execute_parsed(
@@ -70,28 +109,14 @@ impl ScriptAgentAdapter {
                     agent_key: audited.agent_key.clone(),
                     agent_version: audited.agent_version.clone(),
                     node_key: "script.scene_patch".into(),
-                    compile_input: PromptCompileInput {
-                        schema_version: "1".into(),
-                        variables: BTreeMap::new(),
-                        fragments: vec![DynamicFragment {
-                            id: fragment_id.clone(),
-                            trust: TrustLevel::UserInstruction,
-                            source: "conversation_script_scene_patch".into(),
-                            content: Some(build_script_scene_patch_input(
-                                &script,
-                                &user_message.content,
-                            )),
-                            asset: None,
-                        }],
-                    },
+                    variables: BTreeMap::new(),
+                    context_candidates: context.candidates,
+                    context_atomic_groups: Vec::new(),
+                    compiled_at,
                     tool_profile: "chat".into(),
                     tool_schema: None,
                     binding: audited.binding.clone(),
-                    context_sources: json!([{
-                        "id": fragment_id,
-                        "trust": "user_instruction",
-                        "source": "conversation_script_scene_patch"
-                    }]),
+                    context_sources: serde_json::Value::Array(context.sources),
                     memory_sources: json!([]),
                     parameters: json!({ "max_output_tokens": 1200 }),
                     asset_references: json!([]),
@@ -191,10 +216,32 @@ impl ScriptAgentAdapter {
         let audited = model.audited.as_ref().ok_or_else(|| {
             AgentRuntimeError::Kernel("audited model execution is required".into())
         })?;
-        let fragment_id = format!(
-            "conversation:{}:user-message:{}",
-            conversation.id, user_message.id
-        );
+        let compiled_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let history = self
+            .conversation_repository
+            .list_messages(conversation.id)
+            .await?;
+        let mut context = AuditedScriptContext::default();
+        append_history_context(&mut context, &history, user_message.id, &compiled_at);
+        let render_start = context.candidates.len() as u32;
+        for fragment in build_script_generation_intent_context(&user_message.content, render_start)
+        {
+            let candidate_id = format!(
+                "conversation:{}:message:{}:{}",
+                conversation.id, user_message.id, fragment.key
+            );
+            let source_id = format!("{}:{}", user_message.id, fragment.key);
+            push_script_context(
+                &mut context,
+                candidate_id,
+                fragment,
+                source_id,
+                user_message
+                    .created_at
+                    .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+                &compiled_at,
+            );
+        }
         let response = audited
             .executor
             .execute_parsed(
@@ -207,27 +254,14 @@ impl ScriptAgentAdapter {
                     agent_key: audited.agent_key.clone(),
                     agent_version: audited.agent_version.clone(),
                     node_key: "script.generation_intent".into(),
-                    compile_input: PromptCompileInput {
-                        schema_version: "1".into(),
-                        variables: BTreeMap::new(),
-                        fragments: vec![DynamicFragment {
-                            id: fragment_id.clone(),
-                            trust: TrustLevel::UserInstruction,
-                            source: "conversation_user_message".into(),
-                            content: Some(build_script_generation_intent_input(
-                                &user_message.content,
-                            )),
-                            asset: None,
-                        }],
-                    },
+                    variables: BTreeMap::new(),
+                    context_candidates: context.candidates,
+                    context_atomic_groups: Vec::new(),
+                    compiled_at,
                     tool_profile: "chat".into(),
                     tool_schema: None,
                     binding: audited.binding.clone(),
-                    context_sources: json!([{
-                        "id": fragment_id,
-                        "trust": "user_instruction",
-                        "source": "conversation_user_message"
-                    }]),
+                    context_sources: serde_json::Value::Array(context.sources),
                     memory_sources: json!([]),
                     parameters: json!({ "max_output_tokens": 800 }),
                     asset_references: json!([]),
@@ -498,9 +532,101 @@ fn parse_script_style(style: &str) -> Result<ScriptStyle, AgentRuntimeError> {
     }
 }
 
-fn build_script_generation_intent_input(user_message: &str) -> String {
-    format!(
-        r#"请从用户消息中提取生成脚本参数。生成脚本参数包括 topic、style、scene_count。
+#[derive(Default)]
+struct AuditedScriptContext {
+    candidates: Vec<ContextCandidate>,
+    sources: Vec<serde_json::Value>,
+}
+
+fn push_script_context(
+    context: &mut AuditedScriptContext,
+    candidate_id: String,
+    fragment: ScriptContextFragment,
+    source_id: String,
+    source_version: String,
+    compiled_at: &str,
+) {
+    context.sources.push(json!({
+        "id": candidate_id,
+        "trust": fragment.trust,
+        "source": fragment.source_kind,
+    }));
+    context
+        .candidates
+        .push(text_context_candidate(TextContextCandidateInput {
+            candidate_id,
+            source_kind: fragment.source_kind.into(),
+            source_id,
+            source_version,
+            trust: fragment.trust,
+            priority: fragment.priority,
+            required: fragment.required,
+            render_order: fragment.render_order,
+            observed_at: compiled_at.into(),
+            text: fragment.content,
+        }));
+}
+
+fn append_history_context(
+    context: &mut AuditedScriptContext,
+    messages: &[AgentMessage],
+    current_message_id: Uuid,
+    compiled_at: &str,
+) {
+    for message in messages
+        .iter()
+        .filter(|message| message.id != current_message_id)
+    {
+        let role = match message.role {
+            AgentMessageRole::System => "系统",
+            AgentMessageRole::User => "用户",
+            AgentMessageRole::Assistant => "助手",
+            AgentMessageRole::Tool => "工具",
+        };
+        let trust = if message.role == AgentMessageRole::User {
+            TrustLevel::UserInstruction
+        } else {
+            TrustLevel::Reference
+        };
+        let render_order = context.candidates.len() as u32;
+        push_script_context(
+            context,
+            format!(
+                "conversation:{}:history:{}",
+                message.conversation_id, message.id
+            ),
+            ScriptContextFragment {
+                key: format!("history-{}", message.id),
+                source_kind: "conversation_entry",
+                trust,
+                priority: ContextPriority::P2,
+                required: false,
+                render_order,
+                content: format!("历史{role}消息：{}", message.content),
+            },
+            message.id.to_string(),
+            message
+                .created_at
+                .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            compiled_at,
+        );
+    }
+}
+
+fn build_script_generation_intent_context(
+    user_message: &str,
+    render_start: u32,
+) -> Vec<ScriptContextFragment> {
+    vec![
+        ScriptContextFragment {
+            key: "intent-rules".into(),
+            source_kind: "user_instruction",
+            trust: TrustLevel::UserInstruction,
+            priority: ContextPriority::P0,
+            required: true,
+            render_order: render_start,
+            content:
+                r#"请从用户消息中提取生成脚本参数。生成脚本参数包括 topic、style、scene_count。
 
 规则：
 1. intent 固定输出 generate_script。
@@ -508,64 +634,113 @@ fn build_script_generation_intent_input(user_message: &str) -> String {
 3. style 只能是 knowledge、story、tutorial，不足或不在范围内时输出 null 并加入 missing_fields。
 4. scene_count 只能是 3 到 12 的整数，不足或越界时输出 null 并加入 missing_fields。
 5. missing_fields 为空时可以生成脚本；非空时 reply 必须追问缺失字段。
-
-用户消息：{user_message}
-
-JSON Schema：
-{{
+"#
+                .to_string(),
+        },
+        ScriptContextFragment {
+            key: "current-instruction".into(),
+            source_kind: "user_instruction",
+            trust: TrustLevel::UserInstruction,
+            priority: ContextPriority::P0,
+            required: true,
+            render_order: render_start + 1,
+            content: format!("用户消息：{user_message}\n"),
+        },
+        ScriptContextFragment {
+            key: "output-example".into(),
+            source_kind: "user_instruction",
+            trust: TrustLevel::UserInstruction,
+            priority: ContextPriority::P0,
+            required: true,
+            render_order: render_start + 2,
+            content: r#"JSON Schema：
+{
   "intent": "generate_script",
   "topic": "ChatGPT 如何改变程序员工作流",
   "style": "knowledge",
   "scene_count": 6,
   "reply": "面向用户的简短中文回复或追问",
   "missing_fields": []
-}}"#,
-        user_message = user_message
-    )
+}"#
+            .to_string(),
+        },
+    ]
 }
 
-fn build_script_scene_patch_input(script: &Script, user_message: &str) -> String {
-    let scenes = script
-        .scenes
-        .iter()
-        .map(|scene| {
-            format!(
-                "第 {} 镜：旁白={}；画面={}；情绪={}；时长={}秒",
-                scene.sequence,
-                scene.narration,
-                scene.visual_description,
-                scene.emotion,
-                scene.duration_sec
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!(
-        r#"用户希望修改当前脚本的某个分镜。请根据用户指令和当前脚本，输出一个结构化分镜补丁。
+fn build_script_scene_patch_context(
+    script: &Script,
+    user_message: &str,
+    render_start: u32,
+) -> Vec<ScriptContextFragment> {
+    let mut context = vec![ScriptContextFragment {
+        key: "current-script".into(),
+        source_kind: "current_script",
+        trust: TrustLevel::ConfirmedFact,
+        priority: ContextPriority::P1,
+        required: true,
+        render_order: render_start,
+        content: format!(
+            r#"用户希望修改当前脚本的某个分镜。请根据用户指令和当前脚本，输出一个结构化分镜补丁。
 
 当前脚本：
 标题：{title}
 hook：{hook}
-分镜：
-{scenes}
-
-用户指令：{user_message}
-
-输出 JSON Schema：
-{{
+分镜："#,
+            title = script.title,
+            hook = script.hook,
+        ),
+    }];
+    for scene in &script.scenes {
+        context.push(ScriptContextFragment {
+            key: format!("scene-{}", scene.sequence),
+            source_kind: "script_scene",
+            trust: TrustLevel::ConfirmedFact,
+            priority: ContextPriority::P1,
+            required: true,
+            render_order: render_start + context.len() as u32,
+            content: format!(
+                "第 {} 镜：旁白={}；画面={}；情绪={}；时长={}秒{}",
+                scene.sequence,
+                scene.narration,
+                scene.visual_description,
+                scene.emotion,
+                scene.duration_sec,
+                if scene.sequence == script.scenes.last().map_or(0, |last| last.sequence) {
+                    "\n"
+                } else {
+                    ""
+                },
+            ),
+        });
+    }
+    context.push(ScriptContextFragment {
+        key: "current-instruction".into(),
+        source_kind: "user_instruction",
+        trust: TrustLevel::UserInstruction,
+        priority: ContextPriority::P0,
+        required: true,
+        render_order: render_start + context.len() as u32,
+        content: format!("用户指令：{user_message}\n"),
+    });
+    context.push(ScriptContextFragment {
+        key: "output-example".into(),
+        source_kind: "user_instruction",
+        trust: TrustLevel::UserInstruction,
+        priority: ContextPriority::P0,
+        required: true,
+        render_order: render_start + context.len() as u32,
+        content: r#"输出 JSON Schema：
+{
   "scene_sequence": 3,
   "narration": "修改后的旁白",
   "visual_description": "修改后的画面描述",
   "emotion": "修改后的情绪",
   "duration_sec": 10,
   "reply": "面向用户的简短中文回复"
-}}"#,
-        title = script.title,
-        hook = script.hook,
-        scenes = scenes,
-        user_message = user_message
-    )
+}"#
+        .to_string(),
+    });
+    context
 }
 
 fn extract_json_object(raw: &str) -> Result<&str, AgentRuntimeError> {

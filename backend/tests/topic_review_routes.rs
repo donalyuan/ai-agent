@@ -290,7 +290,7 @@ async fn topic_review_routes_create_and_read_latest_snapshot() {
     .await
     .unwrap();
     assert_eq!(run_binding.0, "video.topic");
-    assert_eq!(run_binding.1, "1.0.0");
+    assert_eq!(run_binding.1, "2.0.0");
     assert_eq!(run_binding.2, model_id);
     assert_eq!(run_binding.3.len(), 64);
 
@@ -312,20 +312,20 @@ async fn topic_review_routes_create_and_read_latest_snapshot() {
     assert_eq!(model_call.2.as_deref(), Some("succeeded"));
     assert_eq!(model_call.3["agent_key"], "video.topic");
     assert_eq!(model_call.3["prompt_key"], "topic.group_review");
-    assert_eq!(model_call.3["prompt_version"], "1.0.0");
+    assert_eq!(model_call.3["prompt_version"], "2.0.0");
     assert_eq!(model_call.3["output_schema"]["name"], "topic_group_review");
     assert!(model_call
         .4
         .as_array()
         .unwrap()
         .iter()
-        .any(|source| source["source"] == "project_account_strategy"));
+        .any(|source| source["source"] == "account_strategy"));
     assert!(model_call
         .4
         .as_array()
         .unwrap()
         .iter()
-        .any(|source| source["source"] == "topic_batch_group"));
+        .any(|source| source["source"] == "existing_topic"));
     assert_eq!(model_call.5, "review_topic_group");
 
     let latest_response = app

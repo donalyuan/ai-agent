@@ -12,11 +12,15 @@ import {
   compilePrompt,
   compilePromptForReplay,
   definitionDigest,
+  finalizePrompt,
   loadDefinitionRegistry,
+  preparePrompt,
+  readPromptSnapshot,
   sha256Hex,
   validateModelCapabilities,
   type ModelBehavior,
 } from "../src/definitions.js";
+import { compileContext, type ContextPayload } from "../src/context.js";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const DEFINITIONS = resolve(ROOT, "agent-definitions");
@@ -35,14 +39,19 @@ async function loadFixtureRegistry(
   const prompts = document.prompts as Array<{ system_template: string; user_template: string }>;
   const directory = await mkdtemp(resolve(tmpdir(), "novex-definition-fixture-"));
   await mkdir(resolve(directory, "templates"));
+  await mkdir(resolve(directory, "fixtures"));
   await writeFile(resolve(directory, "registry.json"), JSON.stringify(document));
+  await copyFile(
+    resolve(DEFINITIONS, "fixtures/context-eval-contract.json"),
+    resolve(directory, "fixtures/context-eval-contract.json"),
+  );
   for (const prompt of prompts) {
     for (const relative of [prompt.system_template, prompt.user_template]) {
       await copyFile(resolve(DEFINITIONS, relative), resolve(directory, relative));
     }
   }
   await writeFile(resolve(directory, "release-index.json"), JSON.stringify({
-    schema_version: "1", registry_digest: releaseDigest ?? sha256Hex(canonicalJson(document)), releases: [],
+    schema_version: document.schema_version, registry_digest: releaseDigest ?? sha256Hex(canonicalJson(document)), releases: [],
   }));
   try {
     return await loadDefinitionRegistry(directory);
@@ -54,10 +63,13 @@ async function loadFixtureRegistry(
 describe("versioned definition contracts", () => {
   it("loads the same registry and canonical digest as Rust", async () => {
     const registry = await loadDefinitionRegistry(DEFINITIONS);
-    expect(registry.agents).toHaveLength(6);
-    expect(registry.prompts).toHaveLength(13);
-    expect(registry.releases).toHaveLength(19);
+    expect(registry.agents).toHaveLength(12);
+    expect(registry.prompts).toHaveLength(26);
+    expect(registry.context_policies).toHaveLength(18);
+    expect(registry.tokenizer_profiles).toHaveLength(3);
+    expect(registry.releases).toHaveLength(59);
     expect(activeAgent(registry, "personal.general").executor_owner).toBe("pi");
+    expect(Object.values(activeAgent(registry, "personal.general").nodes).every((node) => node.context_policy)).toBe(true);
     expect(() => assertProductionExecutionIntegrity(registry)).not.toThrow();
     const release = JSON.parse(await readFile(resolve(DEFINITIONS, "release-index.json"), "utf8")) as { registry_digest: string };
     expect(registry.digest).toBe(release.registry_digest);
@@ -164,6 +176,8 @@ describe("versioned definition contracts", () => {
       { ...input, reasoning_effort: "high" },
       { ...input, max_output_tokens: input.max_output_tokens + 1 },
       { ...input, context_window: input.context_window + 1 },
+      { ...input, tokenizer_profile_key: "openai.cl100k" },
+      { ...input, tokenizer_profile_version: "2.0.0" },
       { ...input, settings: { temperature: 0.5 } },
     ];
     for (const changed of mutations) expect(behaviorFingerprint(changed).digest).not.toBe(result.digest);
@@ -193,6 +207,24 @@ describe("versioned definition contracts", () => {
       agents.push(structuredClone(agents[0]));
     })).rejects.toThrow("duplicate agent");
     await expect(loadFixtureRegistry("registry-valid.json", undefined, "0".repeat(64))).rejects.toThrow("release index does not match");
+  });
+
+  it("loads Registry v2 and rejects missing, cross-owner, duplicate and unknown Context contracts", async () => {
+    await expect(loadFixtureRegistry("registry-valid-v2.json")).resolves.toMatchObject({
+      context_policies: [{ policy_key: "fixture.policy" }], tokenizer_profiles: [{ profile_key: "fixture.profile" }],
+    });
+    await expect(loadFixtureRegistry("registry-valid-v2.json", (document) => {
+      delete (document.agents as Array<any>)[0]!.nodes["fixture.node"].context_policy;
+    })).rejects.toThrow("missing context policy");
+    await expect(loadFixtureRegistry("registry-valid-v2.json", (document) => {
+      (document.context_policies as Array<any>)[0]!.executor_owners = ["pi"];
+    })).rejects.toThrow("incompatible context policy");
+    await expect(loadFixtureRegistry("registry-valid-v2.json", (document) => {
+      const profiles = document.tokenizer_profiles as unknown[]; profiles.push(structuredClone(profiles[0]));
+    })).rejects.toThrow("duplicate tokenizer profile");
+    await expect(loadFixtureRegistry("registry-valid-v2.json", (document) => {
+      (document.context_policies as Array<any>)[0]!.unknown = true;
+    })).rejects.toThrow("unknown field");
   });
 
   it("supports declared variable types and rejects invalid compiler inputs", async () => {
@@ -235,5 +267,87 @@ describe("versioned definition contracts", () => {
     }, "workspace", tools)).toThrow("max_bytes");
     expect(() => compilePrompt(registry, "fixture.variables", "1.0.0", "fixture.variables", input, "workspace", [{ name: "read" }])).toThrow("does not match");
     expect(() => compilePrompt(registry, "fixture.variables", "9.0.0", "fixture.variables", input, "workspace", tools)).toThrow("not executable");
+  });
+
+  it("preserves an under-budget legacy compile output through prepare, ContextCompiler and finalize", async () => {
+    const registry = await loadDefinitionRegistry(DEFINITIONS);
+    const legacy = compilePrompt(registry, "video.project-strategy", "2.0.0", "project.strategy_draft", {
+      schema_version: "1", fragments: [{ id: "legacy", trust: "reference", source: "migration_baseline_fixture", content: "golden-user-input" }],
+    }, "chat");
+    const prepared = preparePrompt(registry, "video.project-strategy", "2.0.0", "project.strategy_draft", {}, "chat", null, 2_000);
+    const payload: ContextPayload = { type: "text", text: "golden-user-input" };
+    const context = compileContext({
+      schema_version: "2", owner: "rust", owner_id: "owner", node_key: "project.strategy_draft", compiled_at: "2026-07-25T00:00:00Z",
+      model_context_window: 8192,
+      policy: registry.context_policies.find((item) => item.policy_key === "project.strategy_draft.baseline")!,
+      tokenizer_profile: registry.tokenizer_profiles.find((item) => item.profile_key === "byte-upper-bound")!,
+      prepared_prompt: prepared.envelope,
+      candidates: [{ candidate_id: "golden", source_kind: "user_instruction", source_id: "golden", source_version: "1",
+        trust: "user_instruction", priority: "p0", required: true, render_order: 0, observed_at: "2026-07-25T00:00:00Z", supersedes: [],
+        content_hash: sha256Hex(canonicalJson(payload)), payload }], atomic_groups: [],
+    });
+    const finalized = finalizePrompt(prepared, "context-snapshot-1", context,
+      registry.tokenizer_profiles.find((item) => item.profile_key === "byte-upper-bound")!);
+    expect(finalized.promptSnapshot).toMatchObject({ schema_version: "2", system: legacy.system, user: legacy.user,
+      output_schema: legacy.output_schema, fragments: [], context_digest: finalized.contextSnapshot.digest });
+    expect(finalized.promptSnapshot.context_digest).toBe(finalized.contextSnapshot.digest);
+    expect(finalized.promptSnapshot.logical_input?.messages[0]?.content).toBe(legacy.user);
+    expect(finalized.promptSnapshot.logical_input).toEqual(finalized.contextSnapshot.logical_input);
+    expect(readPromptSnapshot(JSON.parse(JSON.stringify(legacy)))).toEqual(legacy);
+    expect(readPromptSnapshot(JSON.parse(JSON.stringify(finalized.promptSnapshot)))).toEqual(finalized.promptSnapshot);
+  });
+
+  it("prepares fixed templates, workspace tools and output contracts without dynamic content", async () => {
+    const registry = await loadDefinitionRegistry(DEFINITIONS);
+    const tools = [{ name: "read" }, { name: "write" }, { name: "edit" }, { name: "bash" }];
+    const prepared = preparePrompt(registry, "personal.general", "2.0.0", "personal.turn", {}, "workspace", tools, 2_048);
+    expect(prepared.envelope).toMatchObject({
+      system: expect.any(String),
+      user_template_fixed: "",
+      tool_schema: tools,
+      output_schema: null,
+      max_output_tokens: 2_048,
+    });
+    expect(prepared.envelope.system.length).toBeGreaterThan(0);
+  });
+
+  it("preserves every active under-budget node through the governed two-phase compiler", async () => {
+    const registry = await loadDefinitionRegistry(DEFINITIONS);
+    const tokenizer = registry.tokenizer_profiles.find((item) => item.profile_key === "byte-upper-bound")!;
+    let checked = 0;
+    for (const agent of registry.agents.filter((item) => item.status === "active")) {
+      for (const [nodeKey, reference] of Object.entries(agent.nodes)) {
+        const prompt = registry.prompts.find((item) => item.prompt_key === reference.key && item.version === reference.version)!;
+        const variables = nodeKey === "script.complete" ? { scene_count: 3 } : {};
+        const toolProfile = prompt.tool_profile ?? "chat";
+        const prepared = preparePrompt(registry, agent.agent_key, agent.version, nodeKey, variables, toolProfile, null, 4_096);
+        const trust = prompt.variables.find((item) => item.value_type === "fragments")!.trust;
+        const legacy = compilePrompt(registry, agent.agent_key, agent.version, nodeKey, {
+          schema_version: "1", variables,
+          fragments: [{ id: "legacy", trust, source: "migration_baseline_fixture", content: "golden-user-input" }],
+        }, toolProfile);
+        const policyRef = reference.context_policy!;
+        const policy = registry.context_policies.find((item) => item.policy_key === policyRef.key && item.version === policyRef.version)!;
+        const payload: ContextPayload = { type: "text", text: "golden-user-input" };
+        const compiled = compileContext({
+          schema_version: "2", owner: agent.executor_owner, owner_id: `golden-${nodeKey}`, node_key: nodeKey,
+          compiled_at: "2026-07-25T00:00:00Z", model_context_window: 1_000_000, policy,
+          tokenizer_profile: tokenizer, prepared_prompt: prepared.envelope,
+          candidates: [{ candidate_id: "golden", source_kind: policy.allowed_sources[0]!, source_id: "golden", source_version: "1",
+            trust, priority: "p0", required: true, render_order: 0, observed_at: "2026-07-25T00:00:00Z", supersedes: [],
+            content_hash: sha256Hex(canonicalJson(payload)), payload }], atomic_groups: [],
+        });
+        const finalized = finalizePrompt(prepared, `snapshot-${nodeKey}`, compiled, tokenizer);
+        expect(finalized.promptSnapshot, nodeKey).toMatchObject({
+          system: legacy.system,
+          user: legacy.user,
+          output_schema: legacy.output_schema,
+          max_output_tokens: legacy.max_output_tokens,
+          fragments: [],
+        });
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(18);
   });
 });

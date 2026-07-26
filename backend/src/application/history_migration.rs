@@ -1,27 +1,40 @@
 use crate::application::agents::kernel::active_rust_definition_binding;
-use novex_ai_core::{behavior_fingerprint, DefinitionRegistry, ModelBehavior, ModelCapabilities};
+use crate::domain::conversation::ModelBindingEvidence;
+use crate::model_routing::model_binding_evidence;
+use novex_ai_core::{sha256_hex, DefinitionRegistry};
+use novex_model::ModelExecutionSnapshot;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
-use std::{fmt, sync::Arc};
+use std::{collections::BTreeMap, fmt, fs, sync::Arc};
 use uuid::Uuid;
+
+const CONTEXT_EVAL_CONTRACT: &str =
+    include_str!("../../../agent-definitions/fixtures/context-eval-contract.json");
+const CONTEXT_EVAL_CONTRACT_REFERENCE: &str =
+    "agent-definitions/fixtures/context-eval-contract.json";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MigrationDisposition {
-    AutoBindWithModel,
-    AwaitFirstModelBinding,
+    Equivalent,
+    ContextMigrationRequired,
+    ModelConfigurationMissing,
+    Unmappable,
     LegacyPartialAudit,
-    UnmappedReadOnly,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct HistoryMigrationItem {
+    pub runtime: String,
     pub entity_type: String,
     pub entity_id: Uuid,
     pub source_type: String,
-    pub definition_key: Option<String>,
+    pub agent_key: Option<String>,
+    pub node_keys: Vec<String>,
+    pub parent_entity_id: Option<Uuid>,
     pub disposition: MigrationDisposition,
+    pub reason_code: String,
     pub evidence: Value,
 }
 
@@ -29,6 +42,7 @@ pub struct HistoryMigrationItem {
 pub struct HistoryMigrationPlan {
     pub schema_version: String,
     pub dry_run: bool,
+    pub summary: BTreeMap<String, u64>,
     pub items: Vec<HistoryMigrationItem>,
 }
 
@@ -38,23 +52,122 @@ pub struct HistoryMigrationBackupEvidence {
     pub sha256: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ContextBaselineEvidence {
+    pub report_id: String,
+    pub reference: String,
+    pub sha256: String,
+    pub equivalent_nodes: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ContextEvalContract {
+    production_nodes: Vec<String>,
+    baseline_report: ContextBaselineReport,
+}
+
+#[derive(Deserialize)]
+struct ContextBaselineReport {
+    report_id: String,
+    mode: String,
+    passed: bool,
+    actual_real_model_calls: u64,
+    node_results: Vec<ContextBaselineNodeResult>,
+}
+
+#[derive(Deserialize)]
+struct ContextBaselineNodeResult {
+    node_key: String,
+    equivalent: bool,
+}
+
+impl ContextBaselineEvidence {
+    pub fn from_contract_json(value: &str, reference: &str) -> Result<Self, HistoryMigrationError> {
+        let contract: ContextEvalContract = serde_json::from_str(value)?;
+        let mut production_nodes = contract.production_nodes;
+        production_nodes.sort();
+        production_nodes.dedup();
+        let mut equivalent_nodes = contract
+            .baseline_report
+            .node_results
+            .into_iter()
+            .filter_map(|result| result.equivalent.then_some(result.node_key))
+            .collect::<Vec<_>>();
+        equivalent_nodes.sort();
+        equivalent_nodes.dedup();
+        if contract.baseline_report.report_id.trim().is_empty()
+            || contract.baseline_report.mode != "golden_baseline"
+            || !contract.baseline_report.passed
+            || contract.baseline_report.actual_real_model_calls != 0
+            || production_nodes != equivalent_nodes
+        {
+            return Err(HistoryMigrationError::InvalidPlan(
+                "Context baseline evidence is incomplete or non-equivalent".into(),
+            ));
+        }
+        Ok(Self {
+            report_id: contract.baseline_report.report_id,
+            reference: reference.into(),
+            sha256: sha256_hex(value.as_bytes()),
+            equivalent_nodes,
+        })
+    }
+
+    fn covers(&self, node_keys: &[String]) -> bool {
+        node_keys
+            .iter()
+            .all(|node_key| self.equivalent_nodes.binary_search(node_key).is_ok())
+    }
+
+    fn redacted_json(&self) -> Value {
+        json!({
+            "report_id": self.report_id,
+            "reference": self.reference,
+            "sha256": self.sha256,
+            "real_model_calls": 0,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct PostgresHistoryMigrator {
     pool: PgPool,
     registry: Arc<DefinitionRegistry>,
+    baseline: Option<ContextBaselineEvidence>,
 }
 
 impl PostgresHistoryMigrator {
     pub fn new(pool: PgPool, registry: Arc<DefinitionRegistry>) -> Self {
-        Self { pool, registry }
+        let baseline = ContextBaselineEvidence::from_contract_json(
+            CONTEXT_EVAL_CONTRACT,
+            CONTEXT_EVAL_CONTRACT_REFERENCE,
+        )
+        .ok();
+        Self {
+            pool,
+            registry,
+            baseline,
+        }
     }
 
-    /// Produces a deterministic plan without writing bindings, events, calls, or domain data.
+    pub fn with_baseline_evidence(
+        pool: PgPool,
+        registry: Arc<DefinitionRegistry>,
+        baseline: Option<ContextBaselineEvidence>,
+    ) -> Self {
+        Self {
+            pool,
+            registry,
+            baseline,
+        }
+    }
+
+    /// Produces a deterministic report without writing bindings, events, calls, or domain data.
     pub async fn plan(&self) -> Result<HistoryMigrationPlan, HistoryMigrationError> {
         let mut items = Vec::new();
         let conversations = sqlx::query(
             r#"
-            SELECT conversation.id, conversation.agent_type
+            SELECT conversation.id, conversation.agent_type, conversation.metadata
             FROM agent_conversations conversation
             LEFT JOIN agent_conversation_bindings binding
               ON binding.conversation_id = conversation.id
@@ -70,32 +183,59 @@ impl PostgresHistoryMigrator {
         for row in conversations {
             let id: Uuid = row.try_get("id")?;
             let agent_type: String = row.try_get("agent_type")?;
-            let Some(definition_key) = conversation_definition_key(&agent_type) else {
+            let metadata: Value = row.try_get("metadata")?;
+            let parent_entity_id = parent_conversation_id(&metadata);
+            let Some(agent_key) = conversation_definition_key(&agent_type) else {
                 items.push(HistoryMigrationItem {
+                    runtime: "rust".into(),
                     entity_type: "conversation".into(),
                     entity_id: id,
                     source_type: agent_type,
-                    definition_key: None,
-                    disposition: MigrationDisposition::UnmappedReadOnly,
-                    evidence: json!({"reason":"unknown_agent_type"}),
+                    agent_key: None,
+                    node_keys: Vec::new(),
+                    parent_entity_id,
+                    disposition: MigrationDisposition::Unmappable,
+                    reason_code: "unknown_agent_type".into(),
+                    evidence: json!({"legacy_text_exposed":false}),
                 });
                 continue;
             };
-            let model = trusted_conversation_model(&self.pool, id).await?;
+            let definition = active_rust_definition_binding(&self.registry, agent_key)
+                .map_err(HistoryMigrationError::Definition)?;
+            let node_keys = sorted_object_keys(&definition.context_policy_bindings)?;
+            let baseline = self
+                .baseline
+                .as_ref()
+                .filter(|evidence| evidence.covers(&node_keys));
+            let model = trusted_conversation_model(&self.pool, &self.registry, id).await?;
+            let (disposition, reason_code) = if baseline.is_none() {
+                (
+                    MigrationDisposition::ContextMigrationRequired,
+                    "baseline_equivalence_evidence_missing",
+                )
+            } else if model.is_none() {
+                (
+                    MigrationDisposition::ModelConfigurationMissing,
+                    "model_configuration_missing",
+                )
+            } else {
+                (MigrationDisposition::Equivalent, "baseline_equivalent")
+            };
             items.push(HistoryMigrationItem {
+                runtime: "rust".into(),
                 entity_type: "conversation".into(),
                 entity_id: id,
                 source_type: agent_type,
-                definition_key: Some(definition_key.into()),
-                disposition: if model.is_some() {
-                    MigrationDisposition::AutoBindWithModel
-                } else {
-                    MigrationDisposition::AwaitFirstModelBinding
-                },
-                evidence: model
-                    .as_ref()
-                    .map(TrustedModelEvidence::redacted_json)
-                    .unwrap_or_else(|| json!({"model_evidence":"insufficient"})),
+                agent_key: Some(agent_key.into()),
+                node_keys,
+                parent_entity_id,
+                disposition,
+                reason_code: reason_code.into(),
+                evidence: json!({
+                    "baseline": baseline.map(ContextBaselineEvidence::redacted_json),
+                    "model": model.as_ref().map(redacted_model_evidence),
+                    "legacy_text_exposed": false,
+                }),
             });
         }
 
@@ -115,59 +255,86 @@ impl PostgresHistoryMigrator {
         .fetch_all(&self.pool)
         .await?;
         items.extend(runs.into_iter().map(|row| HistoryMigrationItem {
+            runtime: "rust".into(),
             entity_type: "agent_run".into(),
             entity_id: row.get("id"),
             source_type: row.get("agent_type"),
-            definition_key: None,
+            agent_key: None,
+            node_keys: Vec::new(),
+            parent_entity_id: None,
             disposition: MigrationDisposition::LegacyPartialAudit,
+            reason_code: "historical_context_evidence_incomplete".into(),
             evidence: json!({
                 "prompt_snapshot":"missing",
                 "context_snapshot":"missing",
                 "model_call_created":false
             }),
         }));
-        Ok(HistoryMigrationPlan {
-            schema_version: "1".into(),
-            dry_run: true,
-            items,
-        })
+        Ok(plan_with_items(true, items))
     }
 
     pub async fn apply(
         &self,
         backup: &HistoryMigrationBackupEvidence,
     ) -> Result<HistoryMigrationPlan, HistoryMigrationError> {
-        if backup.reference.trim().is_empty() || !valid_sha256(&backup.sha256) {
-            return Err(HistoryMigrationError::InvalidPlan(
-                "valid backup reference and sha256 are required before migration".into(),
-            ));
-        }
+        verify_backup(backup)?;
         let plan = self.plan().await?;
         let mut transaction = self.pool.begin().await?;
         let before = source_inventory(&mut transaction).await?;
         for item in &plan.items {
             match item.entity_type.as_str() {
                 "conversation" => {
-                    let Some(definition_key) = item.definition_key.as_deref() else {
-                        record_event(&mut transaction, item, backup).await?;
+                    let Some(agent_key) = item.agent_key.as_deref() else {
+                        record_event(&mut transaction, item, backup, &before).await?;
                         continue;
                     };
-                    let mut definition =
-                        active_rust_definition_binding(&self.registry, definition_key)
-                            .map_err(HistoryMigrationError::Definition)?;
-                    definition.migration_source = Some("history_v1".into());
-                    let model = if item.disposition == MigrationDisposition::AutoBindWithModel {
-                        trusted_conversation_model_in(&mut transaction, item.entity_id).await?
-                    } else {
-                        None
+                    let mut definition = active_rust_definition_binding(&self.registry, agent_key)
+                        .map_err(HistoryMigrationError::Definition)?;
+                    definition.migration_source = Some(
+                        match item.disposition {
+                            MigrationDisposition::Equivalent => "context_history_v2_equivalent",
+                            MigrationDisposition::ModelConfigurationMissing => {
+                                "context_history_v2_model_missing"
+                            }
+                            MigrationDisposition::ContextMigrationRequired => {
+                                "context_history_v2_read_only"
+                            }
+                            _ => "context_history_v2_unmapped",
+                        }
+                        .into(),
+                    );
+                    definition.parent_conversation_id = item.parent_entity_id;
+                    let model = trusted_conversation_model_in(
+                        &mut transaction,
+                        &self.registry,
+                        item.entity_id,
+                    )
+                    .await?;
+                    if item.disposition == MigrationDisposition::Equivalent && model.is_none() {
+                        return Err(HistoryMigrationError::InvalidPlan(
+                            "model evidence changed after migration planning".into(),
+                        ));
+                    }
+                    let has_equivalent_context = matches!(
+                        item.disposition,
+                        MigrationDisposition::Equivalent
+                            | MigrationDisposition::ModelConfigurationMissing
+                    );
+                    let binding_status = match item.disposition {
+                        MigrationDisposition::Equivalent => "executable",
+                        MigrationDisposition::ModelConfigurationMissing => "definition_bound",
+                        _ => "read_only",
                     };
                     sqlx::query(
                         r#"
                         INSERT INTO agent_conversation_bindings (
                             conversation_id, agent_key, agent_version, agent_digest,
-                            prompt_bindings, registry_digest, model_id, behavior_fingerprint,
-                            model_capabilities, binding_status, migration_source
-                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                            prompt_bindings, context_policy_bindings, registry_digest,
+                            model_id, behavior_fingerprint, model_capabilities,
+                            tokenizer_profile_key, tokenizer_profile_version,
+                            tokenizer_profile_digest, binding_status, migration_source,
+                            parent_conversation_id
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
                         ON CONFLICT (conversation_id) DO NOTHING
                         "#,
                     )
@@ -176,6 +343,7 @@ impl PostgresHistoryMigrator {
                     .bind(&definition.agent_version)
                     .bind(&definition.agent_digest)
                     .bind(&definition.prompt_bindings)
+                    .bind(has_equivalent_context.then_some(&definition.context_policy_bindings))
                     .bind(&definition.registry_digest)
                     .bind(model.as_ref().map(|evidence| evidence.model_id))
                     .bind(
@@ -183,16 +351,28 @@ impl PostgresHistoryMigrator {
                             .as_ref()
                             .map(|evidence| evidence.behavior_fingerprint.as_str()),
                     )
-                    .bind(model.as_ref().map(|evidence| &evidence.capabilities))
-                    .bind(if model.is_some() {
-                        "executable"
-                    } else {
-                        "definition_bound"
-                    })
-                    .bind("history_v1")
+                    .bind(model.as_ref().map(|evidence| &evidence.model_capabilities))
+                    .bind(
+                        model
+                            .as_ref()
+                            .map(|evidence| evidence.tokenizer_profile_key.as_str()),
+                    )
+                    .bind(
+                        model
+                            .as_ref()
+                            .map(|evidence| evidence.tokenizer_profile_version.as_str()),
+                    )
+                    .bind(
+                        model
+                            .as_ref()
+                            .map(|evidence| evidence.tokenizer_profile_digest.as_str()),
+                    )
+                    .bind(binding_status)
+                    .bind(&definition.migration_source)
+                    .bind(definition.parent_conversation_id)
                     .execute(&mut *transaction)
                     .await?;
-                    record_event(&mut transaction, item, backup).await?;
+                    record_event(&mut transaction, item, backup, &before).await?;
                 }
                 "agent_run" => {
                     sqlx::query(
@@ -201,7 +381,7 @@ impl PostgresHistoryMigrator {
                     .bind(item.entity_id)
                     .execute(&mut *transaction)
                     .await?;
-                    record_event(&mut transaction, item, backup).await?;
+                    record_event(&mut transaction, item, backup, &before).await?;
                 }
                 _ => {
                     return Err(HistoryMigrationError::InvalidPlan(
@@ -210,7 +390,8 @@ impl PostgresHistoryMigrator {
                 }
             }
         }
-        if source_inventory(&mut transaction).await? != before {
+        let after = source_inventory(&mut transaction).await?;
+        if after != before {
             return Err(HistoryMigrationError::InvalidPlan(
                 "source Conversation/Message/Run identity changed during migration".into(),
             ));
@@ -220,6 +401,21 @@ impl PostgresHistoryMigrator {
             dry_run: false,
             ..plan
         })
+    }
+}
+
+fn plan_with_items(dry_run: bool, items: Vec<HistoryMigrationItem>) -> HistoryMigrationPlan {
+    let mut summary = BTreeMap::new();
+    for item in &items {
+        *summary
+            .entry(disposition_name(&item.disposition).to_string())
+            .or_insert(0) += 1;
+    }
+    HistoryMigrationPlan {
+        schema_version: "2".into(),
+        dry_run,
+        summary,
+        items,
     }
 }
 
@@ -233,101 +429,58 @@ fn conversation_definition_key(agent_type: &str) -> Option<&'static str> {
     }
 }
 
-struct TrustedModelEvidence {
-    model_id: Uuid,
-    behavior_fingerprint: String,
-    capabilities: Value,
+fn parent_conversation_id(metadata: &Value) -> Option<Uuid> {
+    metadata
+        .get("parent_conversation_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
 }
 
-impl TrustedModelEvidence {
-    fn redacted_json(&self) -> Value {
-        json!({
-            "model_id":self.model_id,
-            "behavior_fingerprint":self.behavior_fingerprint,
-            "capabilities":self.capabilities
-        })
-    }
+fn sorted_object_keys(value: &Value) -> Result<Vec<String>, HistoryMigrationError> {
+    let mut keys = value
+        .as_object()
+        .ok_or_else(|| {
+            HistoryMigrationError::Definition("Context Policy binding is invalid".into())
+        })?
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    keys.sort();
+    Ok(keys)
+}
+
+fn redacted_model_evidence(evidence: &ModelBindingEvidence) -> Value {
+    json!({
+        "model_id": evidence.model_id,
+        "behavior_fingerprint": evidence.behavior_fingerprint,
+        "capabilities": evidence.model_capabilities,
+        "tokenizer_profile": {
+            "key": evidence.tokenizer_profile_key,
+            "version": evidence.tokenizer_profile_version,
+            "digest": evidence.tokenizer_profile_digest,
+        }
+    })
 }
 
 fn parse_model_evidence(
+    registry: &DefinitionRegistry,
     model_id: Uuid,
     snapshot: Value,
-) -> Result<Option<TrustedModelEvidence>, HistoryMigrationError> {
-    let Some(snapshot_model_id) = snapshot
-        .get("model_id")
-        .and_then(Value::as_str)
-        .and_then(|value| Uuid::parse_str(value).ok())
-    else {
+) -> Result<Option<ModelBindingEvidence>, HistoryMigrationError> {
+    let Ok(snapshot) = serde_json::from_value::<ModelExecutionSnapshot>(snapshot) else {
         return Ok(None);
     };
-    let Some(protocol) = snapshot.get("api_protocol").and_then(Value::as_str) else {
-        return Ok(None);
-    };
-    let Some(request_base_url) = snapshot.get("request_base_url").and_then(Value::as_str) else {
-        return Ok(None);
-    };
-    let Some(upstream_model) = snapshot.get("upstream_model").and_then(Value::as_str) else {
-        return Ok(None);
-    };
-    let Some(max_output_tokens) = snapshot
-        .get("max_output_tokens")
-        .and_then(Value::as_u64)
-        .filter(|value| *value > 0)
-    else {
-        return Ok(None);
-    };
-    let Some(settings) = snapshot.get("settings").filter(|value| value.is_object()) else {
-        return Ok(None);
-    };
-    let Some(context_window) = settings
-        .get("context_window")
-        .and_then(Value::as_u64)
-        .filter(|value| *value > 0)
-    else {
-        return Ok(None);
-    };
-    if snapshot_model_id != model_id
-        || snapshot.get("model_type").and_then(Value::as_str) != Some("text")
-        || max_output_tokens > u32::MAX as u64
-    {
+    if snapshot.model_id != model_id {
         return Ok(None);
     }
-    let reasoning_effort = match snapshot.get("reasoning_effort") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
-        _ => return Ok(None),
-    };
-    let behavior = ModelBehavior {
-        protocol: protocol.into(),
-        request_base_url: request_base_url.into(),
-        upstream_model: upstream_model.into(),
-        reasoning_effort: reasoning_effort.clone(),
-        max_output_tokens: max_output_tokens as u32,
-        context_window,
-        settings: settings.clone(),
-    };
-    let Ok((behavior_fingerprint, _)) = behavior_fingerprint(&behavior) else {
-        return Ok(None);
-    };
-    let capabilities = ModelCapabilities {
-        text: true,
-        tool_calling: false,
-        structured_output: matches!(protocol, "openai_responses" | "openai_chat_completions"),
-        vision: false,
-        reasoning: reasoning_effort.is_some(),
-        context_window,
-    };
-    Ok(Some(TrustedModelEvidence {
-        model_id,
-        behavior_fingerprint,
-        capabilities: serde_json::to_value(capabilities)?,
-    }))
+    Ok(model_binding_evidence(registry, &snapshot).ok())
 }
 
 async fn trusted_conversation_model(
     pool: &PgPool,
+    registry: &DefinitionRegistry,
     conversation_id: Uuid,
-) -> Result<Option<TrustedModelEvidence>, HistoryMigrationError> {
+) -> Result<Option<ModelBindingEvidence>, HistoryMigrationError> {
     let row = sqlx::query(
         r#"
         SELECT model_id, model_snapshot
@@ -342,15 +495,16 @@ async fn trusted_conversation_model(
     .bind(conversation_id.to_string())
     .fetch_optional(pool)
     .await?;
-    row.map(|row| parse_model_evidence(row.get("model_id"), row.get("model_snapshot")))
+    row.map(|row| parse_model_evidence(registry, row.get("model_id"), row.get("model_snapshot")))
         .transpose()
         .map(Option::flatten)
 }
 
 async fn trusted_conversation_model_in(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    registry: &DefinitionRegistry,
     conversation_id: Uuid,
-) -> Result<Option<TrustedModelEvidence>, HistoryMigrationError> {
+) -> Result<Option<ModelBindingEvidence>, HistoryMigrationError> {
     let row = sqlx::query(
         r#"
         SELECT model_id, model_snapshot
@@ -365,15 +519,33 @@ async fn trusted_conversation_model_in(
     .bind(conversation_id.to_string())
     .fetch_optional(&mut **transaction)
     .await?;
-    row.map(|row| parse_model_evidence(row.get("model_id"), row.get("model_snapshot")))
+    row.map(|row| parse_model_evidence(registry, row.get("model_id"), row.get("model_snapshot")))
         .transpose()
         .map(Option::flatten)
+}
+
+fn verify_backup(backup: &HistoryMigrationBackupEvidence) -> Result<(), HistoryMigrationError> {
+    if backup.reference.trim().is_empty() || !valid_sha256(&backup.sha256) {
+        return Err(HistoryMigrationError::InvalidPlan(
+            "valid backup reference and sha256 are required before migration".into(),
+        ));
+    }
+    let bytes = fs::read(&backup.reference).map_err(|error| {
+        HistoryMigrationError::InvalidPlan(format!("migration backup is not readable: {error}"))
+    })?;
+    if sha256_hex(&bytes) != backup.sha256 {
+        return Err(HistoryMigrationError::InvalidPlan(
+            "migration backup sha256 does not match the referenced file".into(),
+        ));
+    }
+    Ok(())
 }
 
 async fn record_event(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     item: &HistoryMigrationItem,
     backup: &HistoryMigrationBackupEvidence,
+    before: &SourceInventory,
 ) -> Result<(), HistoryMigrationError> {
     sqlx::query(
         r#"
@@ -388,7 +560,11 @@ async fn record_event(
     .bind(disposition_name(&item.disposition))
     .bind(json!({
         "source_evidence": item.evidence,
+        "reason_code": item.reason_code,
+        "node_keys": item.node_keys,
+        "parent_entity_id": item.parent_entity_id,
         "backup": backup,
+        "source_counts_before": before.counts(),
     }))
     .execute(&mut **transaction)
     .await?;
@@ -400,6 +576,16 @@ struct SourceInventory {
     conversations: Vec<Uuid>,
     messages: Vec<Uuid>,
     runs: Vec<Uuid>,
+}
+
+impl SourceInventory {
+    fn counts(&self) -> Value {
+        json!({
+            "conversations": self.conversations.len(),
+            "messages": self.messages.len(),
+            "runs": self.runs.len(),
+        })
+    }
 }
 
 async fn source_inventory(
@@ -427,10 +613,11 @@ fn valid_sha256(value: &str) -> bool {
 
 fn disposition_name(value: &MigrationDisposition) -> &'static str {
     match value {
-        MigrationDisposition::AutoBindWithModel => "auto_bind_with_model",
-        MigrationDisposition::AwaitFirstModelBinding => "await_first_model_binding",
+        MigrationDisposition::Equivalent => "equivalent",
+        MigrationDisposition::ContextMigrationRequired => "context_migration_required",
+        MigrationDisposition::ModelConfigurationMissing => "model_configuration_missing",
+        MigrationDisposition::Unmappable => "unmappable",
         MigrationDisposition::LegacyPartialAudit => "legacy_partial_audit",
-        MigrationDisposition::UnmappedReadOnly => "unmapped_read_only",
     }
 }
 
@@ -439,7 +626,6 @@ pub enum HistoryMigrationError {
     Storage(sqlx::Error),
     Serialization(serde_json::Error),
     Definition(String),
-    ModelEvidence(String),
     InvalidPlan(String),
 }
 
@@ -450,9 +636,7 @@ impl fmt::Display for HistoryMigrationError {
             Self::Serialization(error) => {
                 write!(formatter, "history migration serialization error: {error}")
             }
-            Self::Definition(message)
-            | Self::ModelEvidence(message)
-            | Self::InvalidPlan(message) => formatter.write_str(message),
+            Self::Definition(message) | Self::InvalidPlan(message) => formatter.write_str(message),
         }
     }
 }

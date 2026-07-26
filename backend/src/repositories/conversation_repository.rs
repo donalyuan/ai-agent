@@ -34,7 +34,7 @@ impl PostgresConversationRepository {
             )
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id, project_id, agent_type, subject_type, subject_id, title,
-                      status, metadata, created_at, updated_at
+                      status, metadata, last_context_compile_attempt_id, created_at, updated_at
             "#,
         )
         .bind(input.project_id)
@@ -52,9 +52,9 @@ impl PostgresConversationRepository {
             r#"
             INSERT INTO agent_conversation_bindings (
                 conversation_id, agent_key, agent_version, agent_digest, prompt_bindings,
-                registry_digest, migration_source, parent_conversation_id
+                context_policy_bindings, registry_digest, migration_source, parent_conversation_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(conversation.id)
@@ -62,6 +62,7 @@ impl PostgresConversationRepository {
         .bind(binding.agent_version)
         .bind(binding.agent_digest)
         .bind(binding.prompt_bindings)
+        .bind(binding.context_policy_bindings)
         .bind(binding.registry_digest)
         .bind(binding.migration_source)
         .bind(binding.parent_conversation_id)
@@ -78,7 +79,8 @@ impl PostgresConversationRepository {
         let row = sqlx::query(
             r#"
             SELECT conversation_id, agent_key, agent_version, agent_digest, prompt_bindings,
-                   registry_digest, model_id, behavior_fingerprint, model_capabilities,
+                   context_policy_bindings, registry_digest, model_id, behavior_fingerprint, model_capabilities,
+                   tokenizer_profile_key, tokenizer_profile_version, tokenizer_profile_digest,
                    binding_status, migration_source, parent_conversation_id, created_at
             FROM agent_conversation_bindings
             WHERE conversation_id = $1
@@ -104,10 +106,14 @@ impl PostgresConversationRepository {
             SET model_id = $2,
                 behavior_fingerprint = $3,
                 model_capabilities = $4,
+                tokenizer_profile_key = $5,
+                tokenizer_profile_version = $6,
+                tokenizer_profile_digest = $7,
                 binding_status = 'executable'
             WHERE conversation_id = $1 AND model_id IS NULL
             RETURNING conversation_id, agent_key, agent_version, agent_digest, prompt_bindings,
-                      registry_digest, model_id, behavior_fingerprint, model_capabilities,
+                      context_policy_bindings, registry_digest, model_id, behavior_fingerprint, model_capabilities,
+                      tokenizer_profile_key, tokenizer_profile_version, tokenizer_profile_digest,
                       binding_status, migration_source, parent_conversation_id, created_at
             "#,
         )
@@ -115,6 +121,9 @@ impl PostgresConversationRepository {
         .bind(evidence.model_id)
         .bind(&evidence.behavior_fingerprint)
         .bind(&evidence.model_capabilities)
+        .bind(&evidence.tokenizer_profile_key)
+        .bind(&evidence.tokenizer_profile_version)
+        .bind(&evidence.tokenizer_profile_digest)
         .fetch_optional(&self.pool)
         .await?;
         if let Some(row) = updated {
@@ -126,6 +135,12 @@ impl PostgresConversationRepository {
             && existing.behavior_fingerprint.as_deref()
                 == Some(evidence.behavior_fingerprint.as_str())
             && existing.model_capabilities.as_ref() == Some(&evidence.model_capabilities)
+            && existing.tokenizer_profile_key.as_deref()
+                == Some(evidence.tokenizer_profile_key.as_str())
+            && existing.tokenizer_profile_version.as_deref()
+                == Some(evidence.tokenizer_profile_version.as_str())
+            && existing.tokenizer_profile_digest.as_deref()
+                == Some(evidence.tokenizer_profile_digest.as_str())
             && existing.binding_status == "executable"
         {
             Ok(existing)
@@ -151,10 +166,11 @@ impl PostgresConversationRepository {
             r#"
             INSERT INTO agent_run_bindings (
                 agent_run_id, agent_key, agent_version, agent_digest, prompt_bindings,
-                registry_digest, model_id, behavior_fingerprint, model_capabilities,
-                legacy_partial_audit
+                context_policy_bindings, registry_digest, model_id, behavior_fingerprint,
+                model_capabilities, tokenizer_profile_key, tokenizer_profile_version,
+                tokenizer_profile_digest, legacy_partial_audit
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             ON CONFLICT (agent_run_id) DO NOTHING
             "#,
         )
@@ -163,10 +179,14 @@ impl PostgresConversationRepository {
         .bind(&definition.agent_version)
         .bind(&definition.agent_digest)
         .bind(&definition.prompt_bindings)
+        .bind(&definition.context_policy_bindings)
         .bind(&definition.registry_digest)
         .bind(model.model_id)
         .bind(&model.behavior_fingerprint)
         .bind(&model.model_capabilities)
+        .bind(&model.tokenizer_profile_key)
+        .bind(&model.tokenizer_profile_version)
+        .bind(&model.tokenizer_profile_digest)
         .bind(legacy_partial_audit)
         .execute(&self.pool)
         .await?;
@@ -176,10 +196,19 @@ impl PostgresConversationRepository {
             && existing.agent_version == definition.agent_version
             && existing.agent_digest == definition.agent_digest
             && existing.prompt_bindings == definition.prompt_bindings
+            && existing.context_policy_bindings.as_ref()
+                == Some(&definition.context_policy_bindings)
             && existing.registry_digest == definition.registry_digest
             && existing.model_id == model.model_id
             && existing.behavior_fingerprint == model.behavior_fingerprint
             && existing.model_capabilities == model.model_capabilities
+            && existing.tokenizer_profile_key.as_deref()
+                == Some(model.tokenizer_profile_key.as_str())
+            && existing.tokenizer_profile_version.as_deref()
+                == Some(model.tokenizer_profile_version.as_str())
+            && existing.tokenizer_profile_digest.as_deref()
+                == Some(model.tokenizer_profile_digest.as_str())
+            && existing.context_binding_status == "executable"
             && existing.legacy_partial_audit == legacy_partial_audit
         {
             Ok(existing)
@@ -195,7 +224,9 @@ impl PostgresConversationRepository {
         let row = sqlx::query(
             r#"
             SELECT agent_run_id, agent_key, agent_version, agent_digest, prompt_bindings,
-                   registry_digest, model_id, behavior_fingerprint, model_capabilities,
+                   context_policy_bindings, registry_digest, model_id, behavior_fingerprint,
+                   model_capabilities, tokenizer_profile_key, tokenizer_profile_version,
+                   tokenizer_profile_digest, context_binding_status,
                    legacy_partial_audit, created_at
             FROM agent_run_bindings
             WHERE agent_run_id = $1
@@ -265,7 +296,7 @@ impl ConversationRepository for PostgresConversationRepository {
             )
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id, project_id, agent_type, subject_type, subject_id, title,
-                      status, metadata, created_at, updated_at
+                      status, metadata, last_context_compile_attempt_id, created_at, updated_at
             "#,
         )
         .bind(input.project_id)
@@ -288,7 +319,7 @@ impl ConversationRepository for PostgresConversationRepository {
         let row = sqlx::query(
             r#"
             SELECT id, project_id, agent_type, subject_type, subject_id, title,
-                   status, metadata, created_at, updated_at
+                   status, metadata, last_context_compile_attempt_id, created_at, updated_at
             FROM agent_conversations
             WHERE id = $1
             "#,
@@ -358,7 +389,8 @@ impl ConversationRepository for PostgresConversationRepository {
             )
             VALUES ($1, $2, 'running', $3, $4, $5)
             RETURNING id, project_id, agent_type, status, input, output,
-                      error_message, model_id, model_snapshot, started_at, ended_at
+                      error_message, context_compile_attempt_id, model_id, model_snapshot,
+                      started_at, ended_at
             "#,
         )
         .bind(input.project_id)
@@ -408,16 +440,19 @@ impl ConversationRepository for PostgresConversationRepository {
             SET status = $2,
                 output = $3,
                 error_message = $4,
+                context_compile_attempt_id = $5,
                 ended_at = NOW()
             WHERE id = $1
             RETURNING id, project_id, agent_type, status, input, output,
-                      error_message, model_id, model_snapshot, started_at, ended_at
+                      error_message, context_compile_attempt_id, model_id, model_snapshot,
+                      started_at, ended_at
             "#,
         )
         .bind(input.agent_run_id)
         .bind(input.status)
         .bind(input.output)
         .bind(input.error_message)
+        .bind(input.context_compile_attempt_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(ConversationRepositoryError::from)?
@@ -438,7 +473,7 @@ impl ConversationRepository for PostgresConversationRepository {
                 updated_at = NOW()
             WHERE id = $1
             RETURNING id, project_id, agent_type, subject_type, subject_id, title,
-                      status, metadata, created_at, updated_at
+                      status, metadata, last_context_compile_attempt_id, created_at, updated_at
             "#,
         )
         .bind(input.conversation_id)
@@ -479,6 +514,7 @@ fn conversation_from_row(row: PgRow) -> Result<AgentConversation, ConversationRe
         title: row.get("title"),
         status,
         metadata: row.get("metadata"),
+        last_context_compile_attempt_id: row.get("last_context_compile_attempt_id"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })
@@ -508,6 +544,7 @@ fn run_from_row(row: PgRow) -> AgentRunRecord {
         input: row.get("input"),
         output: row.get("output"),
         error_message: row.get("error_message"),
+        context_compile_attempt_id: row.get("context_compile_attempt_id"),
         model_id: row.get("model_id"),
         model_snapshot: row.get("model_snapshot"),
         started_at: row.get("started_at"),
@@ -522,10 +559,14 @@ fn binding_from_row(row: PgRow) -> AgentConversationBinding {
         agent_version: row.get("agent_version"),
         agent_digest: row.get("agent_digest"),
         prompt_bindings: row.get("prompt_bindings"),
+        context_policy_bindings: row.get("context_policy_bindings"),
         registry_digest: row.get("registry_digest"),
         model_id: row.get("model_id"),
         behavior_fingerprint: row.get("behavior_fingerprint"),
         model_capabilities: row.get("model_capabilities"),
+        tokenizer_profile_key: row.get("tokenizer_profile_key"),
+        tokenizer_profile_version: row.get("tokenizer_profile_version"),
+        tokenizer_profile_digest: row.get("tokenizer_profile_digest"),
         binding_status: row.get("binding_status"),
         migration_source: row.get("migration_source"),
         parent_conversation_id: row.get("parent_conversation_id"),
@@ -540,10 +581,15 @@ fn run_binding_from_row(row: PgRow) -> AgentRunBinding {
         agent_version: row.get("agent_version"),
         agent_digest: row.get("agent_digest"),
         prompt_bindings: row.get("prompt_bindings"),
+        context_policy_bindings: row.get("context_policy_bindings"),
         registry_digest: row.get("registry_digest"),
         model_id: row.get("model_id"),
         behavior_fingerprint: row.get("behavior_fingerprint"),
         model_capabilities: row.get("model_capabilities"),
+        tokenizer_profile_key: row.get("tokenizer_profile_key"),
+        tokenizer_profile_version: row.get("tokenizer_profile_version"),
+        tokenizer_profile_digest: row.get("tokenizer_profile_digest"),
+        context_binding_status: row.get("context_binding_status"),
         legacy_partial_audit: row.get("legacy_partial_audit"),
         created_at: row.get("created_at"),
     }
@@ -568,6 +614,11 @@ fn validate_definition_binding(
             .prompt_bindings
             .as_object()
             .is_some_and(|value| value.is_empty())
+        || !binding.context_policy_bindings.is_object()
+        || binding
+            .context_policy_bindings
+            .as_object()
+            .is_some_and(|value| value.is_empty())
     {
         return Err(AgentBindingError::InvalidEvidence(
             "definition binding is incomplete".into(),
@@ -577,7 +628,12 @@ fn validate_definition_binding(
 }
 
 fn validate_model_binding(evidence: &ModelBindingEvidence) -> Result<(), AgentBindingError> {
-    if !valid_digest(&evidence.behavior_fingerprint) || !evidence.model_capabilities.is_object() {
+    if !valid_digest(&evidence.behavior_fingerprint)
+        || !evidence.model_capabilities.is_object()
+        || evidence.tokenizer_profile_key.trim().is_empty()
+        || evidence.tokenizer_profile_version.trim().is_empty()
+        || !valid_digest(&evidence.tokenizer_profile_digest)
+    {
         return Err(AgentBindingError::InvalidEvidence(
             "model binding evidence is incomplete".into(),
         ));

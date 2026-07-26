@@ -26,7 +26,6 @@ use novex_agent::{
     StepRecorder,
 };
 use novex_ai_core::AgentKey;
-use prompt::truncate_for_prompt;
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;

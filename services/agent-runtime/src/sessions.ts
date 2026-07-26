@@ -1,5 +1,6 @@
 import type { Session, SessionStorage, SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { readFile } from "node:fs/promises";
 import {
   createNodeSqliteFactory,
   SqliteSessionRepo,
@@ -26,11 +27,15 @@ export interface NovexSessionMetadata {
   legacy_system_prompt: string | null;
 }
 
-export interface LegacySessionMigrationItem {
+export interface LegacySessionInventoryItem {
   session_id: string;
-  disposition: "auto_bind_personal_general" | "custom_prompt_read_only" | "unmapped";
+  source_type: string;
+  agent_key: string | null;
   model_id: string | null;
   tool_profile: ToolProfile | null;
+  parent_session_id: string | null;
+  custom_system_prompt: boolean;
+  metadata_valid: boolean;
   evidence: Record<string, unknown>;
 }
 
@@ -52,6 +57,12 @@ export interface SessionView {
 export interface SequencedEntry {
   sequence: number;
   entry: SessionTreeEntry;
+}
+
+export interface HistoryMigrationBackupEvidence {
+  reference: string;
+  sha256: string;
+  source_counts_before: { sessions: number; entries: number };
 }
 
 type PiSession = Session<SqliteSessionMetadata>;
@@ -93,6 +104,7 @@ export class SessionStore {
   private readonly env: NodeExecutionEnv;
   private readonly repo: SqliteSessionRepo;
   readonly novex: NovexSqliteStore;
+  private historyMigrationBackup: HistoryMigrationBackupEvidence | null = null;
 
   constructor(
     databasePath: string,
@@ -149,20 +161,22 @@ export class SessionStore {
     return Promise.all(sessions.map((metadata) => this.toView(metadata)));
   }
 
-  async legacyMigrationPlan(): Promise<LegacySessionMigrationItem[]> {
+  async legacyMigrationPlan(): Promise<LegacySessionInventoryItem[]> {
     const sessions = await this.repo.list();
-    const items: LegacySessionMigrationItem[] = [];
+    const items: LegacySessionInventoryItem[] = [];
     for (const metadata of sessions) {
-      if (this.novex.bindingOrNull(metadata.id)) continue;
+      if (this.novex.bindingOrNull(metadata.id) || this.novex.hasHistoryMigrationOutcome(metadata.id)) continue;
       try {
         const own = metadataOf(metadata);
         items.push({
           session_id: metadata.id,
-          disposition: own.legacy_custom_system_prompt
-            ? "custom_prompt_read_only" as const
-            : "auto_bind_personal_general" as const,
+          source_type: own.source,
+          agent_key: own.agent_key || null,
           model_id: own.model_id,
           tool_profile: own.tool_profile,
+          parent_session_id: metadata.parentSessionId ?? null,
+          custom_system_prompt: own.legacy_custom_system_prompt,
+          metadata_valid: true,
           evidence: {
             metadata_valid: true,
             custom_system_prompt: own.legacy_custom_system_prompt,
@@ -172,9 +186,13 @@ export class SessionStore {
       } catch {
         items.push({
           session_id: metadata.id,
-          disposition: "unmapped" as const,
+          source_type: "unknown",
+          agent_key: null,
           model_id: null,
           tool_profile: null,
+          parent_session_id: metadata.parentSessionId ?? null,
+          custom_system_prompt: false,
+          metadata_valid: false,
           evidence: { metadata_valid: false, legacy_text_exposed: false },
         });
       }
@@ -182,8 +200,42 @@ export class SessionStore {
     return items;
   }
 
-  async backupForHistoryMigration(destination: string): Promise<number> {
-    return this.novex.backup(destination);
+  async backupForHistoryMigration(destination: string): Promise<HistoryMigrationBackupEvidence> {
+    const inventory = await this.sourceInventory();
+    await this.novex.backup(destination);
+    const bytes = await readFile(destination);
+    this.historyMigrationBackup = {
+      reference: destination,
+      sha256: sha256Hex(bytes),
+      source_counts_before: {
+        sessions: inventory.sessions.length,
+        entries: inventory.sessions.reduce((total, session) => total + session.entries.length, 0),
+      },
+    };
+    return this.historyMigrationBackup;
+  }
+
+  async createMigratedBinding(
+    binding: Omit<SessionBinding, "created_at">,
+    eventType: string,
+    details: unknown,
+  ): Promise<SessionBinding> {
+    const backup = this.requireHistoryMigrationBackup();
+    const before = await this.sourceInventory();
+    const result = this.novex.createMigratedBinding(binding, eventType, { migration_plan: details, backup });
+    await this.assertSourceInventoryUnchanged(before);
+    return result;
+  }
+
+  async recordHistoryMigrationOutcome(
+    sessionId: string,
+    eventType: string,
+    details: unknown,
+  ): Promise<void> {
+    const backup = this.requireHistoryMigrationBackup();
+    const before = await this.sourceInventory();
+    this.novex.recordMigrationEvent(sessionId, eventType, { migration_plan: details, backup });
+    await this.assertSourceInventoryUnchanged(before);
   }
 
   async findMetadata(sessionId: string): Promise<SqliteSessionMetadata> {
@@ -227,7 +279,7 @@ export class SessionStore {
   }
 
   async entries(sessionId: string, afterSequence = 0, limit = 200): Promise<SequencedEntry[]> {
-    const session = await this.open(sessionId);
+    const session = await this.repo.open(await this.findMetadata(sessionId));
     try {
       const entries = await session.getEntries();
       return entries
@@ -375,7 +427,7 @@ export class SessionStore {
 
   private async toView(metadata: SqliteSessionMetadata): Promise<SessionView> {
     const own = metadataOf(metadata);
-    const binding = this.novex.binding(metadata.id);
+    const binding = this.novex.bindingOrNull(metadata.id);
     const session = await this.repo.open(metadata);
     try {
       return {
@@ -385,15 +437,52 @@ export class SessionStore {
         active_leaf_id: await session.getLeafId(),
         cwd: metadata.cwd,
         model_id: own.model_id,
-        agent_key: binding.agent_key,
-        agent_version: binding.agent_version,
-        registry_digest: binding.registry_digest,
-        behavior_fingerprint: binding.behavior_fingerprint,
+        agent_key: binding?.agent_key ?? own.agent_key,
+        agent_version: binding?.agent_version ?? "",
+        registry_digest: binding?.registry_digest ?? "",
+        behavior_fingerprint: binding?.behavior_fingerprint ?? "",
         tool_profile: own.tool_profile,
         source: own.source,
       };
     } finally {
       await cleanupSession(session);
+    }
+  }
+
+  private requireHistoryMigrationBackup(): HistoryMigrationBackupEvidence {
+    if (!this.historyMigrationBackup) {
+      throw new RuntimeError("session_migration_required", 409, "历史 Session 迁移前必须完成 SQLite 备份");
+    }
+    return this.historyMigrationBackup;
+  }
+
+  private async sourceInventory(): Promise<{
+    sessions: Array<{ id: string; parent_session_id: string | null; entries: Array<{ id: string; type: string }> }>;
+  }> {
+    const metadata = await this.repo.list();
+    const sessions = [];
+    for (const item of metadata) {
+      const session = await this.repo.open(item);
+      try {
+        const entries = (await session.getEntries())
+          .map((entry) => ({ id: entry.id, type: entry.type }));
+        sessions.push({
+          id: item.id,
+          parent_session_id: item.parentSessionId ?? null,
+          entries,
+        });
+      } finally {
+        await cleanupSession(session);
+      }
+    }
+    sessions.sort((left, right) => left.id.localeCompare(right.id));
+    return { sessions };
+  }
+
+  private async assertSourceInventoryUnchanged(before: Awaited<ReturnType<SessionStore["sourceInventory"]>>): Promise<void> {
+    const after = await this.sourceInventory();
+    if (canonicalJson(before) !== canonicalJson(after)) {
+      throw new RuntimeError("storage_unavailable", 503, "历史迁移改变了 Session Tree 或 entry 身份");
     }
   }
 }

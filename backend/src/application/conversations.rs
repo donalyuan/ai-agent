@@ -4,11 +4,13 @@ use crate::agents::ScriptAgentError;
 use crate::application::agents::adapters::{
     AgentRuntimeError, AgentTurnResponse, SoundAgentContext,
 };
-use crate::application::agents::kernel::{active_rust_definition_binding, AgentExecutor};
-use crate::domain::conversation::{
-    AgentConversation, AgentMessage, CreateAgentConversationInput, ModelBindingEvidence,
+use crate::application::agents::kernel::{
+    active_rust_definition_binding, fixed_model_binding, AgentExecutor,
 };
-use crate::model_routing::{model_behavior_evidence, ModelClientResolver, ModelResolveError};
+use crate::domain::conversation::{AgentConversation, AgentMessage, CreateAgentConversationInput};
+use crate::model_routing::{
+    model_behavior_evidence, model_binding_evidence, ModelClientResolver, ModelResolveError,
+};
 use crate::repositories::AiModelRepository;
 use crate::repositories::{
     AgentBindingError, ConversationRepository, ConversationRepositoryError,
@@ -17,8 +19,7 @@ use crate::repositories::{
     ProjectRepository, ProjectRepositoryError, ScriptRepository,
 };
 use novex_agent::{
-    AgentInvocation, AuditedExecutionBinding, AuditedModelExecutor, FixedModelBinding,
-    ModelExecutionRef,
+    AgentInvocation, AuditedExecutionBinding, AuditedModelExecutor, ModelExecutionRef,
 };
 use novex_ai_core::{validate_model_capabilities, DefinitionRegistry};
 use novex_model::{ApiProtocol, ModelType};
@@ -219,18 +220,19 @@ impl ConversationService {
         let evidence = model_behavior_evidence(&resolved.snapshot)?;
         validate_model_capabilities(&definition.model_requirements, &evidence.capabilities)
             .map_err(|_| ConversationApplicationError::ModelCapabilityMismatch)?;
+        let model_binding = model_binding_evidence(&self.definition_registry, &resolved.snapshot)?;
         self.conversation_repository
-            .bind_or_validate_conversation_model(
-                conversation_id,
-                ModelBindingEvidence {
-                    model_id,
-                    behavior_fingerprint: evidence.behavior_fingerprint.clone(),
-                    model_capabilities: serde_json::to_value(&evidence.capabilities).map_err(
-                        |error| ConversationApplicationError::Definition(error.to_string()),
-                    )?,
-                },
-            )
+            .bind_or_validate_conversation_model(conversation_id, model_binding.clone())
             .await?;
+        let fixed_binding = fixed_model_binding(
+            binding.context_policy_bindings.as_ref().ok_or_else(|| {
+                ConversationApplicationError::Definition(
+                    "conversation Context Policy binding is missing".into(),
+                )
+            })?,
+            &model_binding,
+        )
+        .map_err(ConversationApplicationError::Definition)?;
         let (user_metadata, run_input, payload) = invocation_payload(
             &conversation.agent_type,
             supplement_of_batch_id,
@@ -251,10 +253,7 @@ impl ConversationService {
                         executor: self.audited_model_executor.clone(),
                         agent_key: binding.agent_key,
                         agent_version: binding.agent_version,
-                        binding: FixedModelBinding {
-                            model_id,
-                            behavior_fingerprint: evidence.behavior_fingerprint,
-                        },
+                        binding: fixed_binding,
                     }),
                 },
             )

@@ -18,12 +18,12 @@ pub async fn insert_enabled_text_model_with_base_url(
         INSERT INTO ai_models (
             display_name, model_type, provider_name, api_protocol, auth_scheme,
             request_base_url, upstream_model, api_key, timeout_seconds, max_output_tokens,
-            settings, status
+            context_window, tokenizer_profile_key, tokenizer_profile_version, settings, status
         )
         VALUES (
             '测试文本模型', 'text', 'test', 'openai_chat_completions', 'bearer',
             $1, 'test-model', 'test-key', 5, 3000,
-            '{"context_window":128000}'::jsonb, 'enabled'
+            128000, 'openai.o200k', '1.0.0', '{}'::jsonb, 'enabled'
         )
         RETURNING id
         "#,

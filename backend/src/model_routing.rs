@@ -1,7 +1,13 @@
-use crate::repositories::{AiModelRepository, AiModelRepositoryError, PostgresAiModelRepository};
+use crate::{
+    domain::conversation::ModelBindingEvidence,
+    repositories::{AiModelRepository, AiModelRepositoryError, PostgresAiModelRepository},
+};
 use async_trait::async_trait;
 use novex_agent::{BoundModelResolver, ResolvedBoundModel};
-use novex_ai_core::{behavior_fingerprint, ModelBehavior, ModelCapabilities};
+use novex_ai_core::{
+    behavior_fingerprint, definition_digest, DefinitionRegistry, DefinitionStatus, ModelBehavior,
+    ModelCapabilities,
+};
 use novex_model::{
     ApiProtocol, LLMClient, ModelExecutionSnapshot, ModelRuntimeConfig, ModelType, OpenAIClient,
     OpenAIConfig,
@@ -34,11 +40,25 @@ pub fn model_behavior_evidence(
         });
     }
     let context_window = snapshot
-        .settings
-        .get("context_window")
-        .and_then(serde_json::Value::as_u64)
+        .context_window
         .filter(|value| *value > 0)
         .ok_or(ModelResolveError::InvalidConfig(snapshot.model_id))?;
+    let tokenizer_profile_key = snapshot
+        .tokenizer_profile_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(ModelResolveError::TokenizerProfileUnavailable(
+            snapshot.model_id,
+        ))?;
+    let tokenizer_profile_version = snapshot
+        .tokenizer_profile_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(ModelResolveError::TokenizerProfileUnavailable(
+            snapshot.model_id,
+        ))?;
     let max_output_tokens = snapshot
         .max_output_tokens
         .filter(|value| *value > 0)
@@ -50,6 +70,8 @@ pub fn model_behavior_evidence(
         reasoning_effort: snapshot.reasoning_effort.clone(),
         max_output_tokens,
         context_window,
+        tokenizer_profile_key: tokenizer_profile_key.to_string(),
+        tokenizer_profile_version: tokenizer_profile_version.to_string(),
         settings: snapshot.settings.clone(),
     };
     let (behavior_fingerprint, _) = behavior_fingerprint(&behavior)
@@ -70,6 +92,45 @@ pub fn model_behavior_evidence(
     })
 }
 
+/// 生成同时固定模型行为与 Tokenizer Profile 定义摘要的执行 binding 证据。
+pub fn model_binding_evidence(
+    definitions: &DefinitionRegistry,
+    snapshot: &ModelExecutionSnapshot,
+) -> Result<ModelBindingEvidence, ModelResolveError> {
+    let behavior = model_behavior_evidence(snapshot)?;
+    let key = snapshot.tokenizer_profile_key.as_deref().ok_or(
+        ModelResolveError::TokenizerProfileUnavailable(snapshot.model_id),
+    )?;
+    let version = snapshot.tokenizer_profile_version.as_deref().ok_or(
+        ModelResolveError::TokenizerProfileUnavailable(snapshot.model_id),
+    )?;
+    let profile = definitions
+        .tokenizer_profile(key, version)
+        .map_err(|_| ModelResolveError::TokenizerProfileUnavailable(snapshot.model_id))?;
+    if matches!(
+        profile.status,
+        DefinitionStatus::Candidate | DefinitionStatus::Revoked
+    ) || !profile
+        .applicable_protocols
+        .iter()
+        .any(|protocol| protocol == snapshot.api_protocol.as_str())
+    {
+        return Err(ModelResolveError::TokenizerProfileUnavailable(
+            snapshot.model_id,
+        ));
+    }
+    Ok(ModelBindingEvidence {
+        model_id: snapshot.model_id,
+        behavior_fingerprint: behavior.behavior_fingerprint,
+        model_capabilities: serde_json::to_value(behavior.capabilities)
+            .map_err(|_| ModelResolveError::InvalidConfig(snapshot.model_id))?,
+        tokenizer_profile_key: key.to_string(),
+        tokenizer_profile_version: version.to_string(),
+        tokenizer_profile_digest: definition_digest(profile)
+            .map_err(|_| ModelResolveError::TokenizerProfileUnavailable(snapshot.model_id))?,
+    })
+}
+
 #[async_trait]
 pub trait ModelClientResolver: BoundModelResolver + Send + Sync {
     async fn text_client(&self, model_id: Uuid) -> Result<ResolvedTextClient, ModelResolveError>;
@@ -78,11 +139,44 @@ pub trait ModelClientResolver: BoundModelResolver + Send + Sync {
 #[derive(Clone)]
 pub struct PostgresModelClientResolver {
     repository: PostgresAiModelRepository,
+    definitions: Arc<DefinitionRegistry>,
 }
 
 impl PostgresModelClientResolver {
-    pub fn new(repository: PostgresAiModelRepository) -> Self {
-        Self { repository }
+    pub fn new(
+        repository: PostgresAiModelRepository,
+        definitions: Arc<DefinitionRegistry>,
+    ) -> Self {
+        Self {
+            repository,
+            definitions,
+        }
+    }
+
+    fn validate_profile(&self, snapshot: &ModelExecutionSnapshot) -> Result<(), ModelResolveError> {
+        let key = snapshot.tokenizer_profile_key.as_deref().ok_or(
+            ModelResolveError::TokenizerProfileUnavailable(snapshot.model_id),
+        )?;
+        let version = snapshot.tokenizer_profile_version.as_deref().ok_or(
+            ModelResolveError::TokenizerProfileUnavailable(snapshot.model_id),
+        )?;
+        let profile = self
+            .definitions
+            .tokenizer_profile(key, version)
+            .map_err(|_| ModelResolveError::TokenizerProfileUnavailable(snapshot.model_id))?;
+        if matches!(
+            profile.status,
+            DefinitionStatus::Candidate | DefinitionStatus::Revoked
+        ) || !profile
+            .applicable_protocols
+            .iter()
+            .any(|protocol| protocol == snapshot.api_protocol.as_str())
+        {
+            return Err(ModelResolveError::TokenizerProfileUnavailable(
+                snapshot.model_id,
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -94,6 +188,7 @@ impl ModelClientResolver for PostgresModelClientResolver {
             .resolve_enabled(model_id, ModelType::Text)
             .await
             .map_err(|error| ModelResolveError::from_repository(error, model_id))?;
+        self.validate_profile(&runtime.snapshot)?;
         let client = build_text_client(&runtime)?;
         Ok(ResolvedTextClient {
             client,
@@ -111,6 +206,7 @@ impl BoundModelResolver for PostgresModelClientResolver {
             .resolve_enabled(model_id, ModelType::Text)
             .await
             .map_err(|error| ModelResolveError::from_repository(error, model_id))?;
+        self.validate_profile(&runtime.snapshot)?;
         let evidence = model_behavior_evidence(&runtime.snapshot)?;
         let client = build_text_client(&runtime)?;
         let model_snapshot = serde_json::to_value(&runtime.snapshot)
@@ -124,6 +220,21 @@ impl BoundModelResolver for PostgresModelClientResolver {
             model_id: runtime.snapshot.model_id,
             behavior_fingerprint: evidence.behavior_fingerprint,
             capabilities: evidence.capabilities,
+            tokenizer_profile_key: runtime
+                .snapshot
+                .tokenizer_profile_key
+                .clone()
+                .ok_or(ModelResolveError::TokenizerProfileUnavailable(model_id))?,
+            tokenizer_profile_version: runtime
+                .snapshot
+                .tokenizer_profile_version
+                .clone()
+                .ok_or(ModelResolveError::TokenizerProfileUnavailable(model_id))?,
+            max_output_tokens: runtime
+                .snapshot
+                .max_output_tokens
+                .ok_or(ModelResolveError::InvalidConfig(model_id))?
+                .into(),
             model_snapshot,
             known_secrets,
         })
@@ -175,7 +286,10 @@ impl ModelClientResolver for StaticModelClientResolver {
                 reasoning_effort: None,
                 timeout_seconds: 5,
                 max_output_tokens: Some(3000),
-                settings: json!({"context_window": 128000}),
+                context_window: Some(128000),
+                tokenizer_profile_key: Some("byte-upper-bound".to_string()),
+                tokenizer_profile_version: Some("1.0.0".to_string()),
+                settings: json!({}),
             },
         })
     }
@@ -193,6 +307,19 @@ impl BoundModelResolver for StaticModelClientResolver {
             model_id,
             behavior_fingerprint: evidence.behavior_fingerprint,
             capabilities: evidence.capabilities,
+            tokenizer_profile_key: resolved
+                .snapshot
+                .tokenizer_profile_key
+                .ok_or(ModelResolveError::TokenizerProfileUnavailable(model_id))?,
+            tokenizer_profile_version: resolved
+                .snapshot
+                .tokenizer_profile_version
+                .ok_or(ModelResolveError::TokenizerProfileUnavailable(model_id))?,
+            max_output_tokens: resolved
+                .snapshot
+                .max_output_tokens
+                .ok_or(ModelResolveError::InvalidConfig(model_id))?
+                .into(),
             model_snapshot,
             known_secrets: Vec::new(),
         })
@@ -209,6 +336,7 @@ pub enum ModelResolveError {
         actual: ModelType,
     },
     InvalidConfig(Uuid),
+    TokenizerProfileUnavailable(Uuid),
     Storage,
 }
 
@@ -251,6 +379,9 @@ impl fmt::Display for ModelResolveError {
                 "model type mismatch for {id}: expected {expected}, got {actual}"
             ),
             Self::InvalidConfig(id) => write!(formatter, "invalid model config: {id}"),
+            Self::TokenizerProfileUnavailable(id) => {
+                write!(formatter, "tokenizer profile unavailable for model: {id}")
+            }
             Self::Storage => formatter.write_str("model storage error"),
         }
     }

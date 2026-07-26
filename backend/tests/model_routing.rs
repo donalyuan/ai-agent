@@ -1,5 +1,6 @@
 use axum::{response::IntoResponse, routing::post, Router};
 use novex_agent::BoundModelResolver;
+use novex_ai_core::DefinitionRegistry;
 use novex_api::model_routing::{
     ModelClientResolver, ModelResolveError, PostgresModelClientResolver,
 };
@@ -9,12 +10,23 @@ use novex_api::repositories::{
 use novex_model::{ApiProtocol, AuthScheme, LLMPrompt, ModelType};
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
+use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
 mod support;
 
 use support::test_database::TestDatabase;
+
+fn definitions() -> Arc<DefinitionRegistry> {
+    Arc::new(
+        DefinitionRegistry::load(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../agent-definitions"),
+        )
+        .unwrap(),
+    )
+}
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -63,18 +75,24 @@ async fn drop_database(admin_pool: &PgPool, database_name: &str) {
 }
 
 fn model_input(base_url: String, model_type: ModelType) -> CreateAiModelInput {
-    let (api_protocol, settings, reasoning_effort, max_output_tokens) = match model_type {
+    let (api_protocol, settings, reasoning_effort, max_output_tokens, context) = match model_type {
         ModelType::Text => (
             ApiProtocol::OpenAiResponses,
-            json!({"context_window": 128000}),
+            json!({}),
             Some("high".to_string()),
             Some(2048),
+            (
+                Some(128000),
+                Some("openai.o200k".to_string()),
+                Some("1.0.0".to_string()),
+            ),
         ),
         ModelType::Image => (
             ApiProtocol::OpenAiImages,
             json!({"supported_sizes": ["1024x1024"], "default_size": "1024x1024"}),
             None,
             None,
+            (None, None, None),
         ),
         ModelType::Video | ModelType::Speech => unreachable!(),
     };
@@ -95,6 +113,9 @@ fn model_input(base_url: String, model_type: ModelType) -> CreateAiModelInput {
         timeout_seconds: 5,
         reasoning_effort,
         max_output_tokens,
+        context_window: context.0,
+        tokenizer_profile_key: context.1,
+        tokenizer_profile_version: context.2,
         settings,
         sort_order: 0,
         remark: String::new(),
@@ -115,7 +136,7 @@ async fn audited_resolver_reloads_credentials_and_behavior_from_ai_models() {
         ))
         .await
         .unwrap();
-    let resolver = PostgresModelClientResolver::new(repository);
+    let resolver = PostgresModelClientResolver::new(repository, definitions());
 
     let initial = BoundModelResolver::resolve(&resolver, model.id)
         .await
@@ -145,6 +166,32 @@ async fn audited_resolver_reloads_credentials_and_behavior_from_ai_models() {
         .await
         .unwrap();
     assert_ne!(rotated.behavior_fingerprint, drifted.behavior_fingerprint);
+
+    sqlx::query("UPDATE ai_models SET tokenizer_profile_key = 'openai.cl100k' WHERE id = $1")
+        .bind(model.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let profile_drifted = BoundModelResolver::resolve(&resolver, model.id)
+        .await
+        .unwrap();
+    assert_ne!(
+        drifted.behavior_fingerprint,
+        profile_drifted.behavior_fingerprint
+    );
+
+    sqlx::query("UPDATE ai_models SET context_window = context_window + 1 WHERE id = $1")
+        .bind(model.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let window_drifted = BoundModelResolver::resolve(&resolver, model.id)
+        .await
+        .unwrap();
+    assert_ne!(
+        profile_drifted.behavior_fingerprint,
+        window_drifted.behavior_fingerprint
+    );
 
     pool.close().await;
     drop_database(&admin_pool, &database_name).await;
@@ -181,7 +228,7 @@ async fn resolver_builds_protocol_driven_client_and_non_sensitive_snapshot() {
         .create(model_input(format!("http://{address}/v1"), ModelType::Text))
         .await
         .unwrap();
-    let resolver = PostgresModelClientResolver::new(repository.clone());
+    let resolver = PostgresModelClientResolver::new(repository.clone(), definitions());
 
     let resolved = resolver.text_client(model.id).await.unwrap();
     assert_eq!(resolved.snapshot.model_id, model.id);
@@ -243,7 +290,7 @@ async fn resolver_rejects_disabled_and_non_text_models_before_client_creation() 
     .execute(&pool)
     .await
     .unwrap();
-    let resolver = PostgresModelClientResolver::new(repository);
+    let resolver = PostgresModelClientResolver::new(repository, definitions());
 
     assert!(matches!(
         resolver.text_client(text.id).await,
@@ -279,11 +326,41 @@ async fn resolver_preserves_requested_model_id_for_invalid_stored_config() {
         .execute(&pool)
         .await
         .unwrap();
-    let resolver = PostgresModelClientResolver::new(repository);
+    let resolver = PostgresModelClientResolver::new(repository, definitions());
 
     assert!(matches!(
         resolver.text_client(model.id).await,
         Err(ModelResolveError::InvalidConfig(id)) if id == model.id
+    ));
+
+    pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn resolver_fails_closed_when_governed_context_binding_is_missing() {
+    let (admin_pool, pool, database_name) = migrated_pool().await;
+    let repository = PostgresAiModelRepository::new(pool.clone());
+    let model = repository
+        .create(model_input(
+            "https://example.invalid/v1".to_string(),
+            ModelType::Text,
+        ))
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE ai_models SET context_window = NULL, tokenizer_profile_key = NULL, tokenizer_profile_version = NULL WHERE id = $1",
+    )
+    .bind(model.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let resolver = PostgresModelClientResolver::new(repository, definitions());
+
+    assert!(matches!(
+        resolver.text_client(model.id).await,
+        Err(ModelResolveError::TokenizerProfileUnavailable(id)) if id == model.id
     ));
 
     pool.close().await;

@@ -70,6 +70,12 @@ pub(super) struct CreateAiModelRequest {
     reasoning_effort: Option<String>,
     #[serde(default)]
     max_output_tokens: Option<i32>,
+    #[serde(default)]
+    context_window: Option<i64>,
+    #[serde(default)]
+    tokenizer_profile_key: Option<String>,
+    #[serde(default)]
+    tokenizer_profile_version: Option<String>,
     #[serde(default = "empty_object")]
     settings: Value,
     #[serde(default)]
@@ -105,6 +111,9 @@ impl CreateAiModelRequest {
                 timeout_seconds: self.timeout_seconds,
                 reasoning_effort: normalize_optional(self.reasoning_effort),
                 max_output_tokens: self.max_output_tokens,
+                context_window: self.context_window,
+                tokenizer_profile_key: normalize_optional(self.tokenizer_profile_key),
+                tokenizer_profile_version: normalize_optional(self.tokenizer_profile_version),
                 settings: self.settings,
                 sort_order: self.sort_order,
                 remark: self.remark,
@@ -146,6 +155,12 @@ pub(super) struct UpdateAiModelRequest {
     reasoning_effort: Option<String>,
     #[serde(default)]
     max_output_tokens: Option<i32>,
+    #[serde(default)]
+    context_window: Option<i64>,
+    #[serde(default)]
+    tokenizer_profile_key: Option<String>,
+    #[serde(default)]
+    tokenizer_profile_version: Option<String>,
     #[serde(default = "empty_object")]
     settings: Value,
     #[serde(default)]
@@ -186,6 +201,9 @@ impl UpdateAiModelRequest {
                 timeout_seconds: self.timeout_seconds,
                 reasoning_effort: normalize_optional(self.reasoning_effort),
                 max_output_tokens: self.max_output_tokens,
+                context_window: self.context_window,
+                tokenizer_profile_key: normalize_optional(self.tokenizer_profile_key),
+                tokenizer_profile_version: normalize_optional(self.tokenizer_profile_version),
                 settings: self.settings,
                 sort_order: self.sort_order,
                 remark: self.remark,
@@ -284,6 +302,9 @@ pub(super) struct AiModelAdminResponse {
     timeout_seconds: i32,
     reasoning_effort: Option<String>,
     max_output_tokens: Option<i32>,
+    context_window: Option<i64>,
+    tokenizer_profile_key: Option<String>,
+    tokenizer_profile_version: Option<String>,
     settings: Value,
     sort_order: i32,
     remark: String,
@@ -344,6 +365,9 @@ impl From<AiModel> for AiModelAdminResponse {
             timeout_seconds: model.timeout_seconds,
             reasoning_effort: model.reasoning_effort,
             max_output_tokens: model.max_output_tokens,
+            context_window: model.context_window,
+            tokenizer_profile_key: model.tokenizer_profile_key,
+            tokenizer_profile_version: model.tokenizer_profile_version,
             settings: model.settings,
             sort_order: model.sort_order,
             remark: model.remark,

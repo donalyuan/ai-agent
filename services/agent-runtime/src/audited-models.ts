@@ -1,5 +1,6 @@
 import type {
   Api,
+  AssistantMessage,
   Context,
   Model,
   ModelsApiStreamOptions,
@@ -7,8 +8,21 @@ import type {
   MutableModels,
 } from "@earendil-works/pi-ai";
 
+export type CompleteSimpleNext = (
+  context: Context,
+  options?: ModelsSimpleStreamOptions,
+) => Promise<AssistantMessage>;
+
+export type CompleteSimpleGovernor = (
+  model: Model<Api>,
+  context: Context,
+  options: ModelsSimpleStreamOptions | undefined,
+  next: CompleteSimpleNext,
+) => Promise<AssistantMessage>;
+
 /** Public Models composition boundary that disables provider/SDK transparent retries. */
 export class AuditedModels {
+  private completeSimpleGovernor: CompleteSimpleGovernor | undefined;
   readonly getProviders: MutableModels["getProviders"];
   readonly getProvider: MutableModels["getProvider"];
   readonly getModels: MutableModels["getModels"];
@@ -47,11 +61,22 @@ export class AuditedModels {
       inner.complete(model, context, { ...options, maxRetries: 0 })) as MutableModels["complete"];
     this.streamSimple = ((model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions) =>
       inner.streamSimple(model, context, { ...options, maxRetries: 0 })) as MutableModels["streamSimple"];
-    this.completeSimple = ((model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions) =>
-      inner.completeSimple(model, context, { ...options, maxRetries: 0 })) as MutableModels["completeSimple"];
+    this.completeSimple = (async (model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions) => {
+      const next: CompleteSimpleNext = (nextContext, nextOptions) =>
+        inner.completeSimple(model, nextContext, { ...nextOptions, maxRetries: 0 });
+      return this.completeSimpleGovernor
+        ? this.completeSimpleGovernor(model, context, options, next)
+        : next(context, options);
+    }) as MutableModels["completeSimple"];
+  }
+
+  /** Installs the per-Harness governor for Pi's public standalone model calls. */
+  governCompleteSimple(governor: CompleteSimpleGovernor): void {
+    if (this.completeSimpleGovernor) throw new Error("completeSimple governor is already installed");
+    this.completeSimpleGovernor = governor;
   }
 }
 
-export function createAuditedModels(inner: MutableModels): MutableModels {
-  return new AuditedModels(inner) as MutableModels;
+export function createAuditedModels(inner: MutableModels): AuditedModels {
+  return new AuditedModels(inner);
 }

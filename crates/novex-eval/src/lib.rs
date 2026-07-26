@@ -14,6 +14,26 @@ pub const REQUIRED_GATES: [&str; 7] = [
     "cost_budget",
 ];
 
+pub const REQUIRED_CONTEXT_GATES: [&str; 8] = [
+    "schema",
+    "cross_language_token",
+    "determinism",
+    "safety",
+    "budget",
+    "core_prompt",
+    "business_output",
+    "baseline_equivalence",
+];
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvalDefinitionKind {
+    Agent,
+    Prompt,
+    ContextPolicy,
+    TokenizerProfile,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvalMode {
@@ -24,6 +44,7 @@ pub enum EvalMode {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CandidateRef {
+    pub definition_kind: EvalDefinitionKind,
     pub key: String,
     pub version: String,
     pub digest: String,
@@ -52,8 +73,47 @@ pub struct EvalRunSpec {
     pub case_set_version: String,
     pub evaluator_version: String,
     pub mode: EvalMode,
+    pub context: Option<ContextEvalConfig>,
     pub model_binding: Option<ModelBinding>,
     pub budget: EvalBudget,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ContextEvalConfig {
+    pub schema_version: String,
+    pub policy: CandidateRef,
+    pub tokenizer_profile: CandidateRef,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ContextEvalCaseResult {
+    pub case_id: String,
+    pub node_key: String,
+    pub schema_valid: bool,
+    pub rust_tokens: u64,
+    pub typescript_tokens: u64,
+    pub first_digest: String,
+    pub repeated_digest: String,
+    pub shuffled_digest: String,
+    pub safety_passed: bool,
+    pub budget_passed: bool,
+    pub core_prompt_passed: bool,
+    pub business_output_passed: bool,
+    pub equivalent: bool,
+    pub selection_diff: Value,
+    pub budget_ledger: Value,
+    pub tokenizer_metrics: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ContextEvalEvidence {
+    pub schema_version: String,
+    pub policy: CandidateRef,
+    pub tokenizer_profile: CandidateRef,
+    pub node_results: Vec<ContextEvalCaseResult>,
+    pub selection_diff: Vec<Value>,
+    pub budget_ledgers: Vec<Value>,
+    pub tokenizer_metrics: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -100,6 +160,7 @@ pub struct EvalReport {
     pub usage: EvalUsage,
     pub actual_real_model_calls: u64,
     pub redacted_case_results: Vec<EvalCaseResult>,
+    pub context: Option<ContextEvalEvidence>,
 }
 
 pub struct ZeroCostRunner;
@@ -163,8 +224,151 @@ impl ZeroCostRunner {
             usage,
             actual_real_model_calls: 0,
             redacted_case_results: cases.to_vec(),
+            context: None,
         })
     }
+}
+
+pub struct ContextEvalRunner;
+
+impl ContextEvalRunner {
+    pub fn run(
+        spec: &EvalRunSpec,
+        cases: &[ContextEvalCaseResult],
+    ) -> Result<EvalReport, EvalError> {
+        let context = validate_context_spec(spec, cases)?;
+        let usage = EvalUsage {
+            cases: cases.len() as u64,
+            input_tokens: cases.iter().map(|case| case.rust_tokens).sum(),
+            ..EvalUsage::default()
+        };
+        let boolean_gate = |name: &str, passed: bool| GateResult {
+            name: name.into(),
+            passed,
+            evidence: json!({"case_count": cases.len()}),
+        };
+        let valid_digest = |value: &str| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        };
+        let gates = vec![
+            boolean_gate("schema", cases.iter().all(|case| case.schema_valid)),
+            boolean_gate(
+                "cross_language_token",
+                cases
+                    .iter()
+                    .all(|case| case.rust_tokens == case.typescript_tokens),
+            ),
+            boolean_gate(
+                "determinism",
+                cases.iter().all(|case| {
+                    valid_digest(&case.first_digest)
+                        && case.first_digest == case.repeated_digest
+                        && case.first_digest == case.shuffled_digest
+                }),
+            ),
+            boolean_gate("safety", cases.iter().all(|case| case.safety_passed)),
+            GateResult {
+                name: "budget".into(),
+                passed: cases.iter().all(|case| case.budget_passed)
+                    && usage.input_tokens <= spec.budget.max_input_tokens
+                    && usage.output_tokens <= spec.budget.max_output_tokens,
+                evidence: json!({
+                    "actual_input_tokens": usage.input_tokens,
+                    "actual_output_tokens": usage.output_tokens,
+                    "max_input_tokens": spec.budget.max_input_tokens,
+                    "max_output_tokens": spec.budget.max_output_tokens,
+                }),
+            },
+            boolean_gate(
+                "core_prompt",
+                cases.iter().all(|case| case.core_prompt_passed),
+            ),
+            boolean_gate(
+                "business_output",
+                cases.iter().all(|case| case.business_output_passed),
+            ),
+            boolean_gate(
+                "baseline_equivalence",
+                spec.mode != EvalMode::GoldenBaseline || cases.iter().all(|case| case.equivalent),
+            ),
+        ];
+        Ok(EvalReport {
+            schema_version: "2".into(),
+            candidate: spec.candidate.clone(),
+            baseline: spec.baseline.clone(),
+            case_set_version: spec.case_set_version.clone(),
+            evaluator_version: spec.evaluator_version.clone(),
+            mode: spec.mode,
+            passed: gates.iter().all(|gate| gate.passed),
+            gates,
+            usage,
+            actual_real_model_calls: 0,
+            redacted_case_results: Vec::new(),
+            context: Some(ContextEvalEvidence {
+                schema_version: context.schema_version.clone(),
+                policy: context.policy.clone(),
+                tokenizer_profile: context.tokenizer_profile.clone(),
+                node_results: cases.to_vec(),
+                selection_diff: cases
+                    .iter()
+                    .map(|case| case.selection_diff.clone())
+                    .collect(),
+                budget_ledgers: cases
+                    .iter()
+                    .map(|case| case.budget_ledger.clone())
+                    .collect(),
+                tokenizer_metrics: cases
+                    .iter()
+                    .map(|case| case.tokenizer_metrics.clone())
+                    .collect(),
+            }),
+        })
+    }
+}
+
+fn validate_context_spec<'a>(
+    spec: &'a EvalRunSpec,
+    cases: &[ContextEvalCaseResult],
+) -> Result<&'a ContextEvalConfig, EvalError> {
+    let context = spec.context.as_ref().ok_or(EvalError::InvalidContextRun)?;
+    let candidate_matches = match spec.candidate.definition_kind {
+        EvalDefinitionKind::ContextPolicy => spec.candidate == context.policy,
+        EvalDefinitionKind::TokenizerProfile => spec.candidate == context.tokenizer_profile,
+        EvalDefinitionKind::Agent | EvalDefinitionKind::Prompt => false,
+    };
+    let valid_reference = |reference: &CandidateRef, expected: EvalDefinitionKind| {
+        reference.definition_kind == expected
+            && !reference.key.is_empty()
+            && !reference.version.is_empty()
+            && reference.digest.len() == 64
+    };
+    if !matches!(spec.mode, EvalMode::GoldenBaseline | EvalMode::ZeroCost)
+        || spec.model_binding.is_some()
+        || spec.budget.approved_real_calls
+        || spec.budget.max_cost_micros != 0
+        || context.schema_version != "1"
+        || !candidate_matches
+        || !valid_reference(&context.policy, EvalDefinitionKind::ContextPolicy)
+        || !valid_reference(
+            &context.tokenizer_profile,
+            EvalDefinitionKind::TokenizerProfile,
+        )
+        || cases.is_empty()
+        || cases.len() as u64 > spec.budget.max_cases
+        || cases.iter().any(|case| {
+            case.case_id.trim().is_empty()
+                || case.node_key.trim().is_empty()
+                || !case.selection_diff.is_array()
+                || !case.budget_ledger.is_object()
+                || !case.tokenizer_metrics.is_object()
+        })
+    {
+        return Err(EvalError::InvalidContextRun);
+    }
+    Ok(context)
 }
 
 fn validate_zero_cost_spec(spec: &EvalRunSpec, cases: &[EvalCaseResult]) -> Result<(), EvalError> {
@@ -291,16 +495,47 @@ pub fn validate_activation(
     candidate: &CandidateRef,
     evidence: &ActivationEvidence,
 ) -> Result<(), EvalError> {
+    let context_candidate = matches!(
+        candidate.definition_kind,
+        EvalDefinitionKind::ContextPolicy | EvalDefinitionKind::TokenizerProfile
+    );
+    let required_gates = if context_candidate {
+        REQUIRED_CONTEXT_GATES.as_slice()
+    } else {
+        REQUIRED_GATES.as_slice()
+    };
+    let valid_mode = if context_candidate {
+        matches!(
+            evidence.report.mode,
+            EvalMode::GoldenBaseline | EvalMode::ZeroCost | EvalMode::RealModel
+        )
+    } else {
+        matches!(
+            evidence.report.mode,
+            EvalMode::GoldenBaseline | EvalMode::RealModel
+        )
+    };
+    let valid_context = if context_candidate {
+        evidence.report.context.as_ref().is_some_and(|context| {
+            context.policy.definition_kind == EvalDefinitionKind::ContextPolicy
+                && context.tokenizer_profile.definition_kind == EvalDefinitionKind::TokenizerProfile
+                && match candidate.definition_kind {
+                    EvalDefinitionKind::ContextPolicy => &context.policy == candidate,
+                    EvalDefinitionKind::TokenizerProfile => &context.tokenizer_profile == candidate,
+                    _ => false,
+                }
+        })
+    } else {
+        evidence.report.context.is_none()
+    };
     if evidence.report_id.is_empty()
         || &evidence.candidate != candidate
         || evidence.report.candidate != *candidate
         || !evidence.report.passed
-        || !matches!(
-            evidence.report.mode,
-            EvalMode::GoldenBaseline | EvalMode::RealModel
-        )
-        || evidence.report.gates.len() != REQUIRED_GATES.len()
-        || !REQUIRED_GATES.iter().all(|required| {
+        || !valid_mode
+        || !valid_context
+        || evidence.report.gates.len() != required_gates.len()
+        || !required_gates.iter().all(|required| {
             evidence
                 .report
                 .gates
@@ -368,6 +603,7 @@ pub enum EvalError {
     InvalidZeroCostRun,
     InvalidCaseSet,
     InvalidCandidate,
+    InvalidContextRun,
     ActivationEvidenceRejected,
     InvalidRollback,
 }
@@ -378,6 +614,7 @@ impl fmt::Display for EvalError {
             Self::InvalidZeroCostRun => "zero-cost evaluation cannot contain paid execution",
             Self::InvalidCaseSet => "evaluation case set is empty or exceeds the approved limit",
             Self::InvalidCandidate => "candidate evaluation identity is invalid",
+            Self::InvalidContextRun => "context evaluation evidence is invalid",
             Self::ActivationEvidenceRejected => "candidate activation evidence is incomplete",
             Self::InvalidRollback => "rollback target must be a distinct supported version",
         };

@@ -120,7 +120,10 @@ fn text_payload(name: &str) -> Value {
         "timeout_seconds": 120,
         "reasoning_effort": "high",
         "max_output_tokens": 4096,
-        "settings": {"context_window": 128000},
+        "context_window": 128000,
+        "tokenizer_profile_key": "openai.o200k",
+        "tokenizer_profile_version": "1.0.0",
+        "settings": {},
         "sort_order": 10,
         "remark": "测试模型",
         "is_default": false

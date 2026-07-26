@@ -60,11 +60,19 @@ describe("Pi public composition boundary", () => {
 
     const wrapper = sources.find(([name]) => name === "novex-harness.ts")?.[1] ?? "";
     for (const nodeKey of Object.keys(personal?.nodes ?? {})) expect(wrapper).toContain(`"${nodeKey}"`);
-    expect(wrapper).toContain("prepareModelCall");
-    expect(wrapper).toContain("compilePrompt(");
+    expect(wrapper).toContain("prepareModelCallWithContext");
+    expect(wrapper).toContain("compileContext(");
+    expect(wrapper).toContain("return { messages:");
+    for (const forbidden of [
+      "queuedFragments",
+      "canonicalJson(redactUnknown(this.context",
+      "compilePrompt(",
+      "prepareModelCall({",
+      "pi_context_hook",
+    ]) expect(wrapper).not.toContain(forbidden);
 
     for (const [name, source] of sources) {
-      if (name !== "sessions.ts" && name !== "coordinator.ts") expect(source).not.toContain("system_prompt");
+      if (name !== "sessions.ts" && name !== "coordinator.ts") expect(source).not.toMatch(/\bsystem_prompt\b/);
       for (const forbidden of [
         "USE_LEGACY_PROMPT",
         "ENABLE_LEGACY_LLM",

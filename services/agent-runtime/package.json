@@ -17,6 +17,7 @@
     "@earendil-works/pi-agent-core": "0.82.0",
     "@earendil-works/pi-ai": "0.82.0",
     "@earendil-works/pi-storage-sqlite-node": "0.82.0",
+    "js-tiktoken": "1.0.21",
     "pg": "8.16.3"
   },
   "devDependencies": {

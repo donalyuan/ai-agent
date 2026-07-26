@@ -1,9 +1,21 @@
 use crate::domain::script::ScriptGenerationInput;
+use novex_ai_core::{ContextPriority, TrustLevel};
 use serde::Deserialize;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScriptNodeInput {
+    pub context: Vec<ScriptContextFragment>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScriptContextFragment {
+    pub key: String,
+    pub source_kind: &'static str,
+    pub trust: TrustLevel,
+    pub priority: ContextPriority,
+    pub required: bool,
+    pub render_order: u32,
     pub content: String,
 }
 
@@ -20,40 +32,70 @@ impl ScriptNodeInputBuilder {
         };
 
         ScriptNodeInput {
-            content: format!(
-                r#"请根据以下选题生成{scene_count}个分镜的中文短视频脚本。
+            context: vec![
+                ScriptContextFragment {
+                    key: "request".into(),
+                    source_kind: "user_instruction",
+                    trust: TrustLevel::UserInstruction,
+                    priority: ContextPriority::P0,
+                    required: true,
+                    render_order: 0,
+                    content: format!(
+                        r#"请根据以下选题生成{scene_count}个分镜的中文短视频脚本。
 
 选题：{topic}
 风格：{style_label}（{style_code}）
-
-输出要求：
+"#,
+                        scene_count = scene_count,
+                        topic = request.topic,
+                        style_label = style.label(),
+                        style_code = style.as_str(),
+                    ),
+                },
+                ScriptContextFragment {
+                    key: "constraints".into(),
+                    source_kind: "user_instruction",
+                    trust: TrustLevel::UserInstruction,
+                    priority: ContextPriority::P0,
+                    required: true,
+                    render_order: 1,
+                    content: format!(
+                        r#"输出要求：
 1. 标题不超过30个中文字符。
 2. hook 必须能在前3秒抓住观众注意力。
 3. 必须严格输出 {scene_count} 个分镜，sequence 从 1 连续递增。
 4. 每个分镜包含 narration、visual_description、emotion、duration_sec。
 5. 每个分镜 narration 为 50-150 个中文字符，不能少于50字。
 6. 每个分镜 duration_sec 为 1-30 秒，总时长建议 45-60 秒。{variant_instruction}
-
-JSON Schema：
-{{
+"#,
+                        scene_count = scene_count,
+                        variant_instruction = variant_instruction,
+                    ),
+                },
+                ScriptContextFragment {
+                    key: "output_example".into(),
+                    source_kind: "user_instruction",
+                    trust: TrustLevel::UserInstruction,
+                    priority: ContextPriority::P0,
+                    required: true,
+                    render_order: 2,
+                    content: r#"JSON Schema：
+{
   "title": "标题",
   "hook": "前3秒吸引点",
   "scenes": [
-    {{
+    {
       "sequence": 1,
       "narration": "旁白文本",
       "visual_description": "视觉描述",
       "emotion": "情绪标签",
       "duration_sec": 8
-    }}
+    }
   ]
-}}"#,
-                scene_count = scene_count,
-                topic = request.topic,
-                style_label = style.label(),
-                style_code = style.as_str(),
-                variant_instruction = variant_instruction,
-            ),
+}"#
+                    .to_string(),
+                },
+            ],
         }
     }
 
@@ -66,28 +108,57 @@ JSON Schema：
         };
 
         ScriptNodeInput {
-            content: format!(
-                r#"请根据以下选题生成中文短视频脚本的标题和 hook。只输出 title 和 hook，不要输出 scenes。
+            context: vec![
+                ScriptContextFragment {
+                    key: "request".into(),
+                    source_kind: "user_instruction",
+                    trust: TrustLevel::UserInstruction,
+                    priority: ContextPriority::P0,
+                    required: true,
+                    render_order: 0,
+                    content: format!(
+                        r#"请根据以下选题生成中文短视频脚本的标题和 hook。只输出 title 和 hook，不要输出 scenes。
 
 选题：{topic}
 风格：{style_label}（{style_code}）
-
-输出要求：
+"#,
+                        topic = request.topic,
+                        style_label = style.label(),
+                        style_code = style.as_str(),
+                    ),
+                },
+                ScriptContextFragment {
+                    key: "constraints".into(),
+                    source_kind: "user_instruction",
+                    trust: TrustLevel::UserInstruction,
+                    priority: ContextPriority::P0,
+                    required: true,
+                    render_order: 1,
+                    content: format!(
+                        r#"输出要求：
 1. title 不超过30个中文字符。
 2. hook 必须能在前3秒抓住观众注意力。
 3. title 和 hook 必须贴合选题，不要泛泛而谈。
 4. 必须只输出合法 JSON。{variant_instruction}
-
-JSON Schema：
-{{
+"#,
+                        variant_instruction = variant_instruction,
+                    ),
+                },
+                ScriptContextFragment {
+                    key: "output_example".into(),
+                    source_kind: "user_instruction",
+                    trust: TrustLevel::UserInstruction,
+                    priority: ContextPriority::P0,
+                    required: true,
+                    render_order: 2,
+                    content: r#"JSON Schema：
+{
   "title": "标题",
   "hook": "前3秒吸引点"
-}}"#,
-                topic = request.topic,
-                style_label = style.label(),
-                style_code = style.as_str(),
-                variant_instruction = variant_instruction,
-            ),
+}"#
+                    .to_string(),
+                },
+            ],
         }
     }
 
@@ -101,23 +172,58 @@ JSON Schema：
         };
 
         ScriptNodeInput {
-            content: format!(
-                r#"请根据以下选题生成一个中文短视频分镜。只输出单个 scene 对象，不要输出 title、hook 或 scenes 数组。
+            context: vec![
+                ScriptContextFragment {
+                    key: format!("scene-{sequence}-request"),
+                    source_kind: "user_instruction",
+                    trust: TrustLevel::UserInstruction,
+                    priority: ContextPriority::P0,
+                    required: true,
+                    render_order: 0,
+                    content: format!(
+                        r#"请根据以下选题生成一个中文短视频分镜。只输出单个 scene 对象，不要输出 title、hook 或 scenes 数组。
 
 选题：{topic}
 风格：{style_label}（{style_code}）
 整体分镜数：{scene_count}
 当前分镜序号：{sequence}
-
-输出要求：
+"#,
+                        topic = request.topic,
+                        style_label = style.label(),
+                        style_code = style.as_str(),
+                        scene_count = scene_count,
+                        sequence = sequence,
+                    ),
+                },
+                ScriptContextFragment {
+                    key: format!("scene-{sequence}-constraints"),
+                    source_kind: "user_instruction",
+                    trust: TrustLevel::UserInstruction,
+                    priority: ContextPriority::P0,
+                    required: true,
+                    render_order: 1,
+                    content: format!(
+                        r#"输出要求：
 1. scene.sequence 必须等于 {sequence}。
 2. scene 必须包含 narration、visual_description、emotion、duration_sec。
 3. narration 为 50-150 个中文字符，不能少于50字。
 4. visual_description 必须具体描述画面、人物、动作或字幕。
 5. duration_sec 为 1-30 秒。
 6. 必须只输出合法 JSON。{variant_instruction}
-
-JSON Schema：
+"#,
+                        sequence = sequence,
+                        variant_instruction = variant_instruction,
+                    ),
+                },
+                ScriptContextFragment {
+                    key: format!("scene-{sequence}-output-example"),
+                    source_kind: "user_instruction",
+                    trust: TrustLevel::UserInstruction,
+                    priority: ContextPriority::P0,
+                    required: true,
+                    render_order: 2,
+                    content: format!(
+                        r#"JSON Schema：
 {{
   "scene": {{
     "sequence": {sequence},
@@ -127,13 +233,10 @@ JSON Schema：
     "duration_sec": 8
   }}
 }}"#,
-                topic = request.topic,
-                style_label = style.label(),
-                style_code = style.as_str(),
-                scene_count = scene_count,
-                sequence = sequence,
-                variant_instruction = variant_instruction,
-            ),
+                        sequence = sequence,
+                    ),
+                },
+            ],
         }
     }
 }

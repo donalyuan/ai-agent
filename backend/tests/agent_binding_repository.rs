@@ -3,7 +3,8 @@ use novex_api::domain::conversation::{
     ModelBindingEvidence,
 };
 use novex_api::repositories::{
-    AgentBindingError, ConversationRepository, PostgresConversationRepository,
+    AgentBindingError, ConversationRepository, PostgresContextAuditRepository,
+    PostgresConversationRepository,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -100,6 +101,13 @@ fn definition_binding() -> AgentConversationDefinitionBindingInput {
                 "digest": "b".repeat(64)
             }
         }),
+        context_policy_bindings: json!({
+            "script.complete": {
+                "key": "script.complete.baseline",
+                "version": "1.0.0",
+                "digest": "d".repeat(64)
+            }
+        }),
         registry_digest: "c".repeat(64),
         migration_source: None,
         parent_conversation_id: None,
@@ -118,6 +126,9 @@ fn model_evidence(model_id: Uuid, fingerprint: char) -> ModelBindingEvidence {
             "reasoning": false,
             "context_window": 128000
         }),
+        tokenizer_profile_key: "byte-upper-bound".into(),
+        tokenizer_profile_version: "1.0.0".into(),
+        tokenizer_profile_digest: "e".repeat(64),
     }
 }
 
@@ -277,3 +288,81 @@ async fn non_session_run_binding_is_idempotent_and_immutable() {
     admin_pool.close().await;
     drop(database);
 }
+
+#[tokio::test]
+async fn tokenizer_profile_incompatibility_persistently_blocks_conversation_and_run_bindings() {
+    let (admin_pool, pool, database) = migrated_pool().await;
+    let conversations = PostgresConversationRepository::new(pool.clone());
+    let audit = PostgresContextAuditRepository::new(pool.clone());
+    let conversation = conversations
+        .create_conversation_with_definition(conversation_input(), definition_binding())
+        .await
+        .unwrap();
+    let model_id = insert_text_model(&pool, "blocked-model").await;
+    conversations
+        .bind_or_validate_conversation_model(conversation.id, model_evidence(model_id, '7'))
+        .await
+        .unwrap();
+    let run = conversations
+        .create_run(CreateAgentRunInput {
+            conversation_id: conversation.id,
+            project_id: None,
+            agent_type: "script".into(),
+            input: json!({"intent": "blocked_generation"}),
+            model_id: Some(model_id),
+            model_snapshot: Some(json!({"model_id": model_id})),
+        })
+        .await
+        .unwrap();
+    conversations
+        .create_run_binding(
+            run.id,
+            definition_binding(),
+            model_evidence(model_id, '7'),
+            false,
+        )
+        .await
+        .unwrap();
+
+    let conversation_owner = AuditedCallOwner::Conversation(conversation.id);
+    let run_owner = AuditedCallOwner::AgentRun(run.id);
+    assert!(audit
+        .binding_is_executable(conversation_owner)
+        .await
+        .unwrap());
+    assert!(audit.binding_is_executable(run_owner).await.unwrap());
+    audit
+        .block_tokenizer_profile_binding(conversation_owner)
+        .await
+        .unwrap();
+    audit
+        .block_tokenizer_profile_binding(run_owner)
+        .await
+        .unwrap();
+    assert!(!audit
+        .binding_is_executable(conversation_owner)
+        .await
+        .unwrap());
+    assert!(!audit.binding_is_executable(run_owner).await.unwrap());
+    assert_eq!(
+        conversations
+            .get_conversation_binding(conversation.id)
+            .await
+            .unwrap()
+            .binding_status,
+        "model_rebind_required"
+    );
+    assert_eq!(
+        conversations
+            .get_run_binding(run.id)
+            .await
+            .unwrap()
+            .context_binding_status,
+        "tokenizer_profile_incompatible"
+    );
+
+    pool.close().await;
+    admin_pool.close().await;
+    drop(database);
+}
+use novex_agent::{AuditedCallOwner, ContextAuditStore};

@@ -7,6 +7,7 @@ const CANARY_SECRET = /NOVEX_CANARY_SECRET_DO_NOT_PERSIST_[A-Za-z0-9_-]+/g;
 
 export const REDACTED = "[REDACTED]";
 export const MODEL_CALL_SCHEMA_VERSION = "1";
+export const GOVERNED_MODEL_CALL_SCHEMA_VERSION = "2";
 
 function redactString(value: string, knownSecrets: readonly string[]): string {
   let redacted = value

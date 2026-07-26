@@ -7,7 +7,7 @@ import type { Pool } from "pg";
 import { SessionCoordinator, type TextModelResolver, type UpgradeForkInput } from "./coordinator.js";
 import { normalizeError, publicError, RuntimeError } from "./errors.js";
 import { redactUnknown, safeJson } from "./redaction.js";
-import type { ModelCallListFilter } from "./persistence.js";
+import type { ContextRecordListFilter, ModelCallListFilter } from "./persistence.js";
 import type { SessionStore, ToolProfile } from "./sessions.js";
 
 const MAX_BODY_BYTES = 1_048_576;
@@ -152,6 +152,45 @@ function modelCallListQuery(url: URL, fixedSessionId?: string): {
   };
 }
 
+function contextListQuery(url: URL, fixedSessionId?: string): {
+  filter: ContextRecordListFilter;
+  limit: number;
+  offset: number;
+} {
+  const offset = Number(url.searchParams.get("offset") ?? "0");
+  const limit = Number(url.searchParams.get("limit") ?? "100");
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw new RuntimeError("bad_request", 400, "Context 分页参数无效");
+  }
+  const ownerType = url.searchParams.get("owner_type");
+  const ownerId = url.searchParams.get("owner_id");
+  let sessionId = fixedSessionId;
+  if (fixedSessionId !== undefined) {
+    if ((ownerType !== null && ownerType !== "session") || (ownerId !== null && ownerId !== fixedSessionId)) {
+      throw new RuntimeError("bad_request", 400, "Session Context owner 筛选冲突");
+    }
+  } else if (ownerType === null && ownerId === null) {
+    sessionId = undefined;
+  } else if (ownerType === "session" && ownerId !== null && UUID.test(ownerId)) {
+    sessionId = ownerId;
+  } else {
+    throw new RuntimeError("bad_request", 400, "owner_type 与 owner_id 必须成对且类型有效");
+  }
+  const rawType = url.searchParams.get("record_type");
+  if (rawType !== null && rawType !== "snapshot" && rawType !== "compile_attempt") {
+    throw new RuntimeError("bad_request", 400, "record_type 无效");
+  }
+  return {
+    filter: {
+      ...(sessionId ? { sessionId } : {}),
+      ...(rawType ? { recordType: rawType } : {}),
+      ...(url.searchParams.get("node_key")?.trim() ? { nodeKey: url.searchParams.get("node_key")!.trim() } : {}),
+    },
+    limit,
+    offset,
+  };
+}
+
 async function writeSse(response: ServerResponse, event: string, data: unknown): Promise<void> {
   if (response.destroyed || response.writableEnded) throw new Error("SSE connection is closed");
   const payload = `event: ${event}\ndata: ${safeJson(data)}\n\n`;
@@ -262,6 +301,27 @@ export class RuntimeHttpServer {
       }
       throw new RuntimeError("not_found", 404, "路由不存在");
     }
+    if (segments[0] === "contexts") {
+      if (segments.length === 1 && method === "GET") {
+        const query = contextListQuery(url);
+        const page = await this.dependencies.coordinator.listContexts(query.filter, query.limit, query.offset);
+        writeJson(response, 200, {
+          schema_version: "2", source_runtime: "pi", ...page, limit: query.limit, offset: query.offset,
+        });
+        return;
+      }
+      const contextId = segments[1];
+      if (!contextId || !UUID.test(contextId)) throw new RuntimeError("bad_request", 400, "context_id 格式无效");
+      if (segments.length === 2 && method === "GET") {
+        writeJson(response, 200, this.dependencies.coordinator.contextRecord(contextId));
+        return;
+      }
+      if (segments[2] === "export" && segments.length === 3 && method === "GET") {
+        writeJson(response, 200, this.dependencies.coordinator.exportContextRecord(contextId));
+        return;
+      }
+      throw new RuntimeError("not_found", 404, "路由不存在");
+    }
     if (segments[0] === "migration" && segments[1] === "plan" && segments.length === 2 && method === "GET") {
       writeJson(response, 200, await this.dependencies.coordinator.legacyMigrationPlan());
       return;
@@ -322,6 +382,14 @@ export class RuntimeHttpServer {
         ...page,
         limit: query.limit,
         offset: query.offset,
+      });
+      return;
+    }
+    if (command === "contexts" && method === "GET") {
+      const query = contextListQuery(url, id);
+      const page = await this.dependencies.coordinator.listContexts(query.filter, query.limit, query.offset);
+      writeJson(response, 200, {
+        schema_version: "2", source_runtime: "pi", ...page, limit: query.limit, offset: query.offset,
       });
       return;
     }

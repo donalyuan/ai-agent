@@ -1,10 +1,15 @@
 use async_trait::async_trait;
-use novex_agent::{BoundModelResolver, FixedModelBinding, ResolvedBoundModel};
+use novex_agent::{
+    text_context_candidate, BoundModelResolver, FixedModelBinding, ResolvedBoundModel,
+    TextContextCandidateInput,
+};
 use novex_ai_core::{
-    DefinitionRegistry, DynamicFragment, ModelCapabilities, PromptCompileInput, TrustLevel,
+    definition_digest, ContextPriority, DefinitionRegistry, ModelCapabilities, TrustLevel,
 };
 use novex_api::application::evaluations::{EvalBudgetCharge, RealEvalRunner};
-use novex_api::repositories::{PostgresEvalRepository, PostgresModelCallRepository};
+use novex_api::repositories::{
+    PostgresContextAuditRepository, PostgresEvalRepository, PostgresModelCallRepository,
+};
 use novex_eval::{CandidateRef, EvalBudget, EvalMode, EvalRunSpec, ModelBinding};
 use novex_model::{LLMClient, LLMError, LLMPrompt};
 use serde_json::json;
@@ -82,6 +87,7 @@ async fn test_pool() -> (PgPool, TestDatabase) {
 fn spec(model_id: Uuid, fingerprint: &str) -> EvalRunSpec {
     EvalRunSpec {
         candidate: CandidateRef {
+            definition_kind: novex_eval::EvalDefinitionKind::Agent,
             key: "video.script".into(),
             version: "candidate".into(),
             digest: "a".repeat(64),
@@ -90,6 +96,7 @@ fn spec(model_id: Uuid, fingerprint: &str) -> EvalRunSpec {
         case_set_version: "fixture@1".into(),
         evaluator_version: "fixture-evaluator@1".into(),
         mode: EvalMode::RealModel,
+        context: None,
         model_binding: Some(ModelBinding {
             model_id: model_id.to_string(),
             behavior_fingerprint: fingerprint.into(),
@@ -113,29 +120,72 @@ fn request(model_id: Uuid, fingerprint: &str) -> novex_agent::AuditedModelReques
         parent_call_id: None,
         attempt: 1,
         agent_key: "video.script".into(),
-        agent_version: "1.0.0".into(),
+        agent_version: "2.0.0".into(),
         node_key: "script.complete".into(),
-        compile_input: PromptCompileInput {
-            schema_version: "1".into(),
-            variables: BTreeMap::from([("scene_count".into(), json!(3))]),
-            fragments: vec![DynamicFragment {
-                id: "eval-input".into(),
-                trust: TrustLevel::UserInstruction,
-                source: "eval_case".into(),
-                content: Some("fixture input".into()),
-                asset: None,
-            }],
-        },
+        variables: BTreeMap::from([("scene_count".into(), json!(3))]),
+        context_candidates: vec![text_context_candidate(TextContextCandidateInput {
+            candidate_id: "eval-input".into(),
+            source_kind: "user_instruction".into(),
+            source_id: "eval_case".into(),
+            source_version: "1".into(),
+            trust: TrustLevel::UserInstruction,
+            priority: ContextPriority::P0,
+            required: true,
+            render_order: 0,
+            observed_at: "2026-01-01T00:00:00Z".into(),
+            text: "fixture input".into(),
+        })],
+        context_atomic_groups: Vec::new(),
+        compiled_at: "2026-01-01T00:00:00Z".into(),
         tool_profile: "chat".into(),
         tool_schema: None,
-        binding: FixedModelBinding {
-            model_id,
-            behavior_fingerprint: fingerprint.into(),
-        },
+        binding: fixed_binding(model_id, fingerprint),
         context_sources: json!([{ "id":"eval-input", "source":"eval_case", "trust":"user_instruction" }]),
         memory_sources: json!([]),
         parameters: json!({ "max_output_tokens": 100 }),
         asset_references: json!([]),
+    }
+}
+
+fn fixed_binding(model_id: Uuid, fingerprint: &str) -> FixedModelBinding {
+    let registry = DefinitionRegistry::load(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("agent-definitions"),
+    )
+    .unwrap();
+    let agent = registry.agent("video.script", "2.0.0").unwrap();
+    let context_policy_bindings = agent
+        .nodes
+        .iter()
+        .map(|(node_key, reference)| {
+            let policy = reference.context_policy.as_ref().unwrap();
+            let definition = registry
+                .context_policy(&policy.key, &policy.version)
+                .unwrap();
+            (
+                node_key.clone(),
+                novex_agent::FixedDefinitionBinding {
+                    key: policy.key.clone(),
+                    version: policy.version.clone(),
+                    digest: definition_digest(definition).unwrap(),
+                },
+            )
+        })
+        .collect();
+    let profile = registry
+        .tokenizer_profile("byte-upper-bound", "1.0.0")
+        .unwrap();
+    FixedModelBinding {
+        model_id,
+        behavior_fingerprint: fingerprint.into(),
+        context_policy_bindings,
+        tokenizer_profile: novex_agent::FixedDefinitionBinding {
+            key: profile.profile_key.clone(),
+            version: profile.version.clone(),
+            digest: definition_digest(profile).unwrap(),
+        },
     }
 }
 
@@ -168,6 +218,9 @@ async fn real_eval_attempt_reserves_budget_and_uses_eval_owned_model_call() {
                 reasoning: false,
                 context_window: 8192,
             },
+            tokenizer_profile_key: "byte-upper-bound".into(),
+            tokenizer_profile_version: "1.0.0".into(),
+            max_output_tokens: 100,
             model_snapshot: json!({"provider":"fixture"}),
             known_secrets: vec!["secret".into()],
         },
@@ -185,6 +238,7 @@ async fn real_eval_attempt_reserves_budget_and_uses_eval_owned_model_call() {
         registry,
         Arc::new(resolver),
         Arc::new(PostgresModelCallRepository::new(pool.clone())),
+        Arc::new(PostgresContextAuditRepository::new(pool.clone())),
     ));
     let runner = RealEvalRunner::new(executor);
     let first = runner

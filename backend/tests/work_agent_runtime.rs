@@ -206,6 +206,47 @@ async fn work_agent_reuses_current_draft_and_returns_confirmable_diff() {
         .iter()
         .any(|change| change["path"] == "prompt_snapshot.full_prompt"));
     assert_eq!(llm.prompts.lock().unwrap().len(), 1);
+    let (node_key, context_snapshot_id, prompt_snapshot): (String, Option<Uuid>, Value) =
+        sqlx::query_as(
+            "SELECT node_key, context_snapshot_id, prompt_snapshot FROM model_calls WHERE agent_run_id=$1",
+        )
+        .bind(response.run.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(node_key, "work.patch");
+    let context_snapshot_id = context_snapshot_id.expect("作品调用必须引用 ContextSnapshot");
+    let (decisions, selected_order): (Value, Value) =
+        sqlx::query_as("SELECT decisions, selected_order FROM context_snapshots WHERE id=$1")
+            .bind(context_snapshot_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let selected = decisions
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|decision| decision["decision"] == "selected")
+        .collect::<Vec<_>>();
+    assert!(selected.iter().any(|decision| {
+        decision["source_kind"] == "current_work"
+            && decision["trust"] == "confirmed_fact"
+            && decision["priority"] == "p1"
+    }));
+    assert!(selected.iter().any(|decision| {
+        decision["source_kind"] == "conversation_entry"
+            && decision["trust"] == "user_instruction"
+            && decision["priority"] == "p0"
+    }));
+    assert_eq!(selected_order.as_array().unwrap().len(), 2);
+    assert!(prompt_snapshot["user"]
+        .as_str()
+        .unwrap()
+        .contains("当前作品和草稿："));
+    assert!(prompt_snapshot["user"]
+        .as_str()
+        .unwrap()
+        .contains("用户修改要求：\n保留配音，让画面节奏更紧凑"));
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM work_versions WHERE work_id=$1")
             .bind(work_id)

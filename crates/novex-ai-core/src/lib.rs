@@ -4,19 +4,30 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
 mod audit;
+mod context;
 mod definitions;
 
 pub use audit::{
     redact_audit_value, validate_asset_references, validate_audit_payload, AuditValidationError,
-    AUDIT_REDACTED, MODEL_CALL_SCHEMA_VERSION,
+    AUDIT_REDACTED, GOVERNED_MODEL_CALL_SCHEMA_VERSION, MODEL_CALL_SCHEMA_VERSION,
+};
+
+pub use context::{
+    BudgetLedger, CompileFailureStage, CompiledContext, ContextAtomicGroup, ContextCandidate,
+    ContextCompileAttempt, ContextCompileError, ContextCompileRequest, ContextCompiler,
+    ContextDecision, ContextDecisionCode, ContextPayload, ContextPolicyDefinition, ContextPriority,
+    ContextSnapshot, FramingRules, LogicalMessage, LogicalModelInput, PreparedPromptEnvelope,
+    ProfileTokenizer, TokenizerMode, TokenizerProfile, CONTEXT_SCHEMA_VERSION,
+    ENCODING_CONTRACT_V1_DIGEST,
 };
 
 pub use definitions::{
-    behavior_fingerprint, canonical_json, definition_digest, sha256_hex,
+    behavior_fingerprint, canonical_json, definition_digest, read_prompt_snapshot, sha256_hex,
     validate_model_capabilities, ActivationEvidence, AgentDefinition, AssetReference,
-    DefinitionError, DefinitionKind, DefinitionRegistry, DefinitionReleaseEvidence,
-    DefinitionStatus, DynamicFragment, ExecutorOwner, ModelBehavior, ModelCapabilities,
-    ModelRequirements, PromptCompileInput, PromptCompiler, PromptDefinition, PromptSnapshot,
+    DefinitionError, DefinitionKind, DefinitionReference, DefinitionRegistry,
+    DefinitionReleaseEvidence, DefinitionStatus, DynamicFragment, ExecutorOwner, FinalizedPrompt,
+    LegacyDefinitionDigest, ModelBehavior, ModelCapabilities, ModelRequirements, PreparedPrompt,
+    PromptCompileInput, PromptCompiler, PromptDefinition, PromptPrepareInput, PromptSnapshot,
     TrustLevel,
 };
 

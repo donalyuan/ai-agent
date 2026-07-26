@@ -1,12 +1,449 @@
 {
-  "schema_version": "1",
-  "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+  "schema_version": "2",
+  "registry_digest": "fce2739ee6e4636bf38c9b2dda294452f3a543676022e1b1e02ff64b37527eb1",
   "releases": [
     {
       "definition_kind": "agent",
       "definition_key": "video.project-strategy",
       "definition_version": "1.0.0",
       "definition_digest": "990edf4733f6612e5e5616503cdcd81f2b94eec76eb8d172825998a27fa43197",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "5e387f0fa81790401e2f02fe00cfaaaab0e72650dc370db34f6cd212fc670e5c"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "5e387f0fa81790401e2f02fe00cfaaaab0e72650dc370db34f6cd212fc670e5c"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "video.script",
+      "definition_version": "1.0.0",
+      "definition_digest": "8a061d2b7db90d74fe0ab1ad00dfcc3eeb74356874049768c58ed0bfaa71da0c",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "a5f39f876f46d235bd373e89fb82ed0f487e005d06796286c19f6c3aae3b5a9b"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "a5f39f876f46d235bd373e89fb82ed0f487e005d06796286c19f6c3aae3b5a9b"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "video.topic",
+      "definition_version": "1.0.0",
+      "definition_digest": "2ea33b0d5496103a999caa436d2e633d415a2777f92aae781e32e37df48e586e",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "5a0de240bec10d3bad9ab919cfcdbb8e60e34e229292cfc7b042822938db2fdf"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "5a0de240bec10d3bad9ab919cfcdbb8e60e34e229292cfc7b042822938db2fdf"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "video.sound",
+      "definition_version": "1.0.0",
+      "definition_digest": "4bd7f752a0f4e94f8dd47f38fd0c09edc48bf056e93c6ea8171238499d4a9ab9",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "e7c69f5019bcc8b00f5775473812337a68c29e9f8f34a8539282a4ed5bceecfe"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "e7c69f5019bcc8b00f5775473812337a68c29e9f8f34a8539282a4ed5bceecfe"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "video.work",
+      "definition_version": "1.0.0",
+      "definition_digest": "87aa449375468d8cb3437bcc128305da2f74fa3a8d1161a670c27ab2029512fb",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "6fbc3dbf1478f90c74e29da0e9e166d64a878fc696d50f9fec9477b67021bbf9"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "6fbc3dbf1478f90c74e29da0e9e166d64a878fc696d50f9fec9477b67021bbf9"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "personal.general",
+      "definition_version": "1.0.0",
+      "definition_digest": "976a810d8ddf81637e7dd9643d72c7c05349ddaf07e27a1d4a456f59bb239d15",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "b45846df2161570408b5f52507b2b9fe3e03dfc7bfa6453e416adb46de5b86b4"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "f4ab1a19dc3d09cfc6fad71c73245e97e4f0759276287c03f915ed98e67dfee4"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "project.strategy_draft",
+      "definition_version": "1.0.0",
+      "definition_digest": "8000aa03ab8272cfe02e35fdbeee1a4da0f28af04695c7bcec5146a4a3666eee",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "c46b7555e5cd4b82fc80befb7827d8d0e2d010c26475747e8159c282dc458ade"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "61bc64fc18bc0abfbef7e2dc4c8b2b9e3bd7edd0c9f1944e566b1bc49c15d0df"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "script.complete",
+      "definition_version": "1.0.0",
+      "definition_digest": "be877206e08a7249c006d3b843827822b293dcc005e1122bc496c54e8605feba",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "5d41d028b327e0c39ba676209f564dafaa9b187591b1575b11705997e8962b51"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "0ac699994d338a8862426b549347cc8ba9d2f4f2237e7994bb4548b1907a444e"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "script.metadata",
+      "definition_version": "1.0.0",
+      "definition_digest": "08512c758e4f99c3377d0450c99ebacd7ff02b9c2900a7b7006ed58ec31cb8dd",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "cd6a0fcedde220b94b7808a49a7000f5b94969482dc91f892f0c22222d27f087"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "cd6a0fcedde220b94b7808a49a7000f5b94969482dc91f892f0c22222d27f087"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "script.single_scene",
+      "definition_version": "1.0.0",
+      "definition_digest": "9a6c5dbd8ae1948d394f9d73fde76408be55148b937b50582f24fd0e3705b54b",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "d26d94c84e231c4f847853a0ad89234818149a13484b87e4de55583a783b957c"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "f21f96f78daeb24d9e962de0d63b60e932ffe5296b4ce1ec7112c5f636ec1ac9"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "script.generation_intent",
+      "definition_version": "1.0.0",
+      "definition_digest": "bf0d8d128bec9578164570e5ca86b79c7f337e79c86521e5f7aeeb33aa18ebd3",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "6c6ee85d499727c9254238868fa8c2d493b7f58ee65e0b261784d1f6294be881"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "6c6ee85d499727c9254238868fa8c2d493b7f58ee65e0b261784d1f6294be881"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "script.scene_patch",
+      "definition_version": "1.0.0",
+      "definition_digest": "dc61b669af0668e7211c3ea0f8eafd5ee9fe6e3efd90d5315ef80ad982938336",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "0bb26dfad4e70bcc73791f21eacb1545925e3710acd71c935aa2e68dfd8bd0e1"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "0bb26dfad4e70bcc73791f21eacb1545925e3710acd71c935aa2e68dfd8bd0e1"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "topic.generate",
+      "definition_version": "1.0.0",
+      "definition_digest": "d84ee12887d5d76d7d8b3b8c7e999eb3b87ee132c4f756f4ddbac74d1e5c23a6",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "1d55417d8007efb146c8e2c6b48db467cee18247c35126d4f2331723152f603c"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "3f6b96f0c0b9c521740b757616f091dce122eb843cd6b372c13b7127102c9161"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "topic.quality",
+      "definition_version": "1.0.0",
+      "definition_digest": "4a5705a139d499ee36090a5a900eba75411116c4e9ea36e5a5e2f74234a0e65f",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "3d841b2313bd70db1c4093344dc732582dbe5399e03c1d3f2d51da54d75fa4b9"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "197a41a5f7cac8d5801c1ec08528efeef9bf0d962aef9b6e4e86f0ee956601fc"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "topic.group_review",
+      "definition_version": "1.0.0",
+      "definition_digest": "7148da4b7ee534e9b4555871e5adb537607059853ce3aeb01df15e159a72f392",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "0e748d869ced2f78458259b969f2961364cc56bc87145d216a31be72bd8b4102"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "ef7e4702a7fa135e809fd2870a43b2cfa3d1486c6f06b6de2fe5f45a6c5a3b20"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "sound.recommend",
+      "definition_version": "1.0.0",
+      "definition_digest": "80e7ab129cb989005465945bde467513b7b1ebd8f5f40c4aca5f39080a6ffeee",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "e1445241bb47993f55a15f3a51e978b012cddbec7840f20edbfd68a92fe8a29a"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "e1445241bb47993f55a15f3a51e978b012cddbec7840f20edbfd68a92fe8a29a"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "work.plan",
+      "definition_version": "1.0.0",
+      "definition_digest": "f2a883fb82d255576a09b24fe0acce498670834eaf5d0de9ed592b1f6e020f13",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "165d45e3191f7e47d87ce4ae5846957b418f2fcb9e8e14faf360d726d3a5e440"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "165d45e3191f7e47d87ce4ae5846957b418f2fcb9e8e14faf360d726d3a5e440"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "work.patch",
+      "definition_version": "1.0.0",
+      "definition_digest": "8a98f47118550bee96655bd9ff551ab46cfe266d7846ebe89e92819976261026",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "998344d10a0c159d7cfe35a5c90022f0fdeb0f3c42a756118e254a6a971cf195"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "998344d10a0c159d7cfe35a5c90022f0fdeb0f3c42a756118e254a6a971cf195"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "personal.general",
+      "definition_version": "1.0.0",
+      "definition_digest": "b5ff2b41f8043e79a6bd2fe28208c732f56452d4158f6cd56917b0c73abdc44f",
+      "legacy_digests": [
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3",
+          "definition_digest": "56102b741931ff405963f6d2b29c89f32b0b15c47fd9dcf190dc081419483c48"
+        },
+        {
+          "algorithm": "canonical-json-with-status@1",
+          "registry_digest": "24530ff72d97caee088bd941acb0531840f0daa410df7f900be6ee0050c372bb",
+          "definition_digest": "56102b741931ff405963f6d2b29c89f32b0b15c47fd9dcf190dc081419483c48"
+        }
+      ],
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/registry-published-v1.json",
+        "sha256": "a52b93f818d8d96767712ee413ee58e6d657cceeb588602808a646165536ceb3"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "video.project-strategy",
+      "definition_version": "2.0.0",
+      "definition_digest": "038384501072ad3784727cda601dd91481773981a2a4aef35016a41b418be023",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -16,8 +453,8 @@
     {
       "definition_kind": "agent",
       "definition_key": "video.script",
-      "definition_version": "1.0.0",
-      "definition_digest": "8a061d2b7db90d74fe0ab1ad00dfcc3eeb74356874049768c58ed0bfaa71da0c",
+      "definition_version": "2.0.0",
+      "definition_digest": "b4594f35967543c7a7a4709f24f85283d2413f0aa71c46f30b259fc319c15072",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -27,8 +464,8 @@
     {
       "definition_kind": "agent",
       "definition_key": "video.topic",
-      "definition_version": "1.0.0",
-      "definition_digest": "2ea33b0d5496103a999caa436d2e633d415a2777f92aae781e32e37df48e586e",
+      "definition_version": "2.0.0",
+      "definition_digest": "a43af0e4690d68a0ea35a998442075f767bc42c3d1f7b7839b47a3010270507a",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -38,8 +475,8 @@
     {
       "definition_kind": "agent",
       "definition_key": "video.sound",
-      "definition_version": "1.0.0",
-      "definition_digest": "4bd7f752a0f4e94f8dd47f38fd0c09edc48bf056e93c6ea8171238499d4a9ab9",
+      "definition_version": "2.0.0",
+      "definition_digest": "3d8fce006087b4e706400783edef44a62f14e804cd4ee64c5ceef2b759fb126f",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -49,8 +486,8 @@
     {
       "definition_kind": "agent",
       "definition_key": "video.work",
-      "definition_version": "1.0.0",
-      "definition_digest": "87aa449375468d8cb3437bcc128305da2f74fa3a8d1161a670c27ab2029512fb",
+      "definition_version": "2.0.0",
+      "definition_digest": "35d84a44d96c9f859aab2b3df78168d3485ae41f5be14a0865848ea88d861482",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -60,8 +497,8 @@
     {
       "definition_kind": "agent",
       "definition_key": "personal.general",
-      "definition_version": "1.0.0",
-      "definition_digest": "976a810d8ddf81637e7dd9643d72c7c05349ddaf07e27a1d4a456f59bb239d15",
+      "definition_version": "2.0.0",
+      "definition_digest": "cd37f6040c33b866d927381707564414e816f8a53693e80090f31e48c9cb4c7e",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -71,8 +508,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "project.strategy_draft",
-      "definition_version": "1.0.0",
-      "definition_digest": "8000aa03ab8272cfe02e35fdbeee1a4da0f28af04695c7bcec5146a4a3666eee",
+      "definition_version": "2.0.0",
+      "definition_digest": "6daba884bb6d2a06dccf9018d60c80dbce8739a1ef7a0fb0947e24d8471f6a90",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -82,8 +519,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "script.complete",
-      "definition_version": "1.0.0",
-      "definition_digest": "be877206e08a7249c006d3b843827822b293dcc005e1122bc496c54e8605feba",
+      "definition_version": "2.0.0",
+      "definition_digest": "99b0357487a625571e507775bbf670f2a7520d094259953037587d1db3f642e7",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -93,8 +530,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "script.metadata",
-      "definition_version": "1.0.0",
-      "definition_digest": "08512c758e4f99c3377d0450c99ebacd7ff02b9c2900a7b7006ed58ec31cb8dd",
+      "definition_version": "2.0.0",
+      "definition_digest": "3424b13a1dbba246b4bf5a9beaf7c2dce9a708efbf0af7e220fe1755ffc1afa6",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -104,8 +541,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "script.single_scene",
-      "definition_version": "1.0.0",
-      "definition_digest": "9a6c5dbd8ae1948d394f9d73fde76408be55148b937b50582f24fd0e3705b54b",
+      "definition_version": "2.0.0",
+      "definition_digest": "9fc616f18884fd77ea4e584ca6c90a0401b3389bbd21aa60921c015a07115d76",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -115,8 +552,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "script.generation_intent",
-      "definition_version": "1.0.0",
-      "definition_digest": "bf0d8d128bec9578164570e5ca86b79c7f337e79c86521e5f7aeeb33aa18ebd3",
+      "definition_version": "2.0.0",
+      "definition_digest": "524eda0db08f22e16ff4de01390e6b0c132beecebbb80b549126e50f3ecc7d89",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -126,8 +563,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "script.scene_patch",
-      "definition_version": "1.0.0",
-      "definition_digest": "dc61b669af0668e7211c3ea0f8eafd5ee9fe6e3efd90d5315ef80ad982938336",
+      "definition_version": "2.0.0",
+      "definition_digest": "56eb262930473532e92e592245388d0bdcf765531c5c60fa2232d75e51fed42b",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -137,8 +574,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "topic.generate",
-      "definition_version": "1.0.0",
-      "definition_digest": "d84ee12887d5d76d7d8b3b8c7e999eb3b87ee132c4f756f4ddbac74d1e5c23a6",
+      "definition_version": "2.0.0",
+      "definition_digest": "b5723d48c13ea973c91d247a182fa6b8168cbfd6ed395ddfa4f76907016400af",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -148,8 +585,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "topic.quality",
-      "definition_version": "1.0.0",
-      "definition_digest": "4a5705a139d499ee36090a5a900eba75411116c4e9ea36e5a5e2f74234a0e65f",
+      "definition_version": "2.0.0",
+      "definition_digest": "38177114ff44bf8f5c928c66293cf402d0db8fb770b9d89def09dbcd8966c9ab",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -159,8 +596,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "topic.group_review",
-      "definition_version": "1.0.0",
-      "definition_digest": "7148da4b7ee534e9b4555871e5adb537607059853ce3aeb01df15e159a72f392",
+      "definition_version": "2.0.0",
+      "definition_digest": "eae509091104f8ffafc63d480f2d0772805b86f654de84c426210fba601aae25",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -170,8 +607,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "sound.recommend",
-      "definition_version": "1.0.0",
-      "definition_digest": "80e7ab129cb989005465945bde467513b7b1ebd8f5f40c4aca5f39080a6ffeee",
+      "definition_version": "2.0.0",
+      "definition_digest": "497cb3000d349c21b6355bd4719cee3e0e291deb8994b381e30928510bea14df",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -181,8 +618,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "work.plan",
-      "definition_version": "1.0.0",
-      "definition_digest": "f2a883fb82d255576a09b24fe0acce498670834eaf5d0de9ed592b1f6e020f13",
+      "definition_version": "2.0.0",
+      "definition_digest": "67c1d23e3bb1e3a457d6f78079cd9373f06b3f97cfcdfa83468153b3fa683d91",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -192,8 +629,8 @@
     {
       "definition_kind": "prompt",
       "definition_key": "work.patch",
-      "definition_version": "1.0.0",
-      "definition_digest": "8a98f47118550bee96655bd9ff551ab46cfe266d7846ebe89e92819976261026",
+      "definition_version": "2.0.0",
+      "definition_digest": "30fa51aba3483586ad3ca4ace438ac5512a509c4459e991968efb3f2f00357ac",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
@@ -203,12 +640,243 @@
     {
       "definition_kind": "prompt",
       "definition_key": "personal.general",
-      "definition_version": "1.0.0",
-      "definition_digest": "b5ff2b41f8043e79a6bd2fe28208c732f56452d4158f6cd56917b0c73abdc44f",
+      "definition_version": "2.0.0",
+      "definition_digest": "f0fb5d63ec853ce244b259c1e0e5a1f1dfdbe85adffb4d786bc7166525c60d09",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
         "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "personal.branch_summary.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "75cdfb76c91a3894a6e96fc841de1b61fc31afbf214310130b0f2faf8d2de8cc",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "personal.compaction.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "a14a4cb3e38c509654104b64a6a453a71d9a0ef2e234d055745b97407e02a11a",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "personal.tool_followup.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "e991266be1da1ae1178742c0ca3097e1274903514751a9e1f17ee533e458aeae",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "personal.turn.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "3765a624c6e11ba7ceaf5216cf64810afe6b7e6696a555c0c0f281e58d384fe6",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "project.strategy_draft.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "fe34c799dbdb66b65523f3dadd52b0c504cbd9ed9acf54e1b23dfa606b08e08f",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "script.complete.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "f80a4faa349500bd35d6d3e762ab6b6d822d77ff1641eb0dd3b7992dd3a5e6e9",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "script.generation_intent.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "61edc9cf8eca5889add0ebfdf6f233a3dc6d0a2d2ef1678d0dbc914419c88211",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "script.metadata.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "4a6549e54746271e4608975c436dd3756e5e0dc0f70bd9c2010047c680480b10",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "script.scene_patch.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "516c7f7c9ec16bc065840d049c19dc846cea041ff3995ed8f4971fc970fd662b",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "script.single_scene.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "e41bb67486e9e58121a23a0dfd0d87f647b275f049b09fb5a2a073fe0602d5e0",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "sound.recommend.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "1131cb2f14011c5d085cbf7ae228ffb6f2ef3ac1f1b5d71a4220a75d1508e879",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "topic.generate.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "55d1f125637013fe9fd18751630fd47e97f7b18fb9ea6093fefe02b1a54b8a0c",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "topic.group_review.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "37bf47718702e29f8f6a78ed9b522dc62302fe134da4e33c0a760bce27da0a14",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "topic.quality_review.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "c6a4a17f18e63bd079b2171f7ed4fcc32c419dacc5849b82a0a581ba50e2bc7f",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "topic.rewrite.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "682c46242e610b0ae883ab5b51b702ec0a2e7608e294dd389bdf8e0a2088a2e6",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "topic.supplement.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "549a1f720aee18c4c1e61ec33a2d95a0ede6b55f006c5855afdc5779948ae21d",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "work.patch.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "3654dc4ec3c8969212785e63c934707d18da9c1e93368a5e7f2e036541ef001f",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "work.plan.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "0c7b14c85122355e28ae4dda2278a1a9f457dbaf86e049530557bf4d28945808",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "tokenizer_profile",
+      "definition_key": "openai.cl100k",
+      "definition_version": "1.0.0",
+      "definition_digest": "ba07f372b0abfb5331806337469d0293761a54fccf5d30dd19d47538031d0115",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/tokenizers/encoding-contract-v1.json",
+        "sha256": "cfcf757abd2fceb98ca75ea57e0153123447dab26375938154c909640505f8bf"
+      }
+    },
+    {
+      "definition_kind": "tokenizer_profile",
+      "definition_key": "openai.o200k",
+      "definition_version": "1.0.0",
+      "definition_digest": "39041f457e0df06806402597509a7987ede32179f5c39be12faaae3c879acaad",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/tokenizers/encoding-contract-v1.json",
+        "sha256": "cfcf757abd2fceb98ca75ea57e0153123447dab26375938154c909640505f8bf"
+      }
+    },
+    {
+      "definition_kind": "tokenizer_profile",
+      "definition_key": "byte-upper-bound",
+      "definition_version": "1.0.0",
+      "definition_digest": "02fccf03c77402ba36bcb8e5a9465dd6e3d6a8f1c415d48cae72784c8c566a12",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/tokenizers/encoding-contract-v1.json",
+        "sha256": "cfcf757abd2fceb98ca75ea57e0153123447dab26375938154c909640505f8bf"
       }
     }
   ]

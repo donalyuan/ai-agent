@@ -13,20 +13,21 @@ apps/* 个人领域工作台
   video-agent / future coding / research workbenches
                     |
 agent-definitions/
-  版本化 AgentDefinition / PromptDefinition / schema / release index
+  版本化 AgentDefinition / PromptDefinition / ContextPolicyDefinition
+  TokenizerProfile / schema / release index
   Rust 与 Pi 只读加载，数据库不得反向覆盖
                     |
 services/agent-runtime
   Node.js 24 + Pi Agent Harness 0.82.0
   Turn / Tool Loop / SSE / Session Tree
-  PromptCompiler / SQLite ModelCall 审计
+  ContextCompiler / PromptCompiler / SQLite Context 与 ModelCall 审计
                     |
 PostgreSQL ai_models
   文本、图片、视频模型配置唯一事实源
                     |
 Rust Backend + crates/*
-  领域状态 / Adapter / Run-Step / Gate / PromptCompiler
-  PostgreSQL ModelCall / EvalRun / EvalReport
+  领域状态 / Adapter / Run-Step / Gate
+  ContextCompiler / PromptCompiler / PostgreSQL Context 与 ModelCall 审计
                     |
 Python video-worker
   视频生成、语音、发布等外部任务
@@ -35,10 +36,10 @@ Python video-worker
 ## 3. 代码边界
 
 ```text
-agent-definitions/         跨 Rust/Pi 的版本化 Agent/Prompt Registry 唯一事实源
+agent-definitions/         跨 Rust/Pi 的 Agent/Prompt/Context Policy/Tokenizer Registry 唯一事实源
 backend/                  Rust HTTP API、领域编排、Repository、视频 Adapter
 crates/
-  novex-ai-core/          Definition、Prompt 编译、审计与通用类型
+  novex-ai-core/          Definition、Context/Prompt 编译、tokenizer、审计与通用类型
   novex-model/            Rust 模型路由与 provider 合同
   novex-agent/            受审计模型执行与 Agent Run 生命周期合同
   novex-rag/              检索与引用边界
@@ -63,15 +64,15 @@ apps/video-agent/         视频生产领域工作台
 - `@earendil-works/pi-storage-sqlite-node` `0.82.0`
 - Node.js 24 的 `node:sqlite`
 
-Pi Harness 负责新工作台的模型流、Turn、Tool Call、Observation、steering、follow-up、abort 和事件流。Novex 组合式 wrapper 只通过 Pi 公开 hook/API 接入固定 Definition、Prompt 编译、调用审计和 Tool Gate，不继承私有实现、不修改 Pi 源码，也不复制第二套 Tool Loop。Rust Agent Kernel 不再新增同职责的通用 Tool Loop。
+Pi Harness 负责新工作台的模型流、Turn、Tool Call、Observation、steering、follow-up、abort 和事件流。Novex 组合式 wrapper 只通过 Pi 公开 hook/API 接入固定 Definition、Context/Prompt 编译、调用审计和 Tool Gate，不继承私有实现、不修改 Pi 源码，也不复制第二套 Tool Loop。Rust Agent Kernel 不再新增同职责的通用 Tool Loop。
 
 Runtime 按 Pi `0.82.0` 使用 `toolContext + AgentHarnessTool` 契约。虽然上游已导出 execution tool factory，Novex 仍保留自有 `read/write/edit/bash` schema 和适配器，避免改变既有 `old_text/new_text` edit 参数、Session transcript 与 SSE 行为；切换上游 factory 必须另行设计协议迁移。
 
-现有视频 Conversation API、Rust `AgentRunCoordinator`、业务 Adapter、Run/Step 和失败收尾保持不变。Rust 生产文本节点统一通过 `PromptCompiler + AuditedModelExecutor` 执行，Adapter 不持有裸 `LLMClient`；Pi 与 Rust 各自只执行自己拥有的 Definition node。后续迁移单个领域 Agent 时，必须用独立 OpenSpec change 先把业务能力暴露为类型化 Tool，再确定唯一执行入口和旧路径删除计划；禁止双模型调用、双 Assistant 消息和双写。
+现有视频 Conversation API、Rust `AgentRunCoordinator`、业务 Adapter、Run/Step 和失败收尾保持不变。Rust 生产文本节点统一通过 `ContextCompiler + PromptCompiler + AuditedModelExecutor` 执行，Adapter 只提交原子 `ContextCandidate`，不持有裸 `LLMClient` 或手工裁剪入口；Pi 与 Rust 各自只执行自己拥有的 Definition node。后续迁移单个领域 Agent 时，必须用独立 OpenSpec change 先把业务能力暴露为类型化 Tool，再确定唯一执行入口和旧路径删除计划；禁止双模型调用、双 Assistant 消息和双写。
 
 ## 5. Definition、模型绑定与调用审计
 
-`agent-definitions/` 是版本化 `AgentDefinition`、`PromptDefinition`、模板、schema 与发布索引的唯一事实源。Rust 与 Pi 使用强类型 loader 只读加载同一 Registry，并在构建、启动和发布时 fail-closed 校验 digest、引用、owner、状态和激活证据。PostgreSQL 只保存不可变 Definition 内容证据与 registry lifecycle manifest，不保存模板正文，也不能在线覆盖代码定义。
+`agent-definitions/` 是版本化 `AgentDefinition`、`PromptDefinition`、`ContextPolicyDefinition`、`TokenizerProfile`、模板、schema 与发布索引的唯一事实源。Rust 与 Pi 使用强类型 loader 只读加载同一 Registry，并在构建、启动和发布时 fail-closed 校验 digest、引用、owner、适用范围、状态和激活证据。PostgreSQL 只保存不可变 Definition 内容证据与 registry lifecycle manifest，不保存模板、Policy 或 tokenizer 算法正文，也不能在线覆盖代码定义。
 
 Definition 生命周期为 `candidate -> active -> supported -> revoked`。新 Session/Conversation 只绑定唯一 active 版本；既有绑定可继续 supported 版本，revoked 在模型请求前阻断。回滚通过代码发布重新激活既有 supported 版本，保留向前兼容表、历史 binding、`ModelCall`、`EvalRun` 和 `EvalReport`，不执行破坏性逆迁移。
 
@@ -82,9 +83,11 @@ PostgreSQL `ai_models` 是所有模型部署的唯一配置来源。Pi Runtime �
 
 Runtime 不根据 URL 猜测协议，不回退环境变量、Pi 内建模型目录或默认模型。API Key 仅在请求进程内传给 provider，不得进入 HTTP/SSE、日志、SQLite metadata、entry 或错误信息。
 
-Session、Conversation 或非会话 Run 固定 `model_id + behavior_fingerprint`。每次调用前重新解析 `ai_models`：凭据轮换且 fingerprint 不变时可继续；协议、地址、上游模型、reasoning、输出上限、context window、行为 settings、启用状态或能力发生不兼容变化时，在外部请求前阻断并要求显式 rebind/fork。
+每个 enabled 文本模型必须显式配置 `context_window`、`tokenizer_profile_key` 与 `tokenizer_profile_version`，且 Profile 必须适用于其协议和由操作者确认的模型家族。历史缺失配置可保留读取，但 Runtime 在 binding 和每次调用前返回稳定配置错误；不得根据不透明 `upstream_model` 猜测窗口、encoding 或 tokenizer 家族。图片和视频模型不使用这三个文本预算字段。
 
-每次实际模型步骤和显式重试都先建立一个独立 `ModelCall`，在脱敏输入持久化成功后才能调用 provider，并只允许一个 `succeeded`、`failed` 或 `aborted` 终态。Rust 写 PostgreSQL，Pi 写 namespaced SQLite；两者提供同 schema 的摘要、脱敏详情、版本化导出和无副作用 `dry_run` replay。真实模型对比只能进入有明确 case/token/retry/cost 预算并经确认的独立 `EvalRun`；常规验证使用 fake provider，真实模型调用数为零。
+Session、Conversation 或非会话 Run 固定 `model_id + behavior_fingerprint`，并固定各 node 的 Context Policy 与模型 Tokenizer Profile 精确版本。每次调用前重新解析 `ai_models`：凭据轮换且 fingerprint 不变时可继续；协议、地址、上游模型、reasoning、输出上限、context window、Profile 或行为 settings、启用状态、能力发生不兼容变化时，在外部请求前阻断并要求显式 rebind/fork。
+
+每次实际模型步骤和显式重试都先编译并持久化独立 `ContextSnapshot`，再建立引用该快照的 prepared `ModelCall`；两者成功后才能调用 provider，`ModelCall` 只允许一个 `succeeded`、`failed` 或 `aborted` 终态。编译失败只保存最小化、脱敏的 `ContextCompileAttempt`，不创建虚假 `ModelCall`。Rust 写 PostgreSQL，Pi 写 namespaced SQLite；两者提供同 schema 的摘要、脱敏详情、版本化导出和无副作用 `dry_run` replay。真实模型对比只能进入有明确 case/token/retry/cost 预算并经确认的独立 `EvalRun`；常规验证使用 fake provider，真实模型调用数为零。
 
 ## 6. Session、Context 与 Memory
 
@@ -92,16 +95,16 @@ Pi SQLite 只拥有 Agent Session：
 
 - 会话 metadata 与活动 leaf
 - 消息和工具结果
-- 不可变 Definition/Prompt 与模型行为 binding
-- namespaced `ModelCall`、迁移事件和可恢复删除意图
+- 不可变 Definition/Prompt/Context Policy 与模型行为 binding
+- namespaced `ContextSnapshot`、`ContextCompileAttempt`、`ModelCall`、迁移事件和可恢复删除意图
 - 分支、fork、branch summary
 - compaction 与近期上下文
 
 PostgreSQL 继续拥有项目、脚本、素材、作品、发布记录、模型配置及其他领域事实。两类存储不做跨库双写事务。
 
-`Context` 是本轮动态装配的数据；Pi compaction 是有损 Session Context。正式长期 `Memory` 只保存已确认、稳定、可复用的信息，必须有来源、作用域、更新时间、失效和删除语义。compaction summary 中的未确认推断不得自动升级为长期 Memory。
+`Context` 是本轮动态装配的数据。Rust 与 Pi 已使用同 schema、同 canonical digest 和同决策语义的受治理 Context Compiler：来源 Adapter 提交原子候选，版本化 Policy 独立治理 trust、priority、required、freshness、冲突、稳定排序与 P0-P4 选择，Tokenizer Profile 负责完整固定开销、输出预留和最终逻辑输入复核。JSON、已确认事实及 Tool request/result 原子组不得截断；必需内容超限明确失败，不回退旧 helper、经验字符估算或临时重裁剪。
 
-当前只把既有 Context 装配结果转换为带来源和信任等级的 Prompt User 层结构化输入；统一 Context Compiler 的优先级、token 预算与裁剪策略，以及正式长期 Memory，均尚未在本基线实现。
+Pi compaction 和 branch summary 仍是有损 Session Context，不自动升级为正式长期 Memory。正式长期 `Memory`、RAG/召回、Planner、虚拟制作团队运行流和 Context 审计 Admin UI 尚未在本基线实现；后续实现必须继续使用已落地的 Context/Prompt/ModelCall 边界。
 
 ## 7. Tool 与领域安全
 
@@ -130,7 +133,7 @@ HTTP 请求不得注入任意 Tool 实现。视频生成、平台发布、删除
 | `ai-agent-video-agent` | 18183 | 3000 | API |
 | `ai-agent-agent-runtime` | 18184 | 8082 | PostgreSQL read-only model config / SQLite volume |
 
-Agent Runtime 启动时先校验 Registry 与生产 Definition inventory；`/health` 只报告进程存活，`/ready` 分别验证 PostgreSQL 和可写 SQLite。SQLite 固定保存在命名卷 `ai-agent-session-data`，容器重建不得退化为内存存储。Rust 与 Pi 发布镜像都包含同一 Registry digest，生产运行不依赖开发目录挂载。
+Rust API 与 Agent Runtime 启动时先校验 Registry、历史不可变发布证据、生产 Definition inventory、Context baseline 和 tokenizer 资产 digest；任一不一致均拒绝启动。`/health` 只报告进程存活，`/ready` 验证其依赖和本地持久化可用性。SQLite 固定保存在命名卷 `ai-agent-session-data`，容器重建不得退化为内存存储。Rust 与 Pi 发布镜像都包含同一 Registry/asset digest，生产运行不依赖开发目录挂载。
 
 常规自动测试必须使用 fake provider，不调用真实模型、视频生成或平台发布。真实外部调用只允许在明确成本上限与用户确认后执行。
 
@@ -145,4 +148,4 @@ Agent Runtime 启动时先校验 Registry 与生产 Definition inventory；`/hea
 - 新增本地工具或领域外部动作
 - 付费、发布、删除等 Gate 变化
 
-当前基准是“代码级 Definition Registry + Pi 通用执行内核 + Rust 领域控制与视频链路 + 调用前持久化审计”。允许能力逐步扩展，但不允许出现模型或 Prompt 第二事实源、同请求双执行、凭据落盘、未审计模型调用或通用工具绕过领域 Gate。当前没有 Prompt 在线编辑、审计 Admin UI、统一 Context Compiler 或正式长期 Memory；这些能力必须通过后续独立 OpenSpec 推进。
+当前基准是“代码级 Agent/Prompt/Context Policy/Tokenizer Registry + 跨 Rust/Pi 受治理 Context Compiler + Pi 通用执行内核 + Rust 领域控制与视频链路 + Context/ModelCall 调用前持久化审计”。允许能力逐步扩展，但不允许出现模型、Prompt 或 Context Policy 第二事实源、同请求双执行、凭据落盘、未审计模型调用或通用工具绕过领域 Gate。当前没有 Prompt/Policy 在线编辑、Context/模型审计 Admin UI、正式长期 Memory、通用 Planner 或虚拟制作团队运行流；这些能力必须通过后续独立 OpenSpec 推进。

@@ -8,8 +8,9 @@ use crate::domain::conversation::{
 use crate::repositories::{ConversationRepository, PostgresConversationRepository};
 use async_trait::async_trait;
 use novex_agent::{
-    AgentSession, AgentStep, AgentTurn, BoxError, FinishRun, MessageRole, NewMessage, RunRecord,
-    RunRecorder, SessionStore, StartRun, StepRecorder, StoredMessage,
+    AgentSession, AgentStep, AgentTurn, BoxError, FinishRun, FixedDefinitionBinding,
+    FixedModelBinding, MessageRole, NewMessage, RunRecord, RunRecorder, SessionStore, StartRun,
+    StepRecorder, StoredMessage,
 };
 use novex_ai_core::AgentKey;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ pub fn active_rust_definition_binding(
         return Err("definition owner must be rust".into());
     }
     let mut prompts = serde_json::Map::new();
+    let mut policies = serde_json::Map::new();
     for (node_key, reference) in &agent.nodes {
         let prompt = registry
             .prompts()
@@ -49,6 +51,21 @@ pub fn active_rust_definition_binding(
                     .map_err(|error| error.to_string())?
             }),
         );
+        let policy_reference = reference.context_policy.as_ref().ok_or_else(|| {
+            format!("governed Context Policy binding is missing at node {node_key}")
+        })?;
+        let policy = registry
+            .context_policy(&policy_reference.key, &policy_reference.version)
+            .map_err(|error| error.to_string())?;
+        policies.insert(
+            node_key.clone(),
+            serde_json::json!({
+                "key": policy_reference.key,
+                "version": policy_reference.version,
+                "digest": novex_ai_core::definition_digest(policy)
+                    .map_err(|error| error.to_string())?
+            }),
+        );
     }
     Ok(
         crate::domain::conversation::AgentConversationDefinitionBindingInput {
@@ -57,11 +74,60 @@ pub fn active_rust_definition_binding(
             agent_digest: novex_ai_core::definition_digest(agent)
                 .map_err(|error| error.to_string())?,
             prompt_bindings: serde_json::Value::Object(prompts),
+            context_policy_bindings: serde_json::Value::Object(policies),
             registry_digest: registry.digest().into(),
             migration_source: None,
             parent_conversation_id: None,
         },
     )
+}
+
+/// 将持久化 Definition/模型证据转换为一次调用不可漂移的 Executor binding。
+pub fn fixed_model_binding(
+    context_policy_bindings: &serde_json::Value,
+    model: &crate::domain::conversation::ModelBindingEvidence,
+) -> Result<FixedModelBinding, String> {
+    let policies = context_policy_bindings
+        .as_object()
+        .ok_or_else(|| "Context Policy bindings must be an object".to_string())?
+        .iter()
+        .map(|(node_key, value)| {
+            let value = value
+                .as_object()
+                .ok_or_else(|| format!("Context Policy binding at {node_key} must be an object"))?;
+            let field = |name: &str| {
+                value
+                    .get(name)
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|item| !item.trim().is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        format!("Context Policy binding at {node_key} is missing {name}")
+                    })
+            };
+            Ok((
+                node_key.clone(),
+                FixedDefinitionBinding {
+                    key: field("key")?,
+                    version: field("version")?,
+                    digest: field("digest")?,
+                },
+            ))
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
+    if policies.is_empty() {
+        return Err("Context Policy bindings are empty".into());
+    }
+    Ok(FixedModelBinding {
+        model_id: model.model_id,
+        behavior_fingerprint: model.behavior_fingerprint.clone(),
+        context_policy_bindings: policies,
+        tokenizer_profile: FixedDefinitionBinding {
+            key: model.tokenizer_profile_key.clone(),
+            version: model.tokenizer_profile_version.clone(),
+            digest: model.tokenizer_profile_digest.clone(),
+        },
+    })
 }
 
 pub fn build_registry(
@@ -219,6 +285,7 @@ impl RunRecorder for PostgresAgentKernelStore {
                 status: input.status.as_str().to_string(),
                 output: input.output,
                 error_message: input.error_message,
+                context_compile_attempt_id: input.context_compile_attempt_id,
             })
             .await
             .map_err(AgentRuntimeError::from)?;
@@ -315,6 +382,7 @@ fn run_record(run: AgentRunRecord) -> Result<RunRecord, BoxError> {
         input: run.input,
         output: run.output,
         error_message: run.error_message,
+        context_compile_attempt_id: run.context_compile_attempt_id,
         model_id: run.model_id,
         model_snapshot: run.model_snapshot,
         started_at: run.started_at,
@@ -331,6 +399,7 @@ fn domain_run(run: RunRecord) -> Result<AgentRunRecord, AgentRuntimeError> {
         input: run.input,
         output: run.output,
         error_message: run.error_message,
+        context_compile_attempt_id: run.context_compile_attempt_id,
         model_id: run.model_id,
         model_snapshot: run.model_snapshot,
         started_at: run.started_at,

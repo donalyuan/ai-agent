@@ -1,5 +1,6 @@
 pub mod ai_model_repository;
 pub mod asset_generation_repository;
+pub mod context_audit_repository;
 pub mod conversation_repository;
 pub mod definition_release_repository;
 pub mod eval_repository;
@@ -28,6 +29,10 @@ pub use asset_generation_repository::{
     CreateAssetCandidateInput, CreateAssetGenerationTaskInput, PostgresAssetGenerationRepository,
     SceneAssetCandidate,
 };
+pub use context_audit_repository::{
+    ContextAuditListFilter, ContextAuditRecord, ContextAuditRepositoryError,
+    ContextCompileAttemptRecord, ContextSnapshotRecord, PostgresContextAuditRepository,
+};
 pub use conversation_repository::{
     AgentBindingError, ConversationRepository, ConversationRepositoryError,
     PostgresConversationRepository,
@@ -47,7 +52,7 @@ pub use material_repository::{
 pub use model_call_repository::{
     FinishModelCall, ModelCallListFilter, ModelCallOwner, ModelCallRecord,
     ModelCallRepositoryError, ModelCallStatus, ModelCallTerminalStatus,
-    PostgresModelCallRepository, PrepareModelCall,
+    PostgresModelCallRepository, PrepareModelCall, PrepareModelCallWithContext,
 };
 pub use project_repository::{
     AccountStrategyProfile, CreateProjectInput, PostgresProjectRepository, Project,

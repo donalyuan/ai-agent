@@ -1,5 +1,4 @@
 import { Pool } from "pg";
-import { access } from "node:fs/promises";
 
 import { loadConfig } from "./config.js";
 import { SessionCoordinator } from "./coordinator.js";
@@ -15,16 +14,12 @@ async function main(): Promise<void> {
   const definitions = await loadDefinitionRegistry(config.definitionsDir);
   assertProductionExecutionIntegrity(definitions);
   const pool = new Pool({ connectionString: config.databaseUrl, max: 4 });
-  const models = new ModelConfigRepository(pool);
+  const models = new ModelConfigRepository(pool, definitions);
   const sessions = new SessionStore(config.sqlitePath, config.workspaceRoot);
   await sessions.reconcileSessionDeletions();
   if ((await sessions.legacyMigrationPlan()).length > 0) {
-    const backupPath = `${config.sqlitePath}.pre-versioned-agent-execution.bak`;
-    try {
-      await access(backupPath);
-    } catch {
-      await sessions.backupForHistoryMigration(backupPath);
-    }
+    const backupPath = `${config.sqlitePath}.pre-context-migration.${Date.now()}.bak`;
+    await sessions.backupForHistoryMigration(backupPath);
   }
   const coordinator = new SessionCoordinator(sessions, models, undefined, definitions);
   const runtime = new RuntimeHttpServer({ sessions, coordinator, models, pool });

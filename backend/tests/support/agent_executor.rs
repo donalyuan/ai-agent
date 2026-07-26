@@ -1,13 +1,17 @@
 use async_trait::async_trait;
 use novex_agent::{
     AgentInvocation, AgentRegistry, AuditedExecutionBinding, AuditedModelExecutor,
-    BoundModelResolver, FixedModelBinding, ModelExecutionRef, ResolvedBoundModel,
+    BoundModelResolver, ModelExecutionRef, ResolvedBoundModel,
 };
 use novex_ai_core::DefinitionRegistry;
 use novex_api::application::agents::adapters::{AgentRuntimeError, AgentTurnResponse};
-use novex_api::application::agents::kernel::AgentExecutor;
-use novex_api::model_routing::model_behavior_evidence;
-use novex_api::repositories::{PostgresConversationRepository, PostgresModelCallRepository};
+use novex_api::application::agents::kernel::{
+    active_rust_definition_binding, fixed_model_binding, AgentExecutor,
+};
+use novex_api::model_routing::{model_behavior_evidence, model_binding_evidence};
+use novex_api::repositories::{
+    PostgresContextAuditRepository, PostgresConversationRepository, PostgresModelCallRepository,
+};
 use novex_model::{ApiProtocol, LLMClient, ModelExecutionSnapshot, ModelType};
 use serde_json::json;
 use sqlx::PgPool;
@@ -58,7 +62,10 @@ impl TestAgentExecutor {
             reasoning_effort: None,
             timeout_seconds: 5,
             max_output_tokens: Some(3000),
-            settings: json!({"context_window": 128000}),
+            context_window: Some(128000),
+            tokenizer_profile_key: Some("byte-upper-bound".into()),
+            tokenizer_profile_version: Some("1.0.0".into()),
+            settings: json!({}),
         };
         let evidence = model_behavior_evidence(&snapshot).unwrap();
         let definitions_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -66,6 +73,8 @@ impl TestAgentExecutor {
             .unwrap()
             .join("agent-definitions");
         let definitions = Arc::new(DefinitionRegistry::load(definitions_path).unwrap());
+        let definition_binding = active_rust_definition_binding(&definitions, agent_key).unwrap();
+        let model_binding = model_binding_evidence(&definitions, &snapshot).unwrap();
         let agent = definitions.active_agent(agent_key).unwrap();
         let agent_key = agent.agent_key.clone();
         let agent_version = agent.version.clone();
@@ -76,6 +85,9 @@ impl TestAgentExecutor {
                 model_id,
                 behavior_fingerprint: evidence.behavior_fingerprint.clone(),
                 capabilities: evidence.capabilities,
+                tokenizer_profile_key: "byte-upper-bound".into(),
+                tokenizer_profile_version: "1.0.0".into(),
+                max_output_tokens: 3_000,
                 model_snapshot,
                 known_secrets: Vec::new(),
             },
@@ -83,7 +95,8 @@ impl TestAgentExecutor {
         let audited = Arc::new(AuditedModelExecutor::new(
             definitions.clone(),
             resolver,
-            Arc::new(PostgresModelCallRepository::new(pool)),
+            Arc::new(PostgresModelCallRepository::new(pool.clone())),
+            Arc::new(PostgresContextAuditRepository::new(pool)),
         ));
         Self {
             executor: AgentExecutor::new(registry, repository),
@@ -93,10 +106,11 @@ impl TestAgentExecutor {
                     executor: audited,
                     agent_key,
                     agent_version,
-                    binding: FixedModelBinding {
-                        model_id,
-                        behavior_fingerprint: evidence.behavior_fingerprint,
-                    },
+                    binding: fixed_model_binding(
+                        &definition_binding.context_policy_bindings,
+                        &model_binding,
+                    )
+                    .unwrap(),
                 }),
             },
             definitions,

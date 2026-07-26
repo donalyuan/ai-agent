@@ -61,6 +61,8 @@ fn complete_config() -> LegacyModelImportConfig {
         text_reasoning_effort: Some("high".to_string()),
         text_max_output_tokens: Some(3000),
         text_context_window: Some(128000),
+        text_tokenizer_profile_key: Some("openai.o200k".to_string()),
+        text_tokenizer_profile_version: Some("1.0.0".to_string()),
         image_api_key: Some("image-secret".to_string()),
         image_base_url: Some("https://images.example/v1/images/generations".to_string()),
         image_model: Some("image-upstream".to_string()),

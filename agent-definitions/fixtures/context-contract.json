@@ -1,0 +1,37 @@
+{
+  "schema_version": "2",
+  "compiled_at": "2026-07-25T00:00:00Z",
+  "external_effects": {
+    "real_model_calls": 0,
+    "tool_calls": 0,
+    "video_generation_calls": 0,
+    "platform_publication_calls": 0
+  },
+  "tokenizer_cases": [
+    { "id": "ascii", "text": "Hello, governed context." },
+    { "id": "chinese", "text": "中文上下文预算必须可证明。" },
+    { "id": "emoji", "text": "发布前复核 \ud83d\udd12\ud83c\udfa5" },
+    { "id": "json", "text": "{\"a\":1,\"nested\":{\"z\":true}}" },
+    { "id": "reasoning", "text": "<reasoning>private chain content is still budgeted</reasoning>" }
+  ],
+  "context_cases": {
+    "stable_order": ["current-instruction", "confirmed-project", "recent-message", "reference", "candidate"],
+    "duplicate_ids": ["duplicate-a", "duplicate-b"],
+    "supersedes": { "old": "strategy-v1", "new": "strategy-v2" },
+    "conflict_fact_key": "project.target_audience",
+    "boundary_windows": [8192, 128000],
+    "atomic_tool_group": {
+      "group_id": "tool-call-1",
+      "request_id": "tool-request-1",
+      "result_id": "tool-result-1"
+    }
+  },
+  "safety": {
+    "canary_secret": "NOVEX_CONTEXT_CANARY_DO_NOT_PERSIST_20260725",
+    "temporary_url": "https://assets.invalid/object?signature=NOVEX_CONTEXT_CANARY_DO_NOT_PERSIST_20260725",
+    "base64_prefix": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA",
+    "oversized_candidate_bytes": 1048576,
+    "orphan_tool_result_id": "orphan-tool-result",
+    "incomplete_bindings": ["missing_policy", "missing_profile", "missing_context_window"]
+  }
+}

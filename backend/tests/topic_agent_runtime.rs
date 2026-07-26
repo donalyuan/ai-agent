@@ -8,20 +8,20 @@ use novex_api::application::agents::kernel::{
     active_rust_definition_binding, PostgresAgentKernelStore,
 };
 use novex_api::domain::conversation::{
-    AgentMessageRole, CreateAgentConversationInput, CreateAgentMessageInput, ModelBindingEvidence,
+    AgentMessageRole, CreateAgentConversationInput, CreateAgentMessageInput,
 };
 use novex_api::domain::topic::{
     ContentTopicFilter, ContentTopicSource, ContentTopicStatus, TopicGenerationBatchStatus,
     TopicQualityEvaluationStatus, TopicReviewPriority, TopicReviewRiskFlag, TopicReviewSnapshot,
 };
-use novex_api::model_routing::model_behavior_evidence;
+use novex_api::model_routing::model_binding_evidence;
 use novex_api::repositories::{
     ConversationRepository, CreateContentTopicInput, CreateTopicGenerationBatchInput,
     PostgresConversationRepository, PostgresProjectRepository, PostgresTopicRepository,
     TopicRepository,
 };
 use novex_model::LLMPrompt;
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -162,6 +162,82 @@ async fn latest_topic_generation_batch_id(pool: &PgPool, project_id: Uuid) -> Uu
     .expect("latest topic generation batch should exist")
 }
 
+struct AuditedContextEvidence {
+    prompt_snapshot: Value,
+    context_sources: Value,
+    decisions: Value,
+    selected_order: Value,
+    budget: Value,
+    logical_input: Value,
+    policy_key: String,
+}
+
+async fn audited_context_for_node(
+    pool: &PgPool,
+    run_id: Uuid,
+    node_key: &str,
+) -> AuditedContextEvidence {
+    let (prompt_snapshot, context_sources, context_snapshot_id): (Value, Value, Option<Uuid>) =
+        sqlx::query_as(
+            r#"
+            SELECT prompt_snapshot, context_sources, context_snapshot_id
+            FROM model_calls
+            WHERE agent_run_id = $1 AND node_key = $2
+            ORDER BY attempt ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(run_id)
+        .bind(node_key)
+        .fetch_one(pool)
+        .await
+        .expect("audited topic model call should exist");
+    let context_snapshot_id =
+        context_snapshot_id.expect("audited topic model call should reference context snapshot");
+    let (decisions, selected_order, budget, logical_input, policy_key): (
+        Value,
+        Value,
+        Value,
+        Value,
+        String,
+    ) = sqlx::query_as(
+        r#"
+        SELECT decisions, selected_order, budget_ledger, logical_input, policy_key
+        FROM context_snapshots
+        WHERE id = $1
+        "#,
+    )
+    .bind(context_snapshot_id)
+    .fetch_one(pool)
+    .await
+    .expect("audited topic context snapshot should exist");
+
+    AuditedContextEvidence {
+        prompt_snapshot,
+        context_sources,
+        decisions,
+        selected_order,
+        budget,
+        logical_input,
+        policy_key,
+    }
+}
+
+fn selected_decisions_by_render(decisions: &Value) -> Vec<&Value> {
+    let mut selected = decisions
+        .as_array()
+        .expect("context decisions should be an array")
+        .iter()
+        .filter(|decision| decision["decision"] == "selected")
+        .collect::<Vec<_>>();
+    selected.sort_by_key(|decision| {
+        decision["render_order"]
+            .as_u64()
+            .expect("selected decision should have render_order")
+    });
+    selected
+}
+
 struct ScriptedLLMClient {
     responses: Mutex<Vec<Result<String, LLMError>>>,
     prompts: Mutex<Vec<LLMPrompt>>,
@@ -230,7 +306,7 @@ impl TopicTestRuntime {
     ) -> Result<TopicReviewSnapshot, AgentRuntimeError> {
         let model = self.executor.model();
         let snapshot = model.snapshot.clone().unwrap();
-        let evidence = model_behavior_evidence(&snapshot)
+        let model_binding = model_binding_evidence(self.executor.definitions(), &snapshot)
             .map_err(|error| AgentRuntimeError::Kernel(error.to_string()))?;
         let definition = active_rust_definition_binding(self.executor.definitions(), "video.topic")
             .map_err(AgentRuntimeError::Kernel)?;
@@ -241,11 +317,7 @@ impl TopicTestRuntime {
                 snapshot.clone(),
                 AuditedTopicReviewExecution {
                     definition,
-                    model_binding: ModelBindingEvidence {
-                        model_id: snapshot.model_id,
-                        behavior_fingerprint: evidence.behavior_fingerprint,
-                        model_capabilities: serde_json::to_value(evidence.capabilities).unwrap(),
-                    },
+                    model_binding,
                     audited: model.audited.clone().unwrap(),
                 },
                 self.run_repository.clone(),
@@ -363,7 +435,7 @@ async fn account_strategy_context_is_injected_into_topic_generation_and_quality_
         .await
         .unwrap();
 
-    runtime
+    let response = runtime
         .execute(AgentInvocation {
             session_id: conversation.id,
             user_message: "生成 1 个 AI 工具教程选题".to_string(),
@@ -374,9 +446,121 @@ async fn account_strategy_context_is_injected_into_topic_generation_and_quality_
         .await
         .unwrap();
 
+    let context = audited_context_for_node(&test_pool, response.run.id, "topic.generate").await;
+    assert_eq!(context.policy_key, "topic.generate.baseline");
+    assert_eq!(
+        context.logical_input,
+        context.prompt_snapshot["logical_input"]
+    );
+    let selected = selected_decisions_by_render(&context.decisions);
+    let strategy_fields = selected
+        .iter()
+        .filter(|decision| decision["source_kind"] == "account_strategy")
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(strategy_fields.len(), 9);
+    for decision in strategy_fields {
+        assert_eq!(decision["trust"], "confirmed_fact");
+        assert_eq!(decision["priority"], "p1");
+        assert_eq!(decision["required"], true);
+    }
+    let current_instruction = selected
+        .iter()
+        .find(|decision| {
+            decision["candidate_id"]
+                .as_str()
+                .is_some_and(|id| id.ends_with(":current-request"))
+        })
+        .expect("current topic request should be an atomic candidate");
+    assert_eq!(current_instruction["source_kind"], "user_instruction");
+    assert_eq!(current_instruction["trust"], "user_instruction");
+    assert_eq!(current_instruction["priority"], "p0");
+    assert_eq!(current_instruction["required"], true);
+    assert_eq!(
+        context.selected_order,
+        Value::Array(
+            selected
+                .iter()
+                .map(|decision| decision["candidate_id"].clone())
+                .collect()
+        )
+    );
+    assert!(
+        context.budget["selected_context_tokens"].as_u64().unwrap()
+            <= context.budget["dynamic_context_budget"].as_u64().unwrap()
+    );
+    assert_eq!(
+        context.context_sources.as_array().unwrap().len(),
+        context.decisions.as_array().unwrap().len()
+    );
+    let quality_context =
+        audited_context_for_node(&test_pool, response.run.id, "topic.quality_review").await;
+    let quality_selected = selected_decisions_by_render(&quality_context.decisions);
+    assert_eq!(
+        quality_selected
+            .iter()
+            .filter(|decision| decision["source_kind"] == "account_strategy")
+            .count(),
+        9
+    );
+    assert!(quality_selected
+        .iter()
+        .filter(|decision| decision["source_kind"] == "account_strategy")
+        .all(|decision| decision["trust"] == "confirmed_fact"));
+    let quality_candidates = quality_selected
+        .iter()
+        .filter(|decision| decision["source_kind"] == "topic_candidate")
+        .collect::<Vec<_>>();
+    assert_eq!(quality_candidates.len(), 1);
+    assert!(quality_candidates
+        .iter()
+        .all(|decision| decision["trust"] == "candidate"));
+
     {
         let prompts = llm_client.prompts.lock().unwrap();
         assert_eq!(prompts.len(), 2);
+        assert_eq!(
+            prompts[0].user,
+            r#"请基于项目定位和用户补充要求生成 1 个候选选题。
+
+账号策略资料：
+- 账号名称：AI 工具账号
+- 定位摘要：AI 工具和内容生产效率
+- 账号描述：面向内容运营负责人的科技知识账号
+- 目标受众：中小内容团队负责人
+- 内容支柱：AI 工具教程、内容生产案例
+- 表达风格：直接清晰，少术语
+- 禁区方向：夸大收益、灰产引流
+- 参考账号：参考账号A
+- 选题偏好：优先 60 秒内可讲清楚步骤的教程选题
+
+用户补充要求：生成 1 个 AI 工具教程选题
+
+
+输出要求：
+1. 必须只输出一个 JSON 对象。
+2. 顶层对象必须只包含 topics 字段。
+3. topics 数组每项必须包含 title、angle、target_audience、hook_points、content_type、score、score_reason、tags。
+4. score 必须是 0 到 100 的数字。
+5. hook_points 和 tags 必须是非空字符串数组。
+6. 不允许把 topics 写成字符串数组；每个选题必须是包含完整字段的对象。
+
+JSON Schema：
+{
+  "topics": [
+    {
+      "title": "选题标题",
+      "angle": "选题角度",
+      "target_audience": "目标受众",
+      "hook_points": ["主要看点"],
+      "content_type": "knowledge",
+      "score": 88,
+      "score_reason": "评分理由",
+      "tags": ["标签"]
+    }
+  ]
+}"#
+        );
         for prompt in [&prompts[0].user, &prompts[1].user] {
             assert!(prompt.contains("账号策略资料"));
             assert!(prompt.contains("中小内容团队负责人"));
@@ -588,6 +772,50 @@ async fn topic_group_review_persists_snapshot_records_steps_and_preserves_topic_
             "review_topic_group",
             "persist_topic_review_snapshot"
         ]
+    );
+
+    let (step_type, decisions, selected_order): (String, Value, Value) = sqlx::query_as(
+        r#"
+        SELECT s.step_type, cs.decisions, cs.selected_order
+        FROM model_calls mc
+        INNER JOIN agent_steps s ON s.id = mc.agent_step_id
+        INNER JOIN context_snapshots cs ON cs.id = mc.context_snapshot_id
+        WHERE mc.agent_run_id = $1 AND mc.node_key = 'topic.group_review'
+        "#,
+    )
+    .bind(snapshot.source_run_id.unwrap())
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(step_type, "review_topic_group");
+    let selected = selected_decisions_by_render(&decisions);
+    assert_eq!(
+        selected
+            .iter()
+            .filter(|decision| decision["source_kind"] == "account_strategy")
+            .count(),
+        9
+    );
+    let topic_decisions = selected
+        .iter()
+        .filter(|decision| decision["source_kind"] == "existing_topic")
+        .collect::<Vec<_>>();
+    assert_eq!(topic_decisions.len(), 2);
+    assert!(topic_decisions.iter().all(|decision| {
+        decision["trust"] == "confirmed_fact"
+            && decision["priority"] == "p1"
+            && decision["source_version"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+    }));
+    assert_eq!(
+        selected_order,
+        Value::Array(
+            selected
+                .iter()
+                .map(|decision| decision["candidate_id"].clone())
+                .collect()
+        )
     );
 
     {
@@ -1374,6 +1602,57 @@ async fn topic_agent_rewrites_once_when_first_quality_pass_rate_is_low() {
         assert!(prompts[2].user.contains("基于质量闸门淘汰原因重写"));
     }
 
+    let calls: Vec<(String, Uuid, Value)> = sqlx::query_as(
+        r#"
+        SELECT mc.node_key, mc.context_snapshot_id, cs.decisions
+        FROM model_calls mc
+        INNER JOIN context_snapshots cs ON cs.id = mc.context_snapshot_id
+        WHERE mc.agent_run_id = $1
+        ORDER BY mc.prepared_at ASC, mc.id ASC
+        "#,
+    )
+    .bind(response.run.id)
+    .fetch_all(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(
+        calls.iter().map(|call| call.0.as_str()).collect::<Vec<_>>(),
+        vec![
+            "topic.generate",
+            "topic.quality_review",
+            "topic.rewrite",
+            "topic.quality_review"
+        ]
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .map(|call| call.1)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        4
+    );
+    for (index, (_, _, decisions)) in calls.iter().enumerate().skip(1) {
+        let selected = selected_decisions_by_render(decisions);
+        assert!(
+            selected
+                .iter()
+                .filter(|decision| decision["source_kind"] == "account_strategy")
+                .count()
+                == 9,
+            "quality chain call {index} should retain field-level account facts"
+        );
+        assert!(selected
+            .iter()
+            .filter(|decision| decision["source_kind"] == "account_strategy")
+            .all(|decision| decision["trust"] == "confirmed_fact"));
+        assert!(selected
+            .iter()
+            .filter(|decision| decision["source_kind"] == "topic_candidate")
+            .all(|decision| decision["trust"] == "candidate"));
+    }
+
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
     admin_pool.close().await;
@@ -1830,8 +2109,37 @@ async fn topic_agent_includes_topic_context_when_generating_supplement_batch() {
         })
         .await
         .unwrap();
+    for index in 3..=7 {
+        conversation_repository
+            .save_message(CreateAgentMessageInput {
+                conversation_id: conversation.id,
+                role: if index % 2 == 0 {
+                    AgentMessageRole::Assistant
+                } else {
+                    AgentMessageRole::User
+                },
+                content: format!("历史上下文第 {index} 条"),
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+    }
+    for index in 3..=21 {
+        topic_repository
+            .create_topic(topic_input(
+                project_id,
+                if index % 2 == 0 {
+                    original_batch.id
+                } else {
+                    existing_supplement_batch.id
+                },
+                &format!("同主题组已有选题 {index}"),
+            ))
+            .await
+            .unwrap();
+    }
 
-    runtime
+    let response = runtime
         .execute(AgentInvocation {
             session_id: conversation.id,
             user_message: "继续补充 1 个复盘角度".to_string(),
@@ -1842,6 +2150,60 @@ async fn topic_agent_includes_topic_context_when_generating_supplement_batch() {
         .await
         .unwrap();
 
+    let context = audited_context_for_node(&test_pool, response.run.id, "topic.supplement").await;
+    assert_eq!(context.policy_key, "topic.supplement.baseline");
+    assert_eq!(
+        context.logical_input,
+        context.prompt_snapshot["logical_input"]
+    );
+    let selected = selected_decisions_by_render(&context.decisions);
+    let existing_topics = selected
+        .iter()
+        .filter(|decision| decision["source_kind"] == "existing_topic")
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(existing_topics.len(), 21);
+    assert!(existing_topics.iter().all(|decision| {
+        decision["trust"] == "confirmed_fact"
+            && decision["priority"] == "p1"
+            && decision["required"] == true
+    }));
+    let history = selected
+        .iter()
+        .filter(|decision| decision["source_kind"] == "conversation_entry")
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(history.len(), 7);
+    assert!(history.iter().all(|decision| {
+        decision["priority"] == "p2"
+            && decision["required"] == false
+            && decision["decision"] == "selected"
+    }));
+    let original_requirement = selected
+        .iter()
+        .find(|decision| {
+            decision["candidate_id"]
+                .as_str()
+                .is_some_and(|id| id.ends_with(":original-request"))
+        })
+        .expect("supplement should retain the root batch request");
+    assert_eq!(original_requirement["source_kind"], "topic_batch");
+    assert_eq!(original_requirement["priority"], "p1");
+    assert_eq!(original_requirement["required"], true);
+    assert!(
+        context.budget["selected_context_tokens"].as_u64().unwrap()
+            <= context.budget["dynamic_context_budget"].as_u64().unwrap()
+    );
+    assert_eq!(
+        context.selected_order,
+        Value::Array(
+            selected
+                .iter()
+                .map(|decision| decision["candidate_id"].clone())
+                .collect()
+        )
+    );
+
     {
         let prompts = llm_client.prompts.lock().unwrap();
         assert_eq!(prompts.len(), 2);
@@ -1851,6 +2213,8 @@ async fn topic_agent_includes_topic_context_when_generating_supplement_batch() {
         assert!(generation_prompt.contains("既有补充批次选题"));
         assert!(generation_prompt.contains("上一轮要求：更偏实操路线"));
         assert!(generation_prompt.contains("上一轮已生成了基础方向"));
+        assert!(generation_prompt.contains("历史上下文第 7 条"));
+        assert!(generation_prompt.contains("同主题组已有选题 21"));
         assert!(generation_prompt.contains("基于同一主题继续扩展"));
         assert!(generation_prompt.contains("避免重复已有选题"));
         assert!(!generation_prompt.contains("无关批次选题"));

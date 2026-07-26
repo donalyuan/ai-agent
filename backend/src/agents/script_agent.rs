@@ -1,6 +1,6 @@
 use crate::agents::llm::{
-    ScriptLLMOutput, ScriptLLMScene, ScriptMetadataLLMOutput, ScriptNodeInputBuilder,
-    ScriptSceneLLMOutput,
+    ScriptContextFragment, ScriptLLMOutput, ScriptLLMScene, ScriptMetadataLLMOutput,
+    ScriptNodeInputBuilder, ScriptSceneLLMOutput,
 };
 use crate::domain::script::{
     Scene, Script, ScriptGenerationInput, ScriptListFilter, ScriptStatus, ScriptSummary,
@@ -12,10 +12,9 @@ use crate::repositories::{
 };
 use chrono::Utc;
 use novex_agent::{
-    AuditedCallOwner, AuditedModelError, AuditedModelExecutor, AuditedModelRequest,
-    FixedModelBinding,
+    text_context_candidate, AuditedCallOwner, AuditedModelError, AuditedModelExecutor,
+    AuditedModelRequest, FixedModelBinding, TextContextCandidateInput,
 };
-use novex_ai_core::{DynamicFragment, PromptCompileInput, TrustLevel};
 use novex_model::LLMError;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -87,7 +86,7 @@ impl ScriptAgentService {
             let generated = self
                 .generate_raw_with_retries(
                     "script.complete",
-                    node_input.content.clone(),
+                    node_input.context.clone(),
                     ScriptOutputContract::Complete { scene_count },
                     BTreeMap::from([("scene_count".into(), json!(scene_count))]),
                     &mut call_sequence,
@@ -277,7 +276,7 @@ impl ScriptAgentService {
             let generated = self
                 .generate_raw_with_retries(
                     "script.metadata",
-                    node_input.content.clone(),
+                    node_input.context.clone(),
                     ScriptOutputContract::Metadata,
                     BTreeMap::new(),
                     &mut call_sequence,
@@ -324,7 +323,7 @@ impl ScriptAgentService {
             let generated = self
                 .generate_raw_with_retries(
                     "script.single_scene",
-                    node_input.content.clone(),
+                    node_input.context.clone(),
                     ScriptOutputContract::SingleScene { sequence },
                     BTreeMap::new(),
                     &mut call_sequence,
@@ -375,7 +374,7 @@ impl ScriptAgentService {
     async fn generate_raw_with_retries(
         &self,
         node_key: &str,
-        content: String,
+        context: Vec<ScriptContextFragment>,
         contract: ScriptOutputContract,
         variables: BTreeMap<String, serde_json::Value>,
         call_sequence: &mut ScriptCallSequence,
@@ -389,7 +388,7 @@ impl ScriptAgentService {
                 .model_executor
                 .execute(ScriptModelCall {
                     node_key: node_key.into(),
-                    content: content.clone(),
+                    context: context.clone(),
                     contract,
                     variables: variables.clone(),
                     root_call_id: call_sequence.root_call_id,
@@ -510,7 +509,7 @@ pub(crate) enum ScriptOutputContract {
 
 pub struct ScriptModelCall {
     node_key: String,
-    content: String,
+    context: Vec<ScriptContextFragment>,
     contract: ScriptOutputContract,
     variables: BTreeMap<String, serde_json::Value>,
     root_call_id: Option<Uuid>,
@@ -543,8 +542,8 @@ pub trait ScriptModelExecutor: Send + Sync {
 }
 
 impl ScriptModelCall {
-    pub fn content(&self) -> &str {
-        &self.content
+    pub fn context_fragments(&self) -> &[ScriptContextFragment] {
+        &self.context
     }
 }
 
@@ -606,14 +605,37 @@ impl ScriptModelExecutor for AuditedScriptModelExecutor {
         &self,
         call: ScriptModelCall,
     ) -> Result<ScriptModelResponse, ScriptModelExecutionError> {
-        let fragment_id = format!("{}:attempt:{}", call.node_key, call.attempt);
-        let fragment = DynamicFragment {
-            id: fragment_id.clone(),
-            trust: TrustLevel::UserInstruction,
-            source: "script_generation_request".into(),
-            content: Some(call.content),
-            asset: None,
+        let compiled_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let owner_id = match self.owner {
+            AuditedCallOwner::Conversation(id)
+            | AuditedCallOwner::AgentRun(id)
+            | AuditedCallOwner::EvalRun(id) => id,
         };
+        let mut context_candidates = Vec::with_capacity(call.context.len());
+        let mut context_sources = Vec::with_capacity(call.context.len());
+        for fragment in call.context {
+            let candidate_id = format!(
+                "{}:{}:attempt:{}",
+                call.node_key, fragment.key, call.attempt
+            );
+            context_sources.push(json!({
+                "id": candidate_id,
+                "trust": fragment.trust,
+                "source": fragment.source_kind,
+            }));
+            context_candidates.push(text_context_candidate(TextContextCandidateInput {
+                candidate_id,
+                source_kind: fragment.source_kind.into(),
+                source_id: format!("{owner_id}:{}", fragment.key),
+                source_version: "1".into(),
+                trust: fragment.trust,
+                priority: fragment.priority,
+                required: fragment.required,
+                render_order: fragment.render_order,
+                observed_at: compiled_at.clone(),
+                text: fragment.content,
+            }));
+        }
         let contract = call.contract;
         let result = self
             .executor
@@ -627,19 +649,14 @@ impl ScriptModelExecutor for AuditedScriptModelExecutor {
                     agent_key: self.agent_key.clone(),
                     agent_version: self.agent_version.clone(),
                     node_key: call.node_key,
-                    compile_input: PromptCompileInput {
-                        schema_version: "1".into(),
-                        variables: call.variables,
-                        fragments: vec![fragment],
-                    },
+                    variables: call.variables,
+                    context_candidates,
+                    context_atomic_groups: Vec::new(),
+                    compiled_at,
                     tool_profile: "chat".into(),
                     tool_schema: None,
                     binding: self.binding.clone(),
-                    context_sources: json!([{
-                        "id": fragment_id,
-                        "trust": "user_instruction",
-                        "source": "script_generation_request"
-                    }]),
+                    context_sources: serde_json::Value::Array(context_sources),
                     memory_sources: json!([]),
                     parameters: json!({}),
                     asset_references: json!([]),

@@ -1,7 +1,30 @@
-use novex_api::agents::llm::{ScriptLLMOutput, ScriptNodeInputBuilder, ScriptSceneLLMOutput};
+use novex_ai_core::{ContextPriority, TrustLevel};
+use novex_api::agents::llm::{
+    ScriptLLMOutput, ScriptNodeInput, ScriptNodeInputBuilder, ScriptSceneLLMOutput,
+};
 use novex_api::domain::script::{ScriptGenerationInput, ScriptStyle};
 use serde_json::json;
 use uuid::Uuid;
+
+fn render(input: &ScriptNodeInput) -> String {
+    input
+        .context
+        .iter()
+        .map(|fragment| fragment.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn assert_atomic_context(input: &ScriptNodeInput) {
+    assert_eq!(input.context.len(), 3);
+    for (render_order, fragment) in input.context.iter().enumerate() {
+        assert_eq!(fragment.source_kind, "user_instruction");
+        assert_eq!(fragment.trust, TrustLevel::UserInstruction);
+        assert_eq!(fragment.priority, ContextPriority::P0);
+        assert!(fragment.required);
+        assert_eq!(fragment.render_order, render_order as u32);
+    }
+}
 
 #[test]
 fn script_node_input_includes_topic_style_and_scene_count() {
@@ -16,10 +39,45 @@ fn script_node_input_includes_topic_style_and_scene_count() {
 
     let input = ScriptNodeInputBuilder::build(&request);
 
-    assert!(input.content.contains("ChatGPT如何改变程序员工作流"));
-    assert!(input.content.contains("教程讲解类"));
-    assert!(input.content.contains("7个分镜"));
-    assert!(input.content.contains("narration 为 50-150 个中文字符"));
+    assert_atomic_context(&input);
+    assert_eq!(
+        input
+            .context
+            .iter()
+            .map(|fragment| fragment.key.as_str())
+            .collect::<Vec<_>>(),
+        ["request", "constraints", "output_example"]
+    );
+    assert_eq!(
+        render(&input),
+        r#"请根据以下选题生成7个分镜的中文短视频脚本。
+
+选题：ChatGPT如何改变程序员工作流
+风格：教程讲解类（tutorial）
+
+输出要求：
+1. 标题不超过30个中文字符。
+2. hook 必须能在前3秒抓住观众注意力。
+3. 必须严格输出 7 个分镜，sequence 从 1 连续递增。
+4. 每个分镜包含 narration、visual_description、emotion、duration_sec。
+5. 每个分镜 narration 为 50-150 个中文字符，不能少于50字。
+6. 每个分镜 duration_sec 为 1-30 秒，总时长建议 45-60 秒。
+
+JSON Schema：
+{
+  "title": "标题",
+  "hook": "前3秒吸引点",
+  "scenes": [
+    {
+      "sequence": 1,
+      "narration": "旁白文本",
+      "visual_description": "视觉描述",
+      "emotion": "情绪标签",
+      "duration_sec": 8
+    }
+  ]
+}"#
+    );
 }
 
 #[test]
@@ -35,8 +93,8 @@ fn script_node_input_marks_parent_requests_as_variants() {
 
     let input = ScriptNodeInputBuilder::build(&request);
 
-    assert!(input.content.contains("差异化版本"));
-    assert!(input.content.contains("避免复用相同表达"));
+    assert!(render(&input).contains("差异化版本"));
+    assert!(render(&input).contains("避免复用相同表达"));
 }
 
 #[test]
@@ -51,13 +109,77 @@ fn script_node_input_builder_can_create_metadata_and_scene_inputs() {
     };
 
     let metadata_input = ScriptNodeInputBuilder::build_metadata(&request);
-    assert!(metadata_input.content.contains("只输出 title 和 hook"));
-    assert!(!metadata_input.content.contains("\"scenes\": ["));
+    assert_atomic_context(&metadata_input);
+    assert_eq!(
+        metadata_input
+            .context
+            .iter()
+            .map(|fragment| fragment.key.as_str())
+            .collect::<Vec<_>>(),
+        ["request", "constraints", "output_example"]
+    );
+    assert_eq!(
+        render(&metadata_input),
+        r#"请根据以下选题生成中文短视频脚本的标题和 hook。只输出 title 和 hook，不要输出 scenes。
+
+选题：AI 如何改变人类，人类该如何接受 AI
+风格：知识科普类（knowledge）
+
+输出要求：
+1. title 不超过30个中文字符。
+2. hook 必须能在前3秒抓住观众注意力。
+3. title 和 hook 必须贴合选题，不要泛泛而谈。
+4. 必须只输出合法 JSON。
+
+JSON Schema：
+{
+  "title": "标题",
+  "hook": "前3秒吸引点"
+}"#
+    );
 
     let scene_input = ScriptNodeInputBuilder::build_single_scene(&request, 4);
-    assert!(scene_input.content.contains("当前分镜序号：4"));
-    assert!(scene_input.content.contains("scene.sequence 必须等于 4"));
-    assert!(scene_input.content.contains("只输出单个 scene 对象"));
+    assert_atomic_context(&scene_input);
+    assert_eq!(
+        scene_input
+            .context
+            .iter()
+            .map(|fragment| fragment.key.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "scene-4-request",
+            "scene-4-constraints",
+            "scene-4-output-example"
+        ]
+    );
+    assert_eq!(
+        render(&scene_input),
+        r#"请根据以下选题生成一个中文短视频分镜。只输出单个 scene 对象，不要输出 title、hook 或 scenes 数组。
+
+选题：AI 如何改变人类，人类该如何接受 AI
+风格：知识科普类（knowledge）
+整体分镜数：6
+当前分镜序号：4
+
+输出要求：
+1. scene.sequence 必须等于 4。
+2. scene 必须包含 narration、visual_description、emotion、duration_sec。
+3. narration 为 50-150 个中文字符，不能少于50字。
+4. visual_description 必须具体描述画面、人物、动作或字幕。
+5. duration_sec 为 1-30 秒。
+6. 必须只输出合法 JSON。
+
+JSON Schema：
+{
+  "scene": {
+    "sequence": 4,
+    "narration": "旁白文本",
+    "visual_description": "视觉描述",
+    "emotion": "情绪标签",
+    "duration_sec": 8
+  }
+}"#
+    );
 }
 
 #[test]

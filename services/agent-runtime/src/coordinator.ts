@@ -11,6 +11,7 @@ import {
   canonicalJson,
   compilePromptForReplay,
   definitionDigest,
+  readPromptSnapshot,
   sha256Hex,
   validateModelCapabilities as validateCapabilities,
   type AgentDefinition,
@@ -29,13 +30,19 @@ import {
   cleanupSession,
   readSessionMetadata,
   SessionStore,
+  type LegacySessionInventoryItem,
   type SessionView,
   type ToolProfile,
 } from "./sessions.js";
 import { redactUnknown } from "./redaction.js";
 import { createWorkspaceTools } from "./tools.js";
 import { NovexAgentHarness } from "./novex-harness.js";
-import type { ModelCallListFilter, ModelCallSummary, SessionBinding } from "./persistence.js";
+import type {
+  ContextRecordListFilter,
+  ModelCallListFilter,
+  ModelCallSummary,
+  SessionBinding,
+} from "./persistence.js";
 
 export interface TextModelResolver {
   resolveEnabledText(modelId: string): Promise<ResolvedTextModel>;
@@ -53,6 +60,25 @@ export interface UpgradeForkInput {
   modelId: string;
   toolProfile: ToolProfile;
   legacyPromptDisposition?: "discard" | "user_instruction";
+}
+
+type HistoryMigrationDisposition =
+  | "equivalent"
+  | "context_migration_required"
+  | "model_configuration_missing"
+  | "unmappable";
+
+interface HistoryMigrationItem {
+  runtime: "pi";
+  entity_type: "session";
+  entity_id: string;
+  source_type: string;
+  agent_key: string | null;
+  node_keys: string[];
+  parent_entity_id: string | null;
+  disposition: HistoryMigrationDisposition;
+  reason_code: string;
+  evidence: Record<string, unknown>;
 }
 
 type RuntimeHarness = NovexAgentHarness;
@@ -93,19 +119,9 @@ export class SessionCoordinator {
     validateModelCapabilities(agent, resolved);
     const session = await this.sessions.create({
       ...input,
-      binding: {
-        agent_key: agent.agent_key,
-        agent_version: agent.version,
-        agent_digest: definitionDigest(agent),
-        prompt_bindings: structuredClone(agent.nodes),
-        registry_digest: definitions.digest,
-        tool_profile: input.toolProfile,
-        model_id: input.modelId,
-        behavior_fingerprint: runtime.snapshot.behavior_fingerprint,
-        model_snapshot: runtime.snapshot,
-        binding_status: "executable",
-        migration_source: "created_versioned",
-      },
+      binding: buildSessionBinding(
+        definitions, agent, runtime.snapshot, input.toolProfile, "executable", "created_versioned",
+      ),
     });
     const metadata = await session.getMetadata();
     await cleanupSession(session);
@@ -180,7 +196,7 @@ export class SessionCoordinator {
   ): Promise<SessionView> {
     this.reserve(sessionId);
     try {
-      await this.ensureSessionMigrated(sessionId);
+      if (!upgrade) await this.ensureSessionMigrated(sessionId);
       const forked = upgrade
         ? await this.upgradeFork(sessionId, entryId, position, upgrade)
         : await this.sessions.fork(sessionId, entryId, position);
@@ -193,28 +209,36 @@ export class SessionCoordinator {
   }
 
   async sessionView(sessionId: string): Promise<SessionView> {
-    await this.ensureSessionMigrated(sessionId);
+    await this.ensureSessionMigratedForRead(sessionId);
     return this.sessions.view(sessionId);
   }
 
   async sessionEntries(sessionId: string, afterSequence: number, limit: number) {
-    await this.ensureSessionMigrated(sessionId);
+    await this.ensureSessionMigratedForRead(sessionId);
     return this.sessions.entries(sessionId, afterSequence, limit);
   }
 
   async listSessions(): Promise<SessionView[]> {
     const plan = await this.sessions.legacyMigrationPlan();
     for (const item of plan) {
-      if (item.disposition !== "unmapped") await this.ensureSessionMigrated(item.session_id);
+      await this.ensureSessionMigratedForRead(item.session_id);
     }
     return this.sessions.list();
   }
 
   async legacyMigrationPlan() {
+    const items = await Promise.all(
+      (await this.sessions.legacyMigrationPlan()).map((item) => this.classifyLegacySession(item)),
+    );
+    const summary = items.reduce<Record<string, number>>((result, item) => {
+      result[item.disposition] = (result[item.disposition] ?? 0) + 1;
+      return result;
+    }, {});
     return {
-      schema_version: "1",
+      schema_version: "2",
       dry_run: true,
-      items: await this.sessions.legacyMigrationPlan(),
+      summary,
+      items,
     };
   }
 
@@ -261,6 +285,25 @@ export class SessionCoordinator {
     return this.modelCall(id);
   }
 
+  async listContexts(filter: ContextRecordListFilter, limit: number, offset: number) {
+    if (filter.sessionId) await this.sessions.findMetadata(filter.sessionId);
+    return this.sessions.novex.queryContextRecords(filter, limit, offset);
+  }
+
+  contextRecord(id: string): Record<string, unknown> {
+    const record = this.sessions.novex.contextRecord(id);
+    return {
+      schema_version: "2",
+      source_runtime: "pi",
+      record_hash: sha256Hex(canonicalJson(record)),
+      record,
+    };
+  }
+
+  exportContextRecord(id: string): Record<string, unknown> {
+    return this.contextRecord(id);
+  }
+
   dryRunReplay(id: string): Record<string, unknown> {
     const raw = this.sessions.novex.modelCall(id);
     const detail = this.modelCall(id);
@@ -279,29 +322,51 @@ export class SessionCoordinator {
       diff = [{ path: "prompt_definition", kind: "missing" }];
     } else {
       try {
-        if (!snapshot || !Array.isArray(snapshot.fragments) || typeof snapshot.variables !== "object"
+        if (snapshot?.schema_version === "2") {
+          const prompt = readPromptSnapshot(snapshot);
+          const contextId = typeof raw.context_snapshot_id === "string" ? raw.context_snapshot_id : "";
+          const context = this.sessions.novex.contextSnapshot(contextId);
+          const contextDigest = sha256Hex(canonicalJson({ ...context, digest: undefined }));
+          const policyResolved = definitions.context_policies.some((item) =>
+            item.policy_key === context.policy_key && item.version === context.policy_version);
+          const profileResolved = definitions.tokenizer_profiles.some((item) =>
+            item.profile_key === context.tokenizer_profile_key && item.version === context.tokenizer_profile_version);
+          if (!policyResolved || !profileResolved) {
+            diff = [{ path: "historical_context_dependency", kind: "missing" }];
+          } else {
+            if (contextDigest !== context.digest) diff.push({ path: "context.digest", kind: "changed" });
+            if (prompt.context_snapshot_id !== contextId) diff.push({ path: "prompt.context_snapshot_id", kind: "changed" });
+            if (prompt.context_digest !== context.digest) diff.push({ path: "prompt.context_digest", kind: "changed" });
+            if (canonicalJson(prompt.logical_input) !== canonicalJson(context.logical_input)) {
+              diff.push({ path: "prompt.logical_input", kind: "changed" });
+            }
+            if (raw.context_digest !== context.digest) diff.push({ path: "model_call.context_digest", kind: "changed" });
+            compileSucceeded = diff.length === 0;
+          }
+        } else if (!snapshot || !Array.isArray(snapshot.fragments) || typeof snapshot.variables !== "object"
           || (snapshot.tool_profile !== "chat" && snapshot.tool_profile !== "workspace")) {
           throw new Error("historical prompt snapshot has no compile input");
+        } else {
+          const variables = Object.fromEntries(
+            Object.entries(snapshot.variables ?? {}).filter(([key]) => key !== "fragments"),
+          );
+          const input: PromptCompileInput = {
+            schema_version: "1",
+            variables,
+            fragments: structuredClone(snapshot.fragments),
+          };
+          const recompiled = compilePromptForReplay(
+            definitions,
+            String(raw.agent_key),
+            String(raw.agent_version),
+            String(raw.node_key),
+            input,
+            snapshot.tool_profile,
+            snapshot.tool_schema ?? null,
+          );
+          compileSucceeded = true;
+          diff = structuredDiff(snapshot, recompiled);
         }
-        const variables = Object.fromEntries(
-          Object.entries(snapshot.variables ?? {}).filter(([key]) => key !== "fragments"),
-        );
-        const input: PromptCompileInput = {
-          schema_version: "1",
-          variables,
-          fragments: structuredClone(snapshot.fragments),
-        };
-        const recompiled = compilePromptForReplay(
-          definitions,
-          String(raw.agent_key),
-          String(raw.agent_version),
-          String(raw.node_key),
-          input,
-          snapshot.tool_profile,
-          snapshot.tool_schema ?? null,
-        );
-        compileSucceeded = true;
-        diff = structuredDiff(snapshot, recompiled);
       } catch (error) {
         diff = [{ path: "compile", kind: "error", message: error instanceof Error ? error.message : "compile failed" }];
       }
@@ -311,6 +376,7 @@ export class SessionCoordinator {
       mode: "dry_run",
       source_model_call_id: id,
       source_record_hash: detail.record_hash,
+      validation_order: ["context", "prompt", "model_call"],
       definition_resolved: definitionResolved,
       compile_succeeded: compileSucceeded,
       side_effects: { model_calls: 0, tools: 0, session_writes: 0, run_writes: 0, domain_writes: 0 },
@@ -373,19 +439,9 @@ export class SessionCoordinator {
       ...(upgrade.legacyPromptDisposition
         ? { legacyPromptDisposition: upgrade.legacyPromptDisposition }
         : {}),
-      binding: {
-        agent_key: agent.agent_key,
-        agent_version: agent.version,
-        agent_digest: definitionDigest(agent),
-        prompt_bindings: structuredClone(agent.nodes),
-        registry_digest: definitions.digest,
-        tool_profile: upgrade.toolProfile,
-        model_id: upgrade.modelId,
-        behavior_fingerprint: runtime.snapshot.behavior_fingerprint,
-        model_snapshot: runtime.snapshot,
-        binding_status: "executable",
-        migration_source: "explicit_upgrade_fork",
-      },
+      binding: buildSessionBinding(
+        definitions, agent, runtime.snapshot, upgrade.toolProfile, "executable", "explicit_upgrade_fork",
+      ),
     });
   }
 
@@ -399,6 +455,20 @@ export class SessionCoordinator {
   private async ensureSessionMigrated(sessionId: string): Promise<SessionBinding> {
     const existing = this.sessions.novex.bindingOrNull(sessionId);
     if (existing) return existing;
+    const inventory = (await this.sessions.legacyMigrationPlan())
+      .find((item) => item.session_id === sessionId);
+    if (!inventory) {
+      throw new RuntimeError("session_migration_required", 409, "Session 历史迁移状态不允许自动执行");
+    }
+    const plan = await this.classifyLegacySession(inventory);
+    if (plan.disposition === "unmappable" || plan.disposition === "model_configuration_missing") {
+      await this.sessions.recordHistoryMigrationOutcome(
+        sessionId,
+        `context_history_v2_${plan.disposition}`,
+        plan,
+      );
+      throw new RuntimeError("session_migration_required", 409, plan.reason_code);
+    }
     const metadata = await this.sessions.findMetadata(sessionId);
     const own = readSessionMetadata(metadata);
     const definitions = this.requireDefinitions();
@@ -406,27 +476,90 @@ export class SessionCoordinator {
     const resolved = await this.modelResolver.resolveEnabledText(own.model_id);
     const runtime = this.modelFactory(resolved);
     validateModelCapabilities(agent, resolved);
-    const readOnly = own.legacy_custom_system_prompt;
-    return this.sessions.novex.createMigratedBinding({
+    const readOnly = plan.disposition === "context_migration_required";
+    return this.sessions.createMigratedBinding({
       session_id: sessionId,
-      agent_key: agent.agent_key,
-      agent_version: agent.version,
-      agent_digest: definitionDigest(agent),
-      prompt_bindings: structuredClone(agent.nodes),
-      registry_digest: definitions.digest,
-      tool_profile: own.tool_profile,
-      model_id: own.model_id,
-      behavior_fingerprint: runtime.snapshot.behavior_fingerprint,
-      model_snapshot: runtime.snapshot,
-      binding_status: readOnly ? "read_only" : "executable",
-      migration_source: readOnly ? "legacy_custom_prompt" : "legacy_default_prompt",
+      ...buildSessionBinding(
+        definitions,
+        agent,
+        runtime.snapshot,
+        own.tool_profile,
+        readOnly ? "read_only" : "executable",
+        readOnly ? "context_history_v2_read_only" : "context_history_v2_equivalent",
+      ),
       parent_session_id: metadata.parentSessionId ?? null,
-    }, readOnly ? "legacy_custom_prompt_read_only" : "legacy_default_prompt_bound", {
-      agent_key: agent.agent_key,
-      agent_version: agent.version,
-      custom_system_prompt: readOnly,
-      legacy_text_exposed: false,
-    });
+    }, readOnly ? "context_history_v2_context_migration_required" : "context_history_v2_equivalent", plan);
+  }
+
+  private async ensureSessionMigratedForRead(sessionId: string): Promise<void> {
+    try {
+      await this.ensureSessionMigrated(sessionId);
+    } catch (error) {
+      if (error instanceof RuntimeError && error.code === "session_migration_required") return;
+      throw error;
+    }
+  }
+
+  private async classifyLegacySession(inventory: LegacySessionInventoryItem): Promise<HistoryMigrationItem> {
+    const definitions = this.requireDefinitions();
+    const agent = activeAgent(definitions, "personal.general");
+    const nodeKeys = Object.keys(agent.nodes).sort();
+    const baseline = definitions.context_baseline;
+    const baselineEquivalent = nodeKeys.every((nodeKey) => baseline.equivalent_nodes.includes(nodeKey));
+    let modelEvidence: Record<string, unknown> = { ready: false };
+    let modelReady = false;
+    if (inventory.metadata_valid && inventory.model_id) {
+      try {
+        const resolved = await this.modelResolver.resolveEnabledText(inventory.model_id);
+        validateModelCapabilities(agent, resolved);
+        modelReady = true;
+        modelEvidence = {
+          ready: true,
+          model_id: resolved.id,
+          context_window: resolved.contextWindow,
+          tokenizer_profile_key: resolved.tokenizerProfileKey,
+          tokenizer_profile_version: resolved.tokenizerProfileVersion,
+        };
+      } catch (error) {
+        modelEvidence = {
+          ready: false,
+          code: error instanceof RuntimeError ? error.code : "model_configuration_missing",
+        };
+      }
+    }
+    const [disposition, reasonCode]: [HistoryMigrationDisposition, string] = !inventory.metadata_valid
+      ? ["unmappable", "invalid_session_metadata"]
+      : inventory.agent_key !== null && inventory.agent_key !== agent.agent_key
+        ? ["unmappable", "unknown_agent_key"]
+      : inventory.custom_system_prompt
+        ? ["context_migration_required", "legacy_custom_system_prompt_not_equivalent"]
+        : !baselineEquivalent
+          ? ["context_migration_required", "baseline_equivalence_evidence_missing"]
+          : !modelReady
+            ? ["model_configuration_missing", "model_configuration_missing"]
+            : ["equivalent", "baseline_equivalent"];
+    return {
+      runtime: "pi",
+      entity_type: "session",
+      entity_id: inventory.session_id,
+      source_type: inventory.source_type,
+      agent_key: disposition === "unmappable" ? inventory.agent_key : agent.agent_key,
+      node_keys: disposition === "unmappable" ? [] : nodeKeys,
+      parent_entity_id: inventory.parent_session_id,
+      disposition,
+      reason_code: reasonCode,
+      evidence: {
+        baseline: {
+          report_id: baseline.report_id,
+          reference: baseline.reference,
+          sha256: baseline.sha256,
+          equivalent: baselineEquivalent,
+          real_model_calls: 0,
+        },
+        model: modelEvidence,
+        legacy: inventory.evidence,
+      },
+    };
   }
 
   private requireActive(sessionId: string): ActiveRun {
@@ -474,10 +607,100 @@ export class SessionCoordinator {
     if (!agent || agent.status === "revoked" || definitionDigest(agent) !== binding.agent_digest) {
       throw new RuntimeError("definition_rebind_required", 409, "会话绑定的 Agent Definition 不可继续执行");
     }
+    validateGovernedBinding(this.requireDefinitions(), agent, binding, runtime.snapshot);
     validateModelCapabilities(agent, resolved);
     return binding;
   }
 
+}
+
+function buildSessionBinding(
+  definitions: DefinitionRegistry,
+  agent: AgentDefinition,
+  modelSnapshot: ModelSnapshot,
+  toolProfile: ToolProfile,
+  bindingStatus: SessionBinding["binding_status"],
+  migrationSource: string,
+): Omit<SessionBinding, "session_id" | "created_at" | "parent_session_id"> {
+  return {
+    agent_key: agent.agent_key,
+    agent_version: agent.version,
+    agent_digest: definitionDigest(agent),
+    ...governedBindingEvidence(definitions, agent, modelSnapshot),
+    registry_digest: definitions.digest,
+    tool_profile: toolProfile,
+    model_id: modelSnapshot.model_id,
+    behavior_fingerprint: modelSnapshot.behavior_fingerprint,
+    model_snapshot: modelSnapshot,
+    binding_status: bindingStatus,
+    migration_source: migrationSource,
+  };
+}
+
+function governedBindingEvidence(
+  definitions: DefinitionRegistry,
+  agent: AgentDefinition,
+  modelSnapshot: ModelSnapshot,
+): Pick<SessionBinding,
+  "prompt_bindings" | "context_policy_bindings" | "tokenizer_profile_key"
+  | "tokenizer_profile_version" | "tokenizer_profile_digest"> {
+  const promptBindings: SessionBinding["prompt_bindings"] = {};
+  const contextBindings: SessionBinding["context_policy_bindings"] = {};
+  for (const [nodeKey, reference] of Object.entries(agent.nodes)) {
+    promptBindings[nodeKey] = { key: reference.key, version: reference.version };
+    if (!reference.context_policy) {
+      throw new RuntimeError("definition_contract_error", 422, `Agent node ${nodeKey} 缺少 Context Policy binding`);
+    }
+    const policy = definitions.context_policies.find((item) =>
+      item.policy_key === reference.context_policy!.key && item.version === reference.context_policy!.version);
+    if (!policy || !["active", "supported"].includes(policy.status) || !policy.executor_owners.includes("pi")) {
+      throw new RuntimeError("definition_contract_error", 422, `Agent node ${nodeKey} 的 Context Policy 不可执行`);
+    }
+    contextBindings[nodeKey] = {
+      key: policy.policy_key,
+      version: policy.version,
+      digest: definitionDigest(policy),
+    };
+  }
+  const profile = definitions.tokenizer_profiles.find((item) =>
+    item.profile_key === modelSnapshot.tokenizer_profile_key
+    && item.version === modelSnapshot.tokenizer_profile_version);
+  if (!profile || !["active", "supported"].includes(profile.status)
+    || !profile.applicable_protocols.includes(modelSnapshot.protocol)) {
+    throw new RuntimeError("tokenizer_profile_unavailable", 422, "Session Tokenizer Profile 不可用或不兼容");
+  }
+  return {
+    prompt_bindings: promptBindings,
+    context_policy_bindings: contextBindings,
+    tokenizer_profile_key: profile.profile_key,
+    tokenizer_profile_version: profile.version,
+    tokenizer_profile_digest: definitionDigest(profile),
+  };
+}
+
+function validateGovernedBinding(
+  definitions: DefinitionRegistry,
+  agent: AgentDefinition,
+  binding: SessionBinding,
+  modelSnapshot: ModelSnapshot,
+): void {
+  let expected: ReturnType<typeof governedBindingEvidence>;
+  try {
+    expected = governedBindingEvidence(definitions, agent, modelSnapshot);
+  } catch (error) {
+    if (error instanceof RuntimeError && error.code === "tokenizer_profile_unavailable") throw error;
+    throw new RuntimeError("definition_rebind_required", 409, "会话固定的 Context Policy 已不可执行");
+  }
+  const actual = {
+    prompt_bindings: binding.prompt_bindings,
+    context_policy_bindings: binding.context_policy_bindings,
+    tokenizer_profile_key: binding.tokenizer_profile_key,
+    tokenizer_profile_version: binding.tokenizer_profile_version,
+    tokenizer_profile_digest: binding.tokenizer_profile_digest,
+  };
+  if (canonicalJson(actual) !== canonicalJson(expected)) {
+    throw new RuntimeError("definition_rebind_required", 409, "会话 Context Policy/Tokenizer Profile binding 已漂移");
+  }
 }
 
 function modelCallSummaryDto(call: ModelCallSummary): Record<string, unknown> {
@@ -520,6 +743,13 @@ function modelCallRecordDto(call: Record<string, unknown>): Record<string, unkno
       registry_digest: call.registry_digest,
     },
     prompt_snapshot: call.prompt_snapshot,
+    context: call.context_snapshot_id ? {
+      id: call.context_snapshot_id,
+      digest: call.context_digest,
+      policy: { key: call.context_policy_key, version: call.context_policy_version },
+      tokenizer_profile: { key: call.tokenizer_profile_key, version: call.tokenizer_profile_version },
+      budget: call.context_budget_summary,
+    } : null,
     context_sources: call.context_sources,
     memory_sources: call.memory_sources,
     tool_schema: call.tool_schema ?? null,

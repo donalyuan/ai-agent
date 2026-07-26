@@ -2,6 +2,7 @@
 
 pub mod ai_models;
 pub mod asset_generation;
+pub mod contexts;
 pub mod conversations;
 pub mod error;
 pub mod health;

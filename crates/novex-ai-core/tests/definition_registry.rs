@@ -55,7 +55,7 @@ fn load_registry_document(
     fs::write(
         directory.join("release-index.json"),
         serde_json::to_vec(&json!({
-            "schema_version": "1",
+            "schema_version": document["schema_version"],
             "registry_digest": digest,
             "releases": []
         }))
@@ -70,9 +70,17 @@ fn load_registry_document(
 #[test]
 fn rust_loader_validates_registry_references_templates_and_owner() {
     let registry = DefinitionRegistry::load(registry_root()).unwrap();
-    assert_eq!(registry.agents().len(), 6);
-    assert_eq!(registry.prompts().len(), 13);
-    assert_eq!(registry.release_evidence().len(), 19);
+    assert_eq!(registry.agents().len(), 12);
+    assert_eq!(registry.prompts().len(), 26);
+    assert_eq!(registry.context_policies().len(), 18);
+    assert_eq!(registry.tokenizer_profiles().len(), 3);
+    assert_eq!(registry.release_evidence().len(), 59);
+    assert!(registry
+        .active_agent("personal.general")
+        .unwrap()
+        .nodes
+        .values()
+        .all(|reference| reference.context_policy.is_some()));
     assert_eq!(
         registry
             .active_agent("personal.general")
@@ -81,6 +89,48 @@ fn rust_loader_validates_registry_references_templates_and_owner() {
         ExecutorOwner::Pi
     );
     assert_eq!(registry.digest().len(), 64);
+}
+
+#[test]
+fn registry_v2_requires_governed_references_and_rejects_invalid_policy_profile_contracts() {
+    let root = registry_root();
+    let valid: Value =
+        serde_json::from_slice(&fs::read(root.join("fixtures/registry-valid-v2.json")).unwrap())
+            .unwrap();
+    let loaded = load_registry_document(&valid, None).unwrap();
+    assert_eq!(loaded.context_policies().len(), 1);
+    assert_eq!(loaded.tokenizer_profiles().len(), 1);
+
+    let mut missing = valid.clone();
+    missing["agents"][0]["nodes"]["fixture.node"]
+        .as_object_mut()
+        .unwrap()
+        .remove("context_policy");
+    assert!(load_registry_document(&missing, None)
+        .unwrap_err()
+        .contains("missing context policy"));
+
+    let mut wrong_owner = valid.clone();
+    wrong_owner["context_policies"][0]["executor_owners"] = json!(["pi"]);
+    assert!(load_registry_document(&wrong_owner, None)
+        .unwrap_err()
+        .contains("incompatible context policy"));
+
+    let mut duplicate = valid.clone();
+    let duplicate_profile = duplicate["tokenizer_profiles"][0].clone();
+    duplicate["tokenizer_profiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate_profile);
+    assert!(load_registry_document(&duplicate, None)
+        .unwrap_err()
+        .contains("invalid contract"));
+
+    let mut unknown = valid;
+    unknown["context_policies"][0]["unknown"] = json!(true);
+    assert!(load_registry_document(&unknown, None)
+        .unwrap_err()
+        .contains("unknown field"));
 }
 
 #[test]
@@ -329,6 +379,14 @@ fn behavior_fingerprint_normalizes_address_and_excludes_credentials() {
         },
         ModelBehavior {
             context_window: baseline.context_window + 1,
+            ..baseline.clone()
+        },
+        ModelBehavior {
+            tokenizer_profile_key: "openai.cl100k".into(),
+            ..baseline.clone()
+        },
+        ModelBehavior {
+            tokenizer_profile_version: "2.0.0".into(),
             ..baseline.clone()
         },
         ModelBehavior {

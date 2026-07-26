@@ -1,6 +1,7 @@
 use novex_api::repositories::{EvalRepositoryError, PostgresEvalRepository};
 use novex_eval::{
-    CandidateRef, EvalBudget, EvalCaseResult, EvalMode, EvalRunSpec, ModelBinding, ZeroCostRunner,
+    CandidateRef, ContextEvalCaseResult, ContextEvalConfig, ContextEvalRunner, EvalBudget,
+    EvalCaseResult, EvalDefinitionKind, EvalMode, EvalRunSpec, ModelBinding, ZeroCostRunner,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -46,6 +47,7 @@ async fn test_pool() -> (PgPool, TestDatabase) {
 
 fn candidate() -> CandidateRef {
     CandidateRef {
+        definition_kind: EvalDefinitionKind::Agent,
         key: "video.script".into(),
         version: "1.0.0".into(),
         digest: "a".repeat(64),
@@ -59,6 +61,7 @@ fn spec(mode: EvalMode) -> EvalRunSpec {
         case_set_version: "rust-v1-golden@1".into(),
         evaluator_version: "novex-eval@1".into(),
         mode,
+        context: None,
         model_binding: None,
         budget: EvalBudget {
             approved_real_calls: false,
@@ -86,6 +89,62 @@ fn passing_case() -> EvalCaseResult {
     }
 }
 
+fn context_spec() -> EvalRunSpec {
+    let policy = CandidateRef {
+        definition_kind: EvalDefinitionKind::ContextPolicy,
+        key: "personal.turn.baseline".into(),
+        version: "1.0.0".into(),
+        digest: "d".repeat(64),
+    };
+    EvalRunSpec {
+        candidate: policy.clone(),
+        baseline: None,
+        case_set_version: "context-production-nodes@1".into(),
+        evaluator_version: "novex-context-eval@1".into(),
+        mode: EvalMode::ZeroCost,
+        context: Some(ContextEvalConfig {
+            schema_version: "1".into(),
+            policy,
+            tokenizer_profile: CandidateRef {
+                definition_kind: EvalDefinitionKind::TokenizerProfile,
+                key: "openai.o200k".into(),
+                version: "1.0.0".into(),
+                digest: "e".repeat(64),
+            },
+        }),
+        model_binding: None,
+        budget: EvalBudget {
+            approved_real_calls: false,
+            max_cases: 18,
+            max_input_tokens: 100_000,
+            max_output_tokens: 0,
+            max_retries: 0,
+            max_cost_micros: 0,
+        },
+    }
+}
+
+fn passing_context_case() -> ContextEvalCaseResult {
+    ContextEvalCaseResult {
+        case_id: "personal.turn:golden".into(),
+        node_key: "personal.turn".into(),
+        schema_valid: true,
+        rust_tokens: 100,
+        typescript_tokens: 100,
+        first_digest: "f".repeat(64),
+        repeated_digest: "f".repeat(64),
+        shuffled_digest: "f".repeat(64),
+        safety_passed: true,
+        budget_passed: true,
+        core_prompt_passed: true,
+        business_output_passed: true,
+        equivalent: false,
+        selection_diff: json!([{"candidate_id":"reference","change":"excluded"}]),
+        budget_ledger: json!({"dynamic_context_budget":4096,"selected_context_tokens":100}),
+        tokenizer_metrics: json!({"rust_tokens":100,"typescript_tokens":100,"mode":"exact"}),
+    }
+}
+
 #[tokio::test]
 async fn zero_cost_golden_report_is_immutable_and_is_valid_activation_evidence() {
     let (pool, _database) = test_pool().await;
@@ -104,11 +163,7 @@ async fn zero_cost_golden_report_is_immutable_and_is_valid_activation_evidence()
     assert_eq!(stored.aggregate_metrics["real_model_calls"], 0);
     assert_eq!(
         repository
-            .activation_report_id(
-                &spec.candidate.key,
-                &spec.candidate.version,
-                &spec.candidate.digest,
-            )
+            .activation_report_id(&spec.candidate)
             .await
             .unwrap(),
         stored.id
@@ -124,6 +179,15 @@ async fn zero_cost_golden_report_is_immutable_and_is_valid_activation_evidence()
             .execute(&pool)
             .await
             .is_err()
+    );
+    assert!(
+        sqlx::query(
+            "UPDATE eval_reports SET source_deleted = TRUE, redacted_case_results = '[]', passed = FALSE WHERE id = $1"
+        )
+        .bind(stored.id)
+        .execute(&pool)
+        .await
+        .is_err()
     );
     assert!(sqlx::query("DELETE FROM eval_reports WHERE id = $1")
         .bind(stored.id)
@@ -149,13 +213,7 @@ async fn zero_cost_or_failed_reports_cannot_activate_behavior_changes() {
     let report = ZeroCostRunner::run(&zero_spec, &[passing_case()]).unwrap();
     repository.complete_run(run.id, &report).await.unwrap();
     assert!(matches!(
-        repository
-            .activation_report_id(
-                &zero_spec.candidate.key,
-                &zero_spec.candidate.version,
-                &zero_spec.candidate.digest,
-            )
-            .await,
+        repository.activation_report_id(&zero_spec.candidate).await,
         Err(EvalRepositoryError::ActivationEvidenceMissing)
     ));
 
@@ -167,11 +225,7 @@ async fn zero_cost_or_failed_reports_cannot_activate_behavior_changes() {
     repository.complete_run(run.id, &report).await.unwrap();
     assert!(matches!(
         repository
-            .activation_report_id(
-                &golden_spec.candidate.key,
-                &golden_spec.candidate.version,
-                &golden_spec.candidate.digest,
-            )
+            .activation_report_id(&golden_spec.candidate)
             .await,
         Err(EvalRepositoryError::ActivationEvidenceMissing)
     ));
@@ -228,6 +282,86 @@ async fn real_model_run_requires_fixed_explicit_approval_and_budget_snapshot() {
         sqlx::query("UPDATE eval_runs SET behavior_fingerprint = $2 WHERE id = $1")
             .bind(run.id)
             .bind("d".repeat(64))
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn context_report_persists_versioned_evidence_and_authorizes_only_exact_kind() {
+    let (pool, _database) = test_pool().await;
+    let repository = PostgresEvalRepository::new(pool.clone());
+    let spec = context_spec();
+    let run = repository.create_run(&spec).await.unwrap();
+    assert_eq!(run.definition_kind, "context_policy");
+    assert_eq!(run.approval_snapshot["schema_version"], "2");
+    assert_eq!(
+        run.context_case_set.as_ref().unwrap()["version"],
+        spec.case_set_version
+    );
+    assert_eq!(
+        run.context_policy.as_ref().unwrap()["key"],
+        spec.candidate.key
+    );
+    assert_eq!(
+        run.tokenizer_profile.as_ref().unwrap()["definition_kind"],
+        "tokenizer_profile"
+    );
+
+    let report = ContextEvalRunner::run(&spec, &[passing_context_case()]).unwrap();
+    assert!(report.passed, "zero-cost 行为变化应由明确 Context 门禁决定");
+    let stored = repository.complete_run(run.id, &report).await.unwrap();
+    assert!(stored.passed);
+    assert_eq!(
+        stored
+            .context_node_results
+            .as_ref()
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        stored.context_selection_diff.as_ref().unwrap()[0][0]["change"],
+        "excluded"
+    );
+    assert_eq!(
+        stored.context_budget_ledgers.as_ref().unwrap()[0]["dynamic_context_budget"],
+        4096
+    );
+    assert_eq!(
+        stored.tokenizer_metrics.as_ref().unwrap()[0]["rust_tokens"],
+        100
+    );
+    assert_eq!(
+        repository
+            .activation_report_id(&spec.candidate)
+            .await
+            .unwrap(),
+        stored.id
+    );
+
+    let wrong_kind = CandidateRef {
+        definition_kind: EvalDefinitionKind::Prompt,
+        ..spec.candidate.clone()
+    };
+    assert!(matches!(
+        repository.activation_report_id(&wrong_kind).await,
+        Err(EvalRepositoryError::ActivationEvidenceMissing)
+    ));
+    assert!(
+        sqlx::query("UPDATE eval_reports SET tokenizer_metrics = '[]' WHERE id = $1")
+            .bind(stored.id)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    assert!(
+        sqlx::query("UPDATE eval_runs SET context_policy = '{}' WHERE id = $1")
+            .bind(run.id)
             .execute(&pool)
             .await
             .is_err()

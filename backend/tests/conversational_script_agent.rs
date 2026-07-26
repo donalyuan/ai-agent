@@ -4,6 +4,7 @@ use novex_api::agents::{LLMClient, LLMError};
 use novex_api::application::agents::adapters::ScriptAgentAdapter;
 use novex_api::domain::conversation::{
     AgentConversationStatus, AgentMessageRole, CreateAgentConversationInput,
+    CreateAgentMessageInput,
 };
 use novex_api::domain::script::ScriptListFilter;
 use novex_api::repositories::{
@@ -11,7 +12,7 @@ use novex_api::repositories::{
     ProjectRepository, ScriptRepository,
 };
 use novex_model::LLMPrompt;
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -95,6 +96,28 @@ async fn migrated_pool() -> (PgPool, PgPool, TestDatabase) {
         .expect("migrations should run for conversational script test database");
 
     (admin_pool, test_pool, database_name)
+}
+
+async fn context_snapshot(
+    pool: &PgPool,
+    id: Uuid,
+) -> (Value, Value, Value, String, String, String, String) {
+    sqlx::query_as(
+        "SELECT decisions,selected_order,logical_input,policy_key,policy_version,tokenizer_profile_key,tokenizer_profile_version FROM context_snapshots WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+fn rendered_source_kinds(decisions: &Value) -> Vec<&str> {
+    let mut decisions = decisions.as_array().unwrap().iter().collect::<Vec<_>>();
+    decisions.sort_by_key(|decision| decision["render_order"].as_u64().unwrap());
+    decisions
+        .into_iter()
+        .map(|decision| decision["source_kind"].as_str().unwrap())
+        .collect()
 }
 
 async fn insert_project(pool: &PgPool) -> Uuid {
@@ -272,6 +295,24 @@ async fn script_agent_dialogue_updates_target_scene_and_records_messages() {
         .await
         .unwrap();
     assert_eq!(conversation.status, AgentConversationStatus::Active);
+    conversation_repository
+        .save_message(CreateAgentMessageInput {
+            conversation_id: conversation.id,
+            role: AgentMessageRole::User,
+            content: "上一轮要求：保持技术细节准确".into(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    conversation_repository
+        .save_message(CreateAgentMessageInput {
+            conversation_id: conversation.id,
+            role: AgentMessageRole::Assistant,
+            content: "上一轮已确认脚本主线".into(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
 
     let response = runtime
         .execute(AgentInvocation {
@@ -308,15 +349,62 @@ async fn script_agent_dialogue_updates_target_scene_and_records_messages() {
         .list_messages(conversation.id)
         .await
         .unwrap();
-    assert_eq!(messages.len(), 2);
+    assert_eq!(messages.len(), 4);
     assert_eq!(messages[0].role, AgentMessageRole::User);
     assert_eq!(messages[1].role, AgentMessageRole::Assistant);
+    assert_eq!(messages[2].role, AgentMessageRole::User);
+    assert_eq!(messages[3].role, AgentMessageRole::Assistant);
+
+    let call: (Value, Option<Uuid>, String, String) = sqlx::query_as(
+        "SELECT prompt_snapshot,context_snapshot_id,agent_version,behavior_fingerprint FROM model_calls WHERE agent_run_id=$1 AND node_key='script.scene_patch'",
+    )
+    .bind(response.run.id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    let context = context_snapshot(&test_pool, call.1.unwrap()).await;
+    assert_eq!(
+        rendered_source_kinds(&context.0),
+        [
+            "conversation_entry",
+            "conversation_entry",
+            "current_script",
+            "script_scene",
+            "script_scene",
+            "script_scene",
+            "user_instruction",
+            "user_instruction"
+        ]
+    );
+    for decision in context.0.as_array().unwrap() {
+        match decision["source_kind"].as_str().unwrap() {
+            "conversation_entry" => assert_eq!(decision["priority"], "p2"),
+            "current_script" | "script_scene" => {
+                assert_eq!(decision["trust"], "confirmed_fact");
+                assert_eq!(decision["priority"], "p1");
+                assert_eq!(decision["required"], true);
+            }
+            "user_instruction" => {
+                assert_eq!(decision["priority"], "p0");
+                assert_eq!(decision["required"], true);
+            }
+            source => panic!("unexpected Context source: {source}"),
+        }
+    }
+    assert_eq!(context.2, call.0["logical_input"]);
+    assert_eq!(call.2, "2.0.0");
+    assert_eq!(call.3.len(), 64);
+    assert_eq!(context.3, "script.scene_patch.baseline");
+    assert_eq!(context.4, "1.0.0");
+    assert_eq!(context.5, "byte-upper-bound");
+    assert_eq!(context.6, "1.0.0");
 
     {
         let prompts = llm_client.prompts.lock().unwrap();
         assert_eq!(prompts.len(), 1);
-        assert!(prompts[0].user.contains("第 3 镜"));
-        assert!(prompts[0].user.contains("当前脚本"));
+        assert_eq!(prompts[0].user, call.0["user"].as_str().unwrap());
+        assert!(prompts[0].user.contains("上一轮要求：保持技术细节准确"));
+        assert!(prompts[0].user.contains("上一轮已确认脚本主线"));
     }
 
     test_pool.close().await;
@@ -389,6 +477,24 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
         })
         .await
         .unwrap();
+    conversation_repository
+        .save_message(CreateAgentMessageInput {
+            conversation_id: conversation.id,
+            role: AgentMessageRole::User,
+            content: "上一轮要求：面向程序员受众".into(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    conversation_repository
+        .save_message(CreateAgentMessageInput {
+            conversation_id: conversation.id,
+            role: AgentMessageRole::Assistant,
+            content: "上一轮已确认知识科普风格".into(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
 
     let response = runtime
         .execute(AgentInvocation {
@@ -436,14 +542,57 @@ async fn script_agent_dialogue_generates_script_for_unbound_conversation() {
         .list_messages(conversation.id)
         .await
         .unwrap();
-    assert_eq!(messages.len(), 2);
+    assert_eq!(messages.len(), 4);
     assert_eq!(messages[0].role, AgentMessageRole::User);
     assert_eq!(messages[1].role, AgentMessageRole::Assistant);
+    assert_eq!(messages[2].role, AgentMessageRole::User);
+    assert_eq!(messages[3].role, AgentMessageRole::Assistant);
+
+    let call: (Value, Option<Uuid>, String, String) = sqlx::query_as(
+        "SELECT prompt_snapshot,context_snapshot_id,agent_version,behavior_fingerprint FROM model_calls WHERE agent_run_id=$1 AND node_key='script.generation_intent'",
+    )
+    .bind(response.run.id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    let context = context_snapshot(&test_pool, call.1.unwrap()).await;
+    assert_eq!(
+        rendered_source_kinds(&context.0),
+        [
+            "conversation_entry",
+            "conversation_entry",
+            "user_instruction",
+            "user_instruction",
+            "user_instruction"
+        ]
+    );
+    assert!(context.0.as_array().unwrap().iter().any(|decision| {
+        decision["source_kind"] == "user_instruction"
+            && decision["selected_payload"]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("帮我生成一个关于 ChatGPT 工作流"))
+    }));
+    assert_eq!(context.2, call.0["logical_input"]);
+    assert_eq!(call.2, "2.0.0");
+    assert_eq!(call.3.len(), 64);
+    assert_eq!(context.3, "script.generation_intent.baseline");
+    assert_eq!(context.4, "1.0.0");
+    assert_eq!(context.5, "byte-upper-bound");
+    assert_eq!(context.6, "1.0.0");
+    let complete_fingerprint: String = sqlx::query_scalar(
+        "SELECT behavior_fingerprint FROM model_calls WHERE agent_run_id=$1 AND node_key='script.complete'",
+    )
+    .bind(response.run.id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    assert_eq!(complete_fingerprint, call.3);
 
     {
         let prompts = llm_client.prompts.lock().unwrap();
         assert_eq!(prompts.len(), 2);
-        assert!(prompts[0].user.contains("生成脚本参数"));
+        assert_eq!(prompts[0].user, call.0["user"].as_str().unwrap());
+        assert!(prompts[0].user.contains("上一轮要求：面向程序员受众"));
         assert!(prompts[1].user.contains("请根据以下选题生成3个分镜"));
     }
 

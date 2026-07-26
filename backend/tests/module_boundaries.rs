@@ -182,3 +182,36 @@ fn agent_kernel_has_no_business_dispatch_or_legacy_runtime_path() {
     assert!(!adapter_source.contains("Option<Arc<PostgresVoiceCatalogRepository"));
     assert!(!adapter_source.contains("Option<Arc<PostgresWorkLibraryRepository"));
 }
+
+#[test]
+fn production_model_adapters_cannot_bypass_the_audited_executor() {
+    let backend = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = Vec::new();
+    collect_rust_sources(&backend.join("src/application"), &mut sources);
+    collect_rust_sources(&backend.join("src/agents"), &mut sources);
+
+    for (path, source) in sources {
+        for forbidden in [
+            "PromptCompileInput",
+            "DynamicFragment",
+            "PromptCompiler",
+            "ContextCompiler",
+            "PostgresModelCallRepository",
+            "PostgresContextAuditRepository",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "production model path {} must not obtain bypass primitive {forbidden}",
+                path.display()
+            );
+        }
+    }
+
+    let bootstrap = std::fs::read_to_string(backend.join("src/bootstrap/state.rs"))
+        .expect("bootstrap state should be readable");
+    assert_eq!(
+        bootstrap.matches("AuditedModelExecutor::new").count(),
+        1,
+        "AuditedModelExecutor must have one production bootstrap assembly point"
+    );
+}

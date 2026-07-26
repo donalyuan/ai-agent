@@ -508,9 +508,10 @@ async fn project_routes_generate_strategy_profile_draft_without_saving() {
     assert_eq!(run.3["model_id"], model_id.to_string());
     assert!(run.3.get("api_key").is_none());
     assert!(run.3.get("api_secret").is_none());
-    let call: (String, i32, String, String, Value, Value) = sqlx::query_as(
+    let call: (String, i32, String, String, Value, Value, Option<Uuid>) = sqlx::query_as(
         r#"
-        SELECT node_key, attempt, status, agent_key, prompt_snapshot, context_sources
+        SELECT node_key, attempt, status, agent_key, prompt_snapshot, context_sources,
+               context_snapshot_id
         FROM model_calls WHERE agent_run_id = $1
         "#,
     )
@@ -522,9 +523,47 @@ async fn project_routes_generate_strategy_profile_draft_without_saving() {
     assert_eq!(call.1, 1);
     assert_eq!(call.2, "succeeded");
     assert_eq!(call.3, "video.project-strategy");
-    assert_eq!(call.4["fragments"][0]["source"], "project_strategy_context");
-    assert_eq!(call.4["fragments"][0]["trust"], "reference");
-    assert_eq!(call.5[0]["source"], "project_strategy_context");
+    assert_eq!(call.4["fragments"], json!([]));
+    assert_eq!(call.5[0]["source"], "project");
+    assert_eq!(call.5[0]["trust"], "confirmed_fact");
+    assert_eq!(call.5[1]["source"], "user_instruction");
+    assert_eq!(call.5[1]["trust"], "user_instruction");
+    let context_snapshot_id = call.6.unwrap();
+    let context: (Value, Value, Value) = sqlx::query_as(
+        "SELECT decisions, selected_order, logical_input FROM context_snapshots WHERE id=$1",
+    )
+    .bind(context_snapshot_id)
+    .fetch_one(&test_pool)
+    .await
+    .unwrap();
+    let decisions = context.0.as_array().unwrap();
+    assert_eq!(decisions.len(), 2);
+    let project_decision = decisions
+        .iter()
+        .find(|decision| decision["source_kind"] == "project")
+        .unwrap();
+    assert_eq!(project_decision["trust"], "confirmed_fact");
+    assert_eq!(project_decision["priority"], "p1");
+    assert_eq!(project_decision["required"], true);
+    assert_eq!(project_decision["render_order"], 0);
+    assert_eq!(project_decision["decision"], "selected");
+    let instruction_decision = decisions
+        .iter()
+        .find(|decision| decision["source_kind"] == "user_instruction")
+        .unwrap();
+    assert_eq!(instruction_decision["trust"], "user_instruction");
+    assert_eq!(instruction_decision["priority"], "p0");
+    assert_eq!(instruction_decision["required"], true);
+    assert_eq!(instruction_decision["render_order"], 1);
+    assert_eq!(instruction_decision["decision"], "selected");
+    assert_eq!(
+        context.1,
+        json!([
+            format!("project:{project_id}:strategy-profile"),
+            format!("project:{project_id}:strategy-direction")
+        ])
+    );
+    assert_eq!(context.2, call.4["logical_input"]);
     let run_binding: (String, String, Uuid, String) = sqlx::query_as(
         r#"
         SELECT agent_key, agent_version, model_id, behavior_fingerprint
@@ -536,17 +575,38 @@ async fn project_routes_generate_strategy_profile_draft_without_saving() {
     .await
     .unwrap();
     assert_eq!(run_binding.0, "video.project-strategy");
-    assert_eq!(run_binding.1, "1.0.0");
+    assert_eq!(run_binding.1, "2.0.0");
     assert_eq!(run_binding.2, model_id);
     assert_eq!(run_binding.3.len(), 64);
     {
         let prompts = llm_client.prompts.lock().unwrap();
         assert_eq!(prompts.len(), 1);
         assert_eq!(prompts[0].max_output_tokens, Some(1_200));
-        assert!(prompts[0].user.contains("AI 工具账号"));
-        assert!(prompts[0]
-            .user
-            .contains("面向内容运营负责人，不要夸大收益。"));
+        assert_eq!(prompts[0].system, call.4["system"].as_str().unwrap());
+        assert_eq!(prompts[0].user, call.4["user"].as_str().unwrap());
+        assert_eq!(
+            prompts[0].user,
+            r#"请基于当前内容账号资料和补充方向，生成结构化账号策略草稿。
+
+当前账号名称：AI 工具账号
+定位摘要：AI 工具教程账号
+账号描述：面向内容运营负责人的短视频
+当前目标受众：
+当前内容支柱：无
+当前表达风格：
+当前禁区方向：无
+当前参考账号：无
+当前选题偏好：
+
+补充方向：面向内容运营负责人，不要夸大收益。
+
+输出要求：
+1. 只生成草稿，不要表达已保存或已生效。
+2. draft 必须包含 target_audience、content_pillars、tone_style、forbidden_topics、reference_accounts、topic_preferences。
+3. content_pillars、forbidden_topics、reference_accounts 每组最多 20 项。
+4. 不得生成夸大收益、灰产引流或虚假承诺方向。
+5. draft_summary 用一句中文总结草稿策略取向。"#
+        );
     }
 
     test_pool.close().await;
@@ -601,9 +661,21 @@ async fn project_strategy_retry_creates_distinct_model_call_attempts_with_one_bi
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(llm_client.prompts.lock().unwrap().len(), 2);
 
-    let rows = sqlx::query_as::<_, (Uuid, Option<Uuid>, i32, String, String, String)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Option<Uuid>,
+            i32,
+            String,
+            String,
+            String,
+            Option<Uuid>,
+        ),
+    >(
         r#"
-        SELECT id, root_call_id, attempt, status, agent_key, behavior_fingerprint
+        SELECT id, root_call_id, attempt, status, agent_key, behavior_fingerprint,
+               context_snapshot_id
         FROM model_calls ORDER BY attempt
         "#,
     )
@@ -622,6 +694,8 @@ async fn project_strategy_retry_creates_distinct_model_call_attempts_with_one_bi
     assert_eq!(rows[0].4, "video.project-strategy");
     assert_eq!(rows[1].4, rows[0].4);
     assert_eq!(rows[1].5, rows[0].5);
+    assert_ne!(rows[0].6, rows[1].6);
+    assert!(rows[0].6.is_some() && rows[1].6.is_some());
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_run_bindings")
             .fetch_one(&test_pool)

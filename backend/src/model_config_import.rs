@@ -2,6 +2,7 @@ use crate::repositories::{
     AiModelRepository, AiModelRepositoryError, AiModelStatus, CreateAiModelInput,
     PostgresAiModelRepository,
 };
+use novex_ai_core::{DefinitionRegistry, DefinitionStatus};
 use novex_model::{ApiProtocol, AuthScheme, ModelType};
 use serde_json::json;
 use sqlx::PgPool;
@@ -17,6 +18,8 @@ pub struct LegacyModelImportConfig {
     pub text_reasoning_effort: Option<String>,
     pub text_max_output_tokens: Option<i32>,
     pub text_context_window: Option<u64>,
+    pub text_tokenizer_profile_key: Option<String>,
+    pub text_tokenizer_profile_version: Option<String>,
     pub image_api_key: Option<String>,
     pub image_base_url: Option<String>,
     pub image_model: Option<String>,
@@ -32,6 +35,8 @@ impl LegacyModelImportConfig {
             text_reasoning_effort: env_non_empty("OPENAI_REASONING_EFFORT"),
             text_max_output_tokens: Some(env_i32("OPENAI_MAX_OUTPUT_TOKENS", 3000)),
             text_context_window: env_u64("OPENAI_CONTEXT_WINDOW"),
+            text_tokenizer_profile_key: env_non_empty("OPENAI_TOKENIZER_PROFILE_KEY"),
+            text_tokenizer_profile_version: env_non_empty("OPENAI_TOKENIZER_PROFILE_VERSION"),
             image_api_key: env_non_empty("OPENAI_IMAGE_KEY"),
             image_base_url: env_non_empty("OPENAI_IMAGE_BASE_URL"),
             image_model: env_non_empty("OPENAI_IMAGE_MODEL"),
@@ -58,13 +63,27 @@ pub async fn import_legacy_model_config(
     let repository = PostgresAiModelRepository::new(pool.clone());
     let mut outcome = ModelImportOutcome::default();
 
-    if let (Some(api_key), Some(base_url), Some(upstream_model), Some(context_window)) = (
+    if let (
+        Some(api_key),
+        Some(base_url),
+        Some(upstream_model),
+        Some(context_window),
+        Some(tokenizer_profile_key),
+        Some(tokenizer_profile_version),
+    ) = (
         non_empty(config.text_api_key),
         non_empty(config.text_base_url),
         non_empty(config.text_model),
         config.text_context_window,
+        non_empty(config.text_tokenizer_profile_key),
+        non_empty(config.text_tokenizer_profile_version),
     ) {
         let (api_protocol, request_base_url) = normalize_text_url(&base_url)?;
+        validate_import_profile(
+            api_protocol,
+            &tokenizer_profile_key,
+            &tokenizer_profile_version,
+        )?;
         create_or_skip(
             pool,
             &repository,
@@ -87,7 +106,10 @@ pub async fn import_legacy_model_config(
                 timeout_seconds: config.text_timeout_seconds,
                 reasoning_effort: non_empty(config.text_reasoning_effort),
                 max_output_tokens: config.text_max_output_tokens,
-                settings: json!({"context_window": context_window}),
+                context_window: i64::try_from(context_window).ok(),
+                tokenizer_profile_key: Some(tokenizer_profile_key),
+                tokenizer_profile_version: Some(tokenizer_profile_version),
+                settings: json!({}),
                 sort_order: 0,
                 remark: "由一次性环境配置导入命令创建".to_string(),
                 status: AiModelStatus::Enabled,
@@ -126,6 +148,9 @@ pub async fn import_legacy_model_config(
                 timeout_seconds: 120,
                 reasoning_effort: None,
                 max_output_tokens: None,
+                context_window: None,
+                tokenizer_profile_key: None,
+                tokenizer_profile_version: None,
                 settings: json!({
                     "supported_sizes": ["1024x1024"],
                     "default_size": "1024x1024",
@@ -142,6 +167,38 @@ pub async fn import_legacy_model_config(
     }
 
     Ok(outcome)
+}
+
+fn validate_import_profile(
+    protocol: ApiProtocol,
+    key: &str,
+    version: &str,
+) -> Result<(), AiModelRepositoryError> {
+    let definitions_dir = std::env::var("NOVEX_AGENT_DEFINITIONS_DIR")
+        .unwrap_or_else(|_| "/app/agent-definitions".to_string());
+    let definitions = DefinitionRegistry::load(definitions_dir).map_err(|error| {
+        AiModelRepositoryError::InvalidConfig(format!(
+            "cannot load Definition Registry for model import: {error}"
+        ))
+    })?;
+    let profile = definitions.tokenizer_profile(key, version).map_err(|_| {
+        AiModelRepositoryError::InvalidConfig(format!(
+            "unknown Tokenizer Profile for model import: {key}@{version}"
+        ))
+    })?;
+    if matches!(
+        profile.status,
+        DefinitionStatus::Candidate | DefinitionStatus::Revoked
+    ) || !profile
+        .applicable_protocols
+        .iter()
+        .any(|item| item == protocol.as_str())
+    {
+        return Err(AiModelRepositoryError::InvalidConfig(format!(
+            "Tokenizer Profile is unavailable or incompatible for model import: {key}@{version}"
+        )));
+    }
+    Ok(())
 }
 
 async fn create_or_skip(

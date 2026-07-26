@@ -1,6 +1,6 @@
 use novex_ai_core::{
     definition_digest, ActivationEvidence, DefinitionKind, DefinitionRegistry,
-    DefinitionReleaseEvidence, DefinitionStatus, ExecutorOwner,
+    DefinitionReleaseEvidence, DefinitionStatus, ExecutorOwner, LegacyDefinitionDigest,
 };
 use sqlx::{PgPool, Row};
 use std::fmt;
@@ -44,7 +44,13 @@ impl PostgresDefinitionReleaseRepository {
                 digest,
                 registry.digest(),
                 agent.status,
-                agent.executor_owner,
+                owner_name(agent.executor_owner),
+                legacy_digests(
+                    registry,
+                    DefinitionKind::Agent,
+                    &agent.agent_key,
+                    &agent.version,
+                ),
             )
             .await?;
             publish_manifest_entry(
@@ -56,7 +62,7 @@ impl PostgresDefinitionReleaseRepository {
                 &definition_digest(agent)
                     .map_err(|error| DefinitionReleaseError::Serialization(error.to_string()))?,
                 agent.status,
-                agent.executor_owner,
+                owner_name(agent.executor_owner),
             )
             .await?;
         }
@@ -81,7 +87,13 @@ impl PostgresDefinitionReleaseRepository {
                 digest,
                 registry.digest(),
                 prompt.status,
-                prompt.executor_owner,
+                owner_name(prompt.executor_owner),
+                legacy_digests(
+                    registry,
+                    DefinitionKind::Prompt,
+                    &prompt.prompt_key,
+                    &prompt.version,
+                ),
             )
             .await?;
             publish_manifest_entry(
@@ -93,7 +105,92 @@ impl PostgresDefinitionReleaseRepository {
                 &definition_digest(prompt)
                     .map_err(|error| DefinitionReleaseError::Serialization(error.to_string()))?,
                 prompt.status,
-                prompt.executor_owner,
+                owner_name(prompt.executor_owner),
+            )
+            .await?;
+        }
+        for policy in registry.context_policies() {
+            let digest = definition_digest(policy)
+                .map_err(|error| DefinitionReleaseError::Serialization(error.to_string()))?;
+            let owner = policy_owner(&policy.executor_owners);
+            validate_activation_evidence(
+                &mut transaction,
+                registry,
+                DefinitionKind::ContextPolicy,
+                &policy.policy_key,
+                &policy.version,
+                &digest,
+                policy.status,
+            )
+            .await?;
+            publish_one(
+                &mut transaction,
+                "context_policy",
+                &policy.policy_key,
+                &policy.version,
+                digest.clone(),
+                registry.digest(),
+                policy.status,
+                owner,
+                legacy_digests(
+                    registry,
+                    DefinitionKind::ContextPolicy,
+                    &policy.policy_key,
+                    &policy.version,
+                ),
+            )
+            .await?;
+            publish_manifest_entry(
+                &mut transaction,
+                manifest_id,
+                "context_policy",
+                &policy.policy_key,
+                &policy.version,
+                &digest,
+                policy.status,
+                owner,
+            )
+            .await?;
+        }
+        for profile in registry.tokenizer_profiles() {
+            let digest = definition_digest(profile)
+                .map_err(|error| DefinitionReleaseError::Serialization(error.to_string()))?;
+            validate_activation_evidence(
+                &mut transaction,
+                registry,
+                DefinitionKind::TokenizerProfile,
+                &profile.profile_key,
+                &profile.version,
+                &digest,
+                profile.status,
+            )
+            .await?;
+            publish_one(
+                &mut transaction,
+                "tokenizer_profile",
+                &profile.profile_key,
+                &profile.version,
+                digest.clone(),
+                registry.digest(),
+                profile.status,
+                "shared",
+                legacy_digests(
+                    registry,
+                    DefinitionKind::TokenizerProfile,
+                    &profile.profile_key,
+                    &profile.version,
+                ),
+            )
+            .await?;
+            publish_manifest_entry(
+                &mut transaction,
+                manifest_id,
+                "tokenizer_profile",
+                &profile.profile_key,
+                &profile.version,
+                &digest,
+                profile.status,
+                "shared",
             )
             .await?;
         }
@@ -103,7 +200,10 @@ impl PostgresDefinitionReleaseRepository {
         .bind(manifest_id)
         .fetch_one(&mut *transaction)
         .await?;
-        let expected_count = (registry.agents().len() + registry.prompts().len()) as i64;
+        let expected_count = (registry.agents().len()
+            + registry.prompts().len()
+            + registry.context_policies().len()
+            + registry.tokenizer_profiles().len()) as i64;
         if entry_count != expected_count {
             return Err(DefinitionReleaseError::Conflict(format!(
                 "registry manifest {} has {entry_count} entries, expected {expected_count}",
@@ -148,7 +248,7 @@ async fn publish_manifest_entry(
     version: &str,
     definition_digest: &str,
     status: DefinitionStatus,
-    owner: ExecutorOwner,
+    owner: &str,
 ) -> Result<(), DefinitionReleaseError> {
     sqlx::query(
         r#"
@@ -165,7 +265,7 @@ async fn publish_manifest_entry(
     .bind(version)
     .bind(definition_digest)
     .bind(status_name(status))
-    .bind(owner_name(owner))
+    .bind(owner)
     .execute(&mut **transaction)
     .await?;
 
@@ -188,7 +288,7 @@ async fn publish_manifest_entry(
     let stored_owner: String = row.try_get("executor_owner")?;
     if stored_digest != definition_digest
         || stored_status != status_name(status)
-        || stored_owner != owner_name(owner)
+        || stored_owner != owner
     {
         return Err(DefinitionReleaseError::Conflict(format!(
             "registry manifest entry {kind} {key}@{version} conflicts with immutable evidence"
@@ -225,12 +325,7 @@ async fn validate_activation_evidence(
             ))
         })?;
     match &release.activation_evidence {
-        ActivationEvidence::GoldenBaseline { .. } if version == "1.0.0" => Ok(()),
-        ActivationEvidence::GoldenBaseline { .. } => {
-            Err(DefinitionReleaseError::ActivationEvidence(format!(
-                "golden baseline is only valid for initial v1 release: {key}@{version}"
-            )))
-        }
+        ActivationEvidence::GoldenBaseline { .. } => Ok(()),
         ActivationEvidence::EvalReport { report_id } => {
             validate_eval_report(transaction, release, report_id).await
         }
@@ -256,7 +351,15 @@ async fn validate_eval_report(
               AND runs.candidate_key = $2
               AND runs.candidate_version = $3
               AND runs.candidate_digest = $4
-              AND runs.validation_mode IN ('golden_baseline', 'real_model')
+              AND runs.definition_kind = $5
+              AND (
+                    (runs.definition_kind IN ('context_policy', 'tokenizer_profile')
+                        AND runs.validation_mode IN ('golden_baseline', 'zero_cost', 'real_model')
+                        AND reports.context_node_results IS NOT NULL)
+                    OR
+                    (runs.definition_kind IN ('agent', 'prompt')
+                        AND runs.validation_mode IN ('golden_baseline', 'real_model'))
+              )
         )
         "#,
     )
@@ -264,6 +367,12 @@ async fn validate_eval_report(
     .bind(&release.definition_key)
     .bind(&release.definition_version)
     .bind(&release.definition_digest)
+    .bind(match release.definition_kind {
+        DefinitionKind::Agent => "agent",
+        DefinitionKind::Prompt => "prompt",
+        DefinitionKind::ContextPolicy => "context_policy",
+        DefinitionKind::TokenizerProfile => "tokenizer_profile",
+    })
     .fetch_one(&mut **transaction)
     .await?;
     if matches {
@@ -285,7 +394,8 @@ async fn publish_one(
     definition_digest: String,
     registry_digest: &str,
     status: DefinitionStatus,
-    owner: ExecutorOwner,
+    owner: &str,
+    legacy_digests: &[LegacyDefinitionDigest],
 ) -> Result<(), DefinitionReleaseError> {
     sqlx::query(
         r#"
@@ -303,13 +413,13 @@ async fn publish_one(
     .bind(&definition_digest)
     .bind(registry_digest)
     .bind(status_name(status))
-    .bind(owner_name(owner))
+    .bind(owner)
     .execute(&mut **transaction)
     .await?;
 
     let row = sqlx::query(
         r#"
-        SELECT definition_digest, executor_owner
+        SELECT definition_digest, registry_digest, executor_owner
         FROM definition_releases
         WHERE definition_kind = $1 AND definition_key = $2 AND definition_version = $3
         "#,
@@ -320,8 +430,13 @@ async fn publish_one(
     .fetch_one(&mut **transaction)
     .await?;
     let stored_digest: String = row.try_get("definition_digest")?;
+    let stored_registry_digest: String = row.try_get("registry_digest")?;
     let stored_owner: String = row.try_get("executor_owner")?;
-    if stored_digest != definition_digest || stored_owner != owner_name(owner) {
+    let exact_legacy_match = legacy_digests.iter().any(|legacy| {
+        legacy.definition_digest == stored_digest
+            && legacy.registry_digest == stored_registry_digest
+    });
+    if (stored_digest != definition_digest && !exact_legacy_match) || stored_owner != owner {
         return Err(DefinitionReleaseError::Conflict(format!(
             "{kind} {key}@{version} already exists with different immutable evidence"
         )));
@@ -343,6 +458,30 @@ fn owner_name(owner: ExecutorOwner) -> &'static str {
         ExecutorOwner::Rust => "rust",
         ExecutorOwner::Pi => "pi",
     }
+}
+
+fn policy_owner(owners: &[ExecutorOwner]) -> &'static str {
+    match owners {
+        [owner] => owner_name(*owner),
+        _ => "shared",
+    }
+}
+
+fn legacy_digests<'a>(
+    registry: &'a DefinitionRegistry,
+    kind: DefinitionKind,
+    key: &str,
+    version: &str,
+) -> &'a [LegacyDefinitionDigest] {
+    registry
+        .release_evidence()
+        .iter()
+        .find(|release| {
+            release.definition_kind == kind
+                && release.definition_key == key
+                && release.definition_version == version
+        })
+        .map_or(&[], |release| release.legacy_digests.as_slice())
 }
 
 #[derive(Debug)]

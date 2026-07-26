@@ -173,7 +173,9 @@ impl FromStr for ApiProtocol {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TextModelSettings {
-    pub context_window: u64,
+    /// Legacy import field only. Governed runtimes use `ai_models.context_window`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -288,7 +290,7 @@ impl ModelSettings {
     fn validate(&self) -> Result<(), ModelSettingsError> {
         match self {
             Self::Text(settings) => {
-                if settings.context_window == 0 {
+                if settings.context_window == Some(0) {
                     return Err(ModelSettingsError::InvalidSettings(
                         "text context_window must be positive".to_string(),
                     ));
@@ -421,7 +423,8 @@ impl ModelSettings {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelExecutionSnapshot {
     pub model_id: Uuid,
     pub display_name: String,
@@ -434,6 +437,9 @@ pub struct ModelExecutionSnapshot {
     pub reasoning_effort: Option<String>,
     pub timeout_seconds: u64,
     pub max_output_tokens: Option<u32>,
+    pub context_window: Option<u64>,
+    pub tokenizer_profile_key: Option<String>,
+    pub tokenizer_profile_version: Option<String>,
     pub settings: Value,
 }
 

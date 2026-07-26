@@ -1,11 +1,12 @@
 use novex_eval::{
     validate_activation, ActivationEvidence, BudgetError, BudgetTracker, CandidateRef,
-    DefinitionStatus, EvalBudget, EvalCaseResult, EvalMode, EvalRunSpec, ManifestLifecycle,
-    ModelBinding, ZeroCostRunner, REQUIRED_GATES,
+    DefinitionStatus, EvalBudget, EvalCaseResult, EvalDefinitionKind, EvalMode, EvalRunSpec,
+    ManifestLifecycle, ModelBinding, ZeroCostRunner, REQUIRED_GATES,
 };
 
 fn candidate() -> CandidateRef {
     CandidateRef {
+        definition_kind: EvalDefinitionKind::Agent,
         key: "video.script".into(),
         version: "1.0.0".into(),
         digest: "a".repeat(64),
@@ -16,6 +17,7 @@ fn zero_cost_spec(mode: EvalMode) -> EvalRunSpec {
     EvalRunSpec {
         candidate: candidate(),
         baseline: Some(CandidateRef {
+            definition_kind: EvalDefinitionKind::Agent,
             key: "video.script".into(),
             version: "legacy".into(),
             digest: "b".repeat(64),
@@ -23,6 +25,7 @@ fn zero_cost_spec(mode: EvalMode) -> EvalRunSpec {
         case_set_version: "rust-v1-golden@1".into(),
         evaluator_version: "novex-eval@1".into(),
         mode,
+        context: None,
         model_binding: None,
         budget: EvalBudget {
             approved_real_calls: false,

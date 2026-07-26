@@ -1,0 +1,60 @@
+{
+  "schema_version": "2",
+  "source_runtimes": ["rust", "pi"],
+  "record_types": ["snapshot", "compile_attempt"],
+  "list_envelope_fields": [
+    "schema_version",
+    "source_runtime",
+    "items",
+    "total",
+    "limit",
+    "offset"
+  ],
+  "summary_fields": [
+    "id",
+    "record_type",
+    "owner",
+    "node_key",
+    "status",
+    "compiled_at",
+    "policy",
+    "tokenizer_profile",
+    "digest",
+    "created_at"
+  ],
+  "owner_fields": ["type", "id"],
+  "definition_ref_fields": ["key", "version"],
+  "detail_envelope_fields": ["schema_version", "source_runtime", "record_hash", "record"],
+  "snapshot_record_fields": [
+    "id",
+    "record_type",
+    "owner",
+    "node_key",
+    "status",
+    "compiled_at",
+    "policy",
+    "tokenizer_profile",
+    "tokenizer_mode",
+    "budget",
+    "decisions",
+    "selected_order",
+    "logical_input",
+    "digest",
+    "created_at"
+  ],
+  "attempt_record_fields": [
+    "id",
+    "record_type",
+    "owner",
+    "node_key",
+    "status",
+    "compiled_at",
+    "stage",
+    "code",
+    "budget",
+    "decisions",
+    "digest",
+    "created_at"
+  ],
+  "model_call_context_fields": ["id", "digest", "policy", "tokenizer_profile", "budget"]
+}

@@ -58,6 +58,8 @@ async function fixture(tokensPerSecond?: number): Promise<Fixture> {
     timeoutMs: 10_000,
     maxOutputTokens: 4096,
     contextWindow: 128000,
+    tokenizerProfileKey: "openai.o200k",
+    tokenizerProfileVersion: "1.0.0",
     settings: {},
   };
   let resolveCalls = 0;
@@ -84,6 +86,8 @@ async function fixture(tokensPerSecond?: number): Promise<Fixture> {
       reasoning_effort: config.reasoningEffort ?? null,
       max_output_tokens: config.maxOutputTokens,
       context_window: config.contextWindow,
+      tokenizer_profile_key: config.tokenizerProfileKey,
+      tokenizer_profile_version: config.tokenizerProfileVersion,
       settings: config.settings,
     });
     return {
@@ -101,6 +105,8 @@ async function fixture(tokensPerSecond?: number): Promise<Fixture> {
         max_output_tokens: config.maxOutputTokens,
         timeout_seconds: config.timeoutMs / 1000,
         context_window: config.contextWindow,
+        tokenizer_profile_key: config.tokenizerProfileKey,
+        tokenizer_profile_version: config.tokenizerProfileVersion,
         behavior_settings: fingerprint.normalized.settings,
         behavior_fingerprint: fingerprint.digest,
       },
@@ -153,7 +159,7 @@ function post(baseUrl: string, path: string, body: object = {}) {
   });
 }
 
-async function createLegacySession(root: string, systemPrompt?: string): Promise<string> {
+async function createLegacySession(root: string, systemPrompt?: string, agentKey?: string): Promise<string> {
   const env = new NodeExecutionEnv({ cwd: root });
   const repo = new SqliteSessionRepo({
     env,
@@ -166,6 +172,7 @@ async function createLegacySession(root: string, systemPrompt?: string): Promise
       model_id: MODEL_ID,
       tool_profile: "chat",
       source: "legacy_fixture",
+      ...(agentKey ? { agent_key: agentKey } : {}),
       ...(systemPrompt ? { system_prompt: systemPrompt } : {}),
     },
   });
@@ -196,11 +203,23 @@ describe("fake provider runtime and SSE", () => {
 
     const plan = await fetch(`${current.baseUrl}/migration/plan`);
     expect(plan.status).toBe(200);
-    const planned = await plan.json() as { dry_run: boolean; items: Array<Record<string, unknown>> };
+    const planned = await plan.json() as {
+      schema_version: string;
+      dry_run: boolean;
+      items: Array<Record<string, unknown>>;
+    };
     expect(planned.dry_run).toBe(true);
+    expect(planned.schema_version).toBe("2");
     expect(planned.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ session_id: plainId, disposition: "auto_bind_personal_general" }),
-      expect.objectContaining({ session_id: customId, disposition: "custom_prompt_read_only" }),
+      expect.objectContaining({
+        runtime: "pi", entity_type: "session", entity_id: plainId,
+        agent_key: "personal.general", disposition: "equivalent", reason_code: "baseline_equivalent",
+        node_keys: ["personal.branch_summary", "personal.compaction", "personal.tool_followup", "personal.turn"],
+      }),
+      expect.objectContaining({
+        entity_id: customId, disposition: "context_migration_required",
+        reason_code: "legacy_custom_system_prompt_not_equivalent",
+      }),
     ]));
     expect(current.sessions.novex.listModelCalls(plainId)).toHaveLength(0);
     const backupPath = join(current.root, "pre-migration.sqlite");
@@ -212,13 +231,13 @@ describe("fake provider runtime and SSE", () => {
 
     const plain = await fetch(`${current.baseUrl}/sessions/${plainId}`);
     expect(plain.status).toBe(200);
-    expect(await plain.json()).toMatchObject({ session_id: plainId, agent_key: "personal.general", agent_version: "1.0.0" });
+    expect(await plain.json()).toMatchObject({ session_id: plainId, agent_key: "personal.general", agent_version: "2.0.0" });
     expect(current.sessions.novex.binding(plainId)).toMatchObject({
       binding_status: "executable",
-      migration_source: "legacy_default_prompt",
+      migration_source: "context_history_v2_equivalent",
     });
-    expect(current.sessions.novex.migrationEvent(plainId, "legacy_default_prompt_bound"))
-      .toMatchObject({ details: { legacy_text_exposed: false } });
+    expect(current.sessions.novex.migrationEvent(plainId, "context_history_v2_equivalent"))
+      .toMatchObject({ details: { migration_plan: { reason_code: "baseline_equivalent" } } });
     expect((await current.sessions.entries(plainId)).map(({ entry }) => entry))
       .toEqual(expect.arrayContaining([expect.objectContaining({ type: "message" })]));
 
@@ -226,16 +245,16 @@ describe("fake provider runtime and SSE", () => {
     expect(custom.status).toBe(200);
     expect(current.sessions.novex.binding(customId)).toMatchObject({
       binding_status: "read_only",
-      migration_source: "legacy_custom_prompt",
+      migration_source: "context_history_v2_read_only",
     });
-    expect(JSON.stringify(current.sessions.novex.migrationEvent(customId, "legacy_custom_prompt_read_only")))
+    expect(JSON.stringify(current.sessions.novex.migrationEvent(customId, "context_history_v2_context_migration_required")))
       .not.toContain("legacy custom system");
     expect((await post(current.baseUrl, `/sessions/${customId}/prompt`, { text: "continue" })).status).toBe(409);
     expect((await post(current.baseUrl, `/sessions/${customId}/fork`, {})).status).toBe(409);
 
     const upgrade = {
       agent_key: "personal.general",
-      agent_version: "1.0.0",
+      agent_version: "2.0.0",
       model_id: MODEL_ID,
       tool_profile: "chat",
     };
@@ -264,6 +283,50 @@ describe("fake provider runtime and SSE", () => {
     const after = await fetch(`${current.baseUrl}/migration/plan`);
     expect(((await after.json()) as { items: unknown[] }).items).toHaveLength(0);
     expect(current.sessions.novex.listModelCalls(plainId)).toHaveLength(0);
+  });
+
+  it("keeps missing-model and unmappable legacy sessions readable while blocking execution", async () => {
+    const current = await fixture();
+    const missingModelId = await createLegacySession(current.root);
+    const unmappableId = await createLegacySession(current.root, undefined, "legacy.unknown");
+    current.failModelResolution(new RuntimeError("tokenizer_profile_unavailable", 422, "Profile 缺失"));
+
+    const plan = await fetch(`${current.baseUrl}/migration/plan`);
+    const planned = await plan.json() as { items: Array<Record<string, unknown>> };
+    expect(planned.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        entity_id: missingModelId,
+        disposition: "model_configuration_missing",
+        reason_code: "model_configuration_missing",
+      }),
+      expect.objectContaining({
+        entity_id: unmappableId,
+        disposition: "unmappable",
+        reason_code: "unknown_agent_key",
+      }),
+    ]));
+
+    expect((await post(current.baseUrl, `/sessions/${missingModelId}/prompt`, { text: "blocked" })).status).toBe(409);
+    expect(((await (await fetch(`${current.baseUrl}/migration/plan`)).json()) as { items: unknown[] }).items)
+      .toHaveLength(2);
+
+    await current.sessions.backupForHistoryMigration(join(current.root, "blocked-migration.sqlite"));
+    expect((await fetch(`${current.baseUrl}/sessions/${missingModelId}`)).status).toBe(200);
+    expect((await fetch(`${current.baseUrl}/sessions/${unmappableId}`)).status).toBe(200);
+    expect((await current.sessions.entries(missingModelId)).map(({ entry }) => entry))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ type: "message" })]));
+    expect(current.sessions.novex.migrationEvent(
+      missingModelId,
+      "context_history_v2_model_configuration_missing",
+    )).toMatchObject({ details: { migration_plan: { reason_code: "model_configuration_missing" } } });
+    expect(current.sessions.novex.migrationEvent(
+      unmappableId,
+      "context_history_v2_unmappable",
+    )).toMatchObject({ details: { migration_plan: { reason_code: "unknown_agent_key" } } });
+    expect(((await (await fetch(`${current.baseUrl}/migration/plan`)).json()) as { items: unknown[] }).items)
+      .toHaveLength(0);
+    expect(current.sessions.novex.bindingOrNull(missingModelId)).toBeNull();
+    expect(current.sessions.novex.bindingOrNull(unmappableId)).toBeNull();
   });
 
   it("serves the shared ModelCall read contract and recompiles dry-run without side effects", async () => {
@@ -311,6 +374,28 @@ describe("fake provider runtime and SSE", () => {
     expect(String(detail.record_hash)).toHaveLength(64);
     expect(await fetch(`${current.baseUrl}/model-calls/${call.id}/export`).then((item) => item.json())).toEqual(detail);
 
+    const contextContract = JSON.parse(await readFile(
+      resolve(import.meta.dirname, "../../../agent-definitions/fixtures/context-audit-read-api.json"),
+      "utf8",
+    )) as Record<string, unknown>;
+    const contextList = await fetch(
+      `${current.baseUrl}/sessions/${id}/contexts?record_type=snapshot&limit=20&offset=0`,
+    ).then((item) => item.json()) as Record<string, unknown>;
+    expect(sortedKeys(contextList)).toEqual(contractFields(contextContract, "list_envelope_fields"));
+    expect(contextList).toMatchObject({ schema_version: "2", source_runtime: "pi", total: 1 });
+    const contextSummary = (contextList.items as Array<Record<string, unknown>>)[0]!;
+    expect(sortedKeys(contextSummary)).toEqual(contractFields(contextContract, "summary_fields"));
+    expect(sortedKeys(contextSummary.owner)).toEqual(contractFields(contextContract, "owner_fields"));
+    expect(contextSummary).not.toHaveProperty("decisions");
+    const contextId = String(contextSummary.id);
+    const contextDetail = await fetch(`${current.baseUrl}/contexts/${contextId}`).then((item) => item.json()) as
+      Record<string, unknown>;
+    expect(sortedKeys(contextDetail)).toEqual(contractFields(contextContract, "detail_envelope_fields"));
+    expect(sortedKeys(contextDetail.record)).toEqual(contractFields(contextContract, "snapshot_record_fields"));
+    expect(String(contextDetail.record_hash)).toHaveLength(64);
+    expect(await fetch(`${current.baseUrl}/contexts/${contextId}/export`).then((item) => item.json()))
+      .toEqual(contextDetail);
+
     const beforeProviderCalls = current.faux.state.callCount;
     const beforeEntries = await current.sessions.entries(id, 0, 1_000);
     const beforeCalls = current.sessions.novex.listModelCalls(id);
@@ -320,6 +405,7 @@ describe("fake provider runtime and SSE", () => {
     expect(replay).toMatchObject({
       definition_resolved: true,
       compile_succeeded: true,
+      validation_order: ["context", "prompt", "model_call"],
       diff: [],
       side_effects: { model_calls: 0, tools: 0, session_writes: 0, run_writes: 0, domain_writes: 0 },
     });
@@ -413,6 +499,36 @@ describe("fake provider runtime and SSE", () => {
       && entry.message.stopReason !== "error")).toBe(false);
   });
 
+  it("persists an oversized Context failure without provider, Tool or canary leakage", async () => {
+    const current = await fixture();
+    current.updateModel({ contextWindow: 8192 });
+    const id = await createSession(current.baseUrl);
+    const canary = "NOVEX_CANARY_SECRET_DO_NOT_PERSIST_runtime_context";
+    const oversized = `${canary}-${"x ".repeat(5_000)}`;
+    const response = await post(current.baseUrl, `/sessions/${id}/prompt`, { text: oversized });
+    const sse = await response.text();
+
+    expect((sse.match(/event: run_failed/g) ?? [])).toHaveLength(1);
+    expect(sse).toContain("context_budget_exceeded");
+    expect(sse).not.toContain(canary);
+    expect(current.faux.state.callCount).toBe(0);
+    expect(current.sessions.novex.listModelCalls(id)).toEqual([]);
+    const attempts = current.sessions.novex.queryContextRecords(
+      { sessionId: id, recordType: "compile_attempt" }, 20, 0,
+    );
+    expect(attempts).toMatchObject({
+      total: 1,
+      items: [expect.objectContaining({ record_type: "compile_attempt", status: "failed" })],
+    });
+    const attemptId = attempts.items[0]!.id;
+    expect(JSON.stringify(current.sessions.novex.contextRecord(attemptId))).not.toContain(canary);
+    const detail = await fetch(`${current.baseUrl}/contexts/${attemptId}`).then((item) => item.json());
+    const exported = await fetch(`${current.baseUrl}/contexts/${attemptId}/export`).then((item) => item.json());
+    expect(exported).toEqual(detail);
+    expect(JSON.stringify(exported)).not.toContain(canary);
+    expect(JSON.stringify(exported)).not.toContain("selected_payload");
+  }, 30_000);
+
   it("does not silently retry after partial stream output", async () => {
     const current = await fixture();
     let observedMaxRetries: number | undefined;
@@ -503,13 +619,19 @@ describe("fake provider runtime and SSE", () => {
     expect(toolFollowups).toHaveLength(2);
     for (const call of toolFollowups) {
       expect(call.prompt_snapshot).toMatchObject({
+        schema_version: "2",
         agent_key: "personal.general",
-        agent_version: "1.0.0",
+        agent_version: "2.0.0",
         node_key: "personal.tool_followup",
+        fragments: [],
+        context_snapshot_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
       });
       expect(call.context_sources).toEqual(expect.arrayContaining([
-        expect.objectContaining({ source: "pi_context_hook", trust: "reference" }),
+        expect.objectContaining({ source_kind: "pi_tool_exchange", trust: "reference" }),
       ]));
+      const snapshot = call.prompt_snapshot as { context_snapshot_id: string; context_digest: string };
+      expect(call.context_snapshot_id).toBe(snapshot.context_snapshot_id);
+      expect(call.context_digest).toBe(snapshot.context_digest);
       expect(JSON.stringify(call.prompt_snapshot)).not.toContain("You are a helpful assistant.");
     }
     const exported = await fetch(`${current.baseUrl}/model-calls/${calls.items[0]!.id}/export`).then((item) => item.json());
@@ -543,12 +665,14 @@ describe("fake provider runtime and SSE", () => {
     expect(sse).not.toContain("event: run_failed");
     const details = current.sessions.novex.listModelCalls(id).map((call) => current.sessions.novex.modelCall(call.id));
     expect(details).toHaveLength(3);
-    const snapshots = details.map((call) => call.prompt_snapshot as { system: string; fragments: unknown[] });
-    expect(snapshots.some(({ fragments }) => JSON.stringify(fragments).includes('"trust":"steer"')
-      && JSON.stringify(fragments).includes("change direction"))).toBe(true);
-    expect(snapshots.some(({ fragments }) => JSON.stringify(fragments).includes('"trust":"follow_up"')
-      && JSON.stringify(fragments).includes("then continue"))).toBe(true);
-    expect(snapshots.every(({ system }) => !system.includes("change direction") && !system.includes("then continue"))).toBe(true);
+    expect(details.some((call) => JSON.stringify(call.context_sources).includes('"trust":"steer"')
+      && JSON.stringify(call.prompt_snapshot).includes("change direction"))).toBe(true);
+    expect(details.some((call) => JSON.stringify(call.context_sources).includes('"trust":"follow_up"')
+      && JSON.stringify(call.prompt_snapshot).includes("then continue"))).toBe(true);
+    expect(details.every((call) => {
+      const snapshot = call.prompt_snapshot as { system: string };
+      return !snapshot.system.includes("change direction") && !snapshot.system.includes("then continue");
+    })).toBe(true);
   }, 15_000);
 
   it("blocks model-requested tools outside the bound workspace profile", async () => {
@@ -613,11 +737,28 @@ describe("fake provider runtime and SSE", () => {
     expect(forkView).toMatchObject({ parent_session_id: id });
     const sourceBinding = current.sessions.novex.binding(id);
     const forkBinding = current.sessions.novex.binding(forkView.session_id);
+    expect(Object.keys(sourceBinding.context_policy_bindings).sort()).toEqual([
+      "personal.branch_summary",
+      "personal.compaction",
+      "personal.tool_followup",
+      "personal.turn",
+    ]);
+    expect(Object.values(sourceBinding.context_policy_bindings))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ digest: expect.stringMatching(/^[0-9a-f]{64}$/) })]));
+    expect(sourceBinding).toMatchObject({
+      tokenizer_profile_key: "openai.o200k",
+      tokenizer_profile_version: "1.0.0",
+      tokenizer_profile_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
     expect(forkBinding).toMatchObject({
       agent_key: sourceBinding.agent_key,
       agent_version: sourceBinding.agent_version,
       agent_digest: sourceBinding.agent_digest,
       prompt_bindings: sourceBinding.prompt_bindings,
+      context_policy_bindings: sourceBinding.context_policy_bindings,
+      tokenizer_profile_key: sourceBinding.tokenizer_profile_key,
+      tokenizer_profile_version: sourceBinding.tokenizer_profile_version,
+      tokenizer_profile_digest: sourceBinding.tokenizer_profile_digest,
       registry_digest: sourceBinding.registry_digest,
       tool_profile: sourceBinding.tool_profile,
       model_id: sourceBinding.model_id,
@@ -631,7 +772,7 @@ describe("fake provider runtime and SSE", () => {
       position: "at",
       upgrade: {
         agent_key: "personal.general",
-        agent_version: "1.0.0",
+        agent_version: "2.0.0",
         model_id: MODEL_ID,
         tool_profile: "workspace",
       },
@@ -641,7 +782,7 @@ describe("fake provider runtime and SSE", () => {
     expect(upgradedView).toMatchObject({ parent_session_id: id, tool_profile: "workspace" });
     expect(current.sessions.novex.binding(upgradedView.session_id)).toMatchObject({
       agent_key: "personal.general",
-      agent_version: "1.0.0",
+      agent_version: "2.0.0",
       model_id: MODEL_ID,
       tool_profile: "workspace",
       migration_source: "explicit_upgrade_fork",

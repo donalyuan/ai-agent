@@ -6,6 +6,7 @@ pub mod application;
 pub mod bootstrap;
 pub mod domain;
 pub mod model_config_import;
+pub mod model_context_inventory;
 pub mod model_routing;
 pub mod repositories;
 

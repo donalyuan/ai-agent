@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -9,6 +10,7 @@ import { createNodeSqliteFactory, SqliteSessionRepo } from "@earendil-works/pi-s
 import { describe, expect, it } from "vitest";
 
 import { cleanupSession, SessionStore } from "../src/sessions.js";
+import type { ContextCompileAttempt, ContextSnapshot } from "../src/context.js";
 import {
   activeAgent,
   canonicalJson,
@@ -16,6 +18,8 @@ import {
   definitionDigest,
   loadDefinitionRegistry,
   sha256Hex,
+  type AgentDefinition,
+  type DefinitionRegistry,
 } from "../src/definitions.js";
 
 const MODEL_ID = "11111111-1111-4111-8111-111111111111";
@@ -44,6 +48,151 @@ function assistant(text: string): AssistantMessage {
   };
 }
 
+function governedEvidence(definitions: DefinitionRegistry, agent: AgentDefinition) {
+  const profile = definitions.tokenizer_profiles.find((item) =>
+    item.profile_key === "openai.o200k" && item.version === "1.0.0")!;
+  return {
+    prompt_bindings: Object.fromEntries(Object.entries(agent.nodes).map(([node, reference]) => [
+      node,
+      { key: reference.key, version: reference.version },
+    ])),
+    context_policy_bindings: Object.fromEntries(Object.entries(agent.nodes).map(([node, reference]) => {
+      const policyReference = reference.context_policy!;
+      const policy = definitions.context_policies.find((item) =>
+        item.policy_key === policyReference.key && item.version === policyReference.version)!;
+      return [node, { key: policy.policy_key, version: policy.version, digest: definitionDigest(policy) }];
+    })),
+    tokenizer_profile_key: profile.profile_key,
+    tokenizer_profile_version: profile.version,
+    tokenizer_profile_digest: definitionDigest(profile),
+  };
+}
+
+function contextSnapshot(sessionId: string, binding: ReturnType<SessionStore["novex"]["binding"]>, text: string): ContextSnapshot {
+  const policy = binding.context_policy_bindings["personal.turn"]!;
+  return {
+    schema_version: "2",
+    owner: "pi",
+    owner_id: sessionId,
+    node_key: "personal.turn",
+    compiled_at: "2026-07-25T00:00:00.000Z",
+    policy_key: policy.key,
+    policy_version: policy.version,
+    tokenizer_profile_key: binding.tokenizer_profile_key,
+    tokenizer_profile_version: binding.tokenizer_profile_version,
+    tokenizer_mode: "exact",
+    budget: {
+      model_context_window: 128000,
+      system_prompt_tokens: 1,
+      user_template_fixed_tokens: 0,
+      tool_schema_tokens: 0,
+      output_schema_tokens: 0,
+      protocol_envelope_tokens: 1,
+      max_output_tokens: 4096,
+      safety_reserve_tokens: 16,
+      dynamic_context_budget: 123886,
+      selected_context_tokens: 4,
+      final_input_tokens: 6,
+    },
+    decisions: [{
+      candidate_id: `instruction-${text}`,
+      source_kind: "session_message",
+      source_id: `entry-${text}`,
+      source_version: "1",
+      trust: "reference",
+      priority: "p2",
+      required: false,
+      render_order: 0,
+      content_hash: "d".repeat(64),
+      token_count: 4,
+      decision: "selected",
+      selected_payload: { type: "text", text },
+    }],
+    selected_order: [`instruction-${text}`],
+    logical_input: {
+      system: "system",
+      messages: [{ role: "user", content: text }],
+      tool_schema: null,
+      output_schema: null,
+    },
+    digest: "f".repeat(64),
+  };
+}
+
+function prepareGovernedCall(store: SessionStore, sessionId: string, text: string): string {
+  const binding = store.novex.binding(sessionId);
+  const snapshot = contextSnapshot(sessionId, binding, text);
+  const snapshotId = randomUUID();
+  const prompt = binding.prompt_bindings["personal.turn"]!;
+  return store.novex.prepareModelCallWithContext({
+    sessionId,
+    phase: "turn",
+    nodeKey: "personal.turn",
+    attempt: 1,
+    binding,
+    promptSnapshot: {
+      schema_version: "2",
+      registry_digest: binding.registry_digest,
+      agent_key: binding.agent_key,
+      agent_version: binding.agent_version,
+      prompt_key: prompt.key,
+      prompt_version: prompt.version,
+      node_key: "personal.turn",
+      system: snapshot.logical_input.system,
+      user: text,
+      variables: {},
+      fragments: [],
+      tool_profile: binding.tool_profile,
+      output_schema: null,
+      tool_schema: null,
+      max_output_tokens: 4096,
+      context_snapshot_id: snapshotId,
+      context_digest: snapshot.digest,
+      logical_input: structuredClone(snapshot.logical_input),
+    },
+    modelSnapshot: binding.model_snapshot,
+    contextSources: [],
+    toolSchema: null,
+    assetReferences: [],
+    providerPayload: { input: snapshot.logical_input },
+    contextSnapshot: snapshot,
+  });
+}
+
+function persistCompileAttempt(store: SessionStore, sessionId: string, text: string): string {
+  const snapshot = contextSnapshot(sessionId, store.novex.binding(sessionId), text);
+  const attempt: ContextCompileAttempt = {
+    schema_version: "2",
+    owner: "pi",
+    owner_id: sessionId,
+    node_key: snapshot.node_key,
+    compiled_at: snapshot.compiled_at,
+    stage: "budget",
+    code: "context_budget_exceeded",
+    budget: snapshot.budget,
+    decisions: [],
+    digest: "9".repeat(64),
+  };
+  return store.novex.persistContextCompileAttempt({ sessionId, phase: "turn", attempt });
+}
+
+function contextAuditCounts(databasePath: string, sessionId: string): Record<string, number> {
+  const database = new DatabaseSync(databasePath);
+  try {
+    const count = (table: string): number => Number((database.prepare(
+      `SELECT COUNT(*) AS total FROM ${table} WHERE session_id = ?`,
+    ).get(sessionId) as { total: number }).total);
+    return {
+      snapshots: count("novex_context_snapshots"),
+      attempts: count("novex_context_compile_attempts"),
+      model_calls: count("novex_model_calls"),
+      bindings: count("novex_session_bindings"),
+    };
+  } finally {
+    database.close();
+  }
+}
+
 describe("Pi SQLite session persistence", () => {
   it("deletes only the explicit owner and reconciles an interrupted public Session deletion", async () => {
     const root = await mkdtemp(join(tmpdir(), "novex-session-delete-"));
@@ -61,6 +210,8 @@ describe("Pi SQLite session persistence", () => {
       max_output_tokens: 4096,
       timeout_seconds: 10,
       context_window: 128000,
+      tokenizer_profile_key: "openai.o200k",
+      tokenizer_profile_version: "1.0.0",
       behavior_settings: {},
       behavior_fingerprint: "a".repeat(64),
     };
@@ -74,7 +225,7 @@ describe("Pi SQLite session persistence", () => {
           agent_key: agent.agent_key,
           agent_version: agent.version,
           agent_digest: definitionDigest(agent),
-          prompt_bindings: agent.nodes,
+          ...governedEvidence(definitions, agent),
           registry_digest: definitions.digest,
           tool_profile: "chat" as const,
           model_id: MODEL_ID,
@@ -109,22 +260,30 @@ describe("Pi SQLite session persistence", () => {
     const sourceEntry = await source.session.appendMessage(user("fork source"));
     const sourceCall = prepare(source.id);
     store.novex.finishModelCall(sourceCall, "succeeded", { text: "source" }, {}, undefined);
+    const sourceGovernedCall = prepareGovernedCall(store, source.id, "source-context");
+    store.novex.finishModelCall(sourceGovernedCall, "succeeded", { text: "source governed" }, {}, undefined);
+    persistCompileAttempt(store, source.id, "source-attempt");
     const fork = await store.fork(source.id, sourceEntry, "at");
     const forkId = (await fork.getMetadata()).id;
     const forkCall = prepare(forkId);
     store.novex.finishModelCall(forkCall, "succeeded", { text: "fork" }, {}, undefined);
+    const forkGovernedCall = prepareGovernedCall(store, forkId, "fork-context");
+    store.novex.finishModelCall(forkGovernedCall, "succeeded", { text: "fork governed" }, {}, undefined);
+    persistCompileAttempt(store, forkId, "fork-attempt");
     await cleanupSession(source.session);
     await cleanupSession(fork);
 
-    expect(store.novex.listModelCalls(source.id)).toHaveLength(1);
-    expect(store.novex.listModelCalls(forkId)).toHaveLength(1);
+    expect(contextAuditCounts(database, source.id)).toEqual({ snapshots: 1, attempts: 1, model_calls: 2, bindings: 1 });
+    expect(contextAuditCounts(database, forkId)).toEqual({ snapshots: 1, attempts: 1, model_calls: 2, bindings: 1 });
     await store.delete(source.id);
-    expect(store.novex.listModelCalls(source.id)).toEqual([]);
-    expect(store.novex.listModelCalls(forkId).map(({ id }) => id)).toEqual([forkCall]);
+    expect(contextAuditCounts(database, source.id)).toEqual({ snapshots: 0, attempts: 0, model_calls: 0, bindings: 0 });
+    expect(contextAuditCounts(database, forkId)).toEqual({ snapshots: 1, attempts: 1, model_calls: 2, bindings: 1 });
+    expect(store.novex.listModelCalls(forkId).map(({ id }) => id)).toEqual(expect.arrayContaining([forkCall, forkGovernedCall]));
     await expect(store.view(forkId)).resolves.toMatchObject({ session_id: forkId, parent_session_id: source.id });
 
     const interrupted = await create();
-    const interruptedCall = prepare(interrupted.id);
+    const interruptedCall = prepareGovernedCall(store, interrupted.id, "interrupted-context");
+    persistCompileAttempt(store, interrupted.id, "interrupted-attempt");
     await cleanupSession(interrupted.session);
     store.novex.beginSessionDeletion(interrupted.id);
     const publicRepo = new SqliteSessionRepo({
@@ -140,10 +299,10 @@ describe("Pi SQLite session persistence", () => {
     expect(store.novex.pendingSessionDeletions()).toEqual([interrupted.id]);
     await store.reconcileSessionDeletions();
     expect(store.novex.pendingSessionDeletions()).toEqual([]);
-    expect(store.novex.listModelCalls(interrupted.id)).toEqual([]);
+    expect(contextAuditCounts(database, interrupted.id)).toEqual({ snapshots: 0, attempts: 0, model_calls: 0, bindings: 0 });
     expect(() => store.novex.binding(interrupted.id)).toThrow(/缺少版本化/);
     expect(() => store.novex.modelCall(interruptedCall)).toThrow(/不存在/);
-    expect(store.novex.listModelCalls(forkId).map(({ id }) => id)).toEqual([forkCall]);
+    expect(store.novex.listModelCalls(forkId).map(({ id }) => id)).toEqual(expect.arrayContaining([forkCall, forkGovernedCall]));
 
     const interruptedBeforePublicDelete = await create();
     const interruptedBeforePublicDeleteCall = prepare(interruptedBeforePublicDelete.id);
@@ -183,6 +342,8 @@ describe("Pi SQLite session persistence", () => {
       max_output_tokens: 4096,
       timeout_seconds: 10,
       context_window: 128000,
+      tokenizer_profile_key: "openai.o200k",
+      tokenizer_profile_version: "1.0.0",
       behavior_settings: {},
       behavior_fingerprint: "a".repeat(64),
     };
@@ -195,7 +356,7 @@ describe("Pi SQLite session persistence", () => {
         agent_key: agent.agent_key,
         agent_version: agent.version,
         agent_digest: definitionDigest(agent),
-        prompt_bindings: agent.nodes,
+        ...governedEvidence(definitions, agent),
         registry_digest: definitions.digest,
         tool_profile: "chat",
         model_id: MODEL_ID,
@@ -287,6 +448,7 @@ describe("Pi SQLite session persistence", () => {
 
     store = new SessionStore(database, root);
     await store.ping();
+    expect(store.novex.binding(sessionId)).toEqual(binding);
     const restored = await store.open(sessionId);
     expect(await restored.getLeafId()).toBe(compactId);
     await cleanupSession(restored);
@@ -301,6 +463,12 @@ describe("Pi SQLite session persistence", () => {
     const forkId = (await fork.getMetadata()).id;
     await cleanupSession(fork);
     expect((await store.view(forkId)).parent_session_id).toBe(sessionId);
+    expect(store.novex.binding(forkId)).toMatchObject({
+      context_policy_bindings: binding.context_policy_bindings,
+      tokenizer_profile_key: binding.tokenizer_profile_key,
+      tokenizer_profile_version: binding.tokenizer_profile_version,
+      tokenizer_profile_digest: binding.tokenizer_profile_digest,
+    });
     expect(store.novex.migrationEvent(forkId, "ordinary_fork")).toMatchObject({
       details: {
         parent_session_id: sessionId,

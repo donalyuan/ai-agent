@@ -2,11 +2,12 @@
 
 use super::{record_step, AgentRuntimeError, WorkAgentAdapter};
 use crate::domain::conversation::CreateAgentStepInput;
+use chrono::Utc;
 use novex_agent::{
-    AgentOutcome, AgentSession, AuditedCallOwner, AuditedModelError, AuditedModelRequest,
-    ModelExecutionRef, StepRecorder, StoredMessage,
+    text_context_candidate, AgentOutcome, AgentSession, AuditedCallOwner, AuditedModelError,
+    AuditedModelRequest, ModelExecutionRef, StepRecorder, StoredMessage, TextContextCandidateInput,
 };
-use novex_ai_core::{DynamicFragment, PromptCompileInput, TrustLevel};
+use novex_ai_core::{ContextPriority, TrustLevel};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -110,17 +111,27 @@ impl WorkAgentAdapter {
                         agent_key: audited.agent_key.clone(),
                         agent_version: audited.agent_version.clone(),
                         node_key: "work.plan".into(),
-                        compile_input: PromptCompileInput {
-                            schema_version: "1".into(),
-                            variables: BTreeMap::new(),
-                            fragments: vec![DynamicFragment {
-                                id: format!("message:{}", user_message.id),
+                        variables: BTreeMap::new(),
+                        context_candidates: vec![text_context_candidate(
+                            TextContextCandidateInput {
+                                candidate_id: format!("message:{}", user_message.id),
+                                source_kind: "conversation_entry".into(),
+                                source_id: user_message.id.to_string(),
+                                source_version: user_message.created_at.to_rfc3339_opts(
+                                    chrono::SecondsFormat::Nanos,
+                                    true,
+                                ),
                                 trust: TrustLevel::UserInstruction,
-                                source: "conversation_user_message".into(),
-                                content: Some(user_message.content.clone()),
-                                asset: None,
-                            }],
-                        },
+                                priority: ContextPriority::P0,
+                                required: true,
+                                render_order: 0,
+                                observed_at: Utc::now()
+                                    .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+                                text: user_message.content.clone(),
+                            },
+                        )],
+                        context_atomic_groups: Vec::new(),
+                        compiled_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
                         tool_profile: "chat".into(),
                         tool_schema: None,
                         binding: audited.binding.clone(),
@@ -157,15 +168,20 @@ impl WorkAgentAdapter {
                 error_message: None,
             })
             .await?;
-        let node_input = format!(
-            "当前作品和草稿：\n{}\n\n用户修改要求：\n{}",
-            serde_json::to_string_pretty(&context).unwrap_or_else(|_| "{}".to_string()),
-            user_message.content
+        let observed_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let work_version = context["current_version"]["version_no"]
+            .as_i64()
+            .map_or_else(|| "unknown".to_string(), |value| value.to_string());
+        let work_context = format!(
+            "当前作品和草稿：\n{}\n",
+            serde_json::to_string_pretty(&context).unwrap_or_else(|_| "{}".to_string())
         );
+        let user_instruction = format!("用户修改要求：\n{}", user_message.content);
         let audited = model.audited.as_ref().ok_or_else(|| {
             AgentRuntimeError::Kernel("audited model execution is required".into())
         })?;
-        let fragment_id = format!("work:{work_id}:draft-edit");
+        let work_candidate_id = format!("work:{work_id}:manifest:{work_version}");
+        let instruction_candidate_id = format!("message:{}", user_message.id);
         let response = audited
             .executor
             .execute_parsed(
@@ -178,24 +194,46 @@ impl WorkAgentAdapter {
                             agent_key: audited.agent_key.clone(),
                             agent_version: audited.agent_version.clone(),
                             node_key: "work.patch".into(),
-                            compile_input: PromptCompileInput {
-                                schema_version: "1".into(),
-                                variables: BTreeMap::new(),
-                                fragments: vec![DynamicFragment {
-                                    id: fragment_id.clone(),
-                                    trust: TrustLevel::Reference,
-                                    source: "work_draft_edit_context".into(),
-                                    content: Some(node_input),
-                                    asset: None,
-                                }],
-                            },
+                            variables: BTreeMap::new(),
+                            context_candidates: vec![
+                                text_context_candidate(TextContextCandidateInput {
+                                    candidate_id: work_candidate_id.clone(),
+                                    source_kind: "current_work".into(),
+                                    source_id: work_id.to_string(),
+                                    source_version: work_version,
+                                    trust: TrustLevel::ConfirmedFact,
+                                    priority: ContextPriority::P1,
+                                    required: true,
+                                    render_order: 0,
+                                    observed_at: observed_at.clone(),
+                                    text: work_context,
+                                }),
+                                text_context_candidate(TextContextCandidateInput {
+                                    candidate_id: instruction_candidate_id.clone(),
+                                    source_kind: "conversation_entry".into(),
+                                    source_id: user_message.id.to_string(),
+                                    source_version: user_message.created_at.to_rfc3339_opts(
+                                        chrono::SecondsFormat::Nanos,
+                                        true,
+                                    ),
+                                    trust: TrustLevel::UserInstruction,
+                                    priority: ContextPriority::P0,
+                                    required: true,
+                                    render_order: 1,
+                                    observed_at,
+                                    text: user_instruction,
+                                }),
+                            ],
+                            context_atomic_groups: Vec::new(),
+                            compiled_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
                             tool_profile: "chat".into(),
                             tool_schema: None,
                             binding: audited.binding.clone(),
                             context_sources: json!([
                                 {"id": format!("work:{work_id}:manifest"), "trust": "confirmed_fact", "source": "work_manifest"},
                                 {"id": format!("message:{}", user_message.id), "trust": "user_instruction", "source": "conversation_user_message"},
-                                {"id": fragment_id, "trust": "reference", "source": "work_draft_edit_context"}
+                                {"id": work_candidate_id, "trust": "confirmed_fact", "source": "work_manifest"},
+                                {"id": instruction_candidate_id, "trust": "user_instruction", "source": "conversation_user_message"}
                             ]),
                             memory_sources: json!([]),
                             parameters: json!({"max_output_tokens": 1800}),

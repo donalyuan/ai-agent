@@ -6,16 +6,17 @@ use crate::agents::{
 };
 use crate::application::agents::adapters::AgentRuntimeError;
 use crate::application::agents::kernel::{
-    active_rust_definition_binding, run_lifecycle, run_lifecycle_error,
+    active_rust_definition_binding, fixed_model_binding, run_lifecycle, run_lifecycle_error,
 };
-use crate::domain::conversation::ModelBindingEvidence;
 use crate::domain::script::{Script, ScriptGenerationInput, ScriptListFilter, ScriptStatus};
-use crate::model_routing::{model_behavior_evidence, ModelClientResolver, ModelResolveError};
+use crate::model_routing::{
+    model_behavior_evidence, model_binding_evidence, ModelClientResolver, ModelResolveError,
+};
 use crate::repositories::{
     AgentBindingError, ConversationRepositoryError, PostgresConversationRepository,
     PostgresProjectRepository, PostgresScriptRepository, PostgresTopicRepository,
 };
-use novex_agent::{AuditedCallOwner, AuditedModelExecutor, FixedModelBinding, StartRun};
+use novex_agent::{AuditedCallOwner, AuditedModelExecutor, StartRun};
 use novex_ai_core::{validate_model_capabilities, AgentKey, DefinitionRegistry};
 use serde_json::json;
 use std::{fmt, sync::Arc};
@@ -70,16 +71,10 @@ impl ScriptService {
             .map_err(|_| ScriptApplicationError::ModelCapabilityMismatch)?;
         let definition = active_rust_definition_binding(&self.definition_registry, "video.script")
             .map_err(ScriptApplicationError::Definition)?;
-        let model_binding = ModelBindingEvidence {
-            model_id,
-            behavior_fingerprint: evidence.behavior_fingerprint.clone(),
-            model_capabilities: serde_json::to_value(&evidence.capabilities)
-                .map_err(|error| ScriptApplicationError::Serialization(error.to_string()))?,
-        };
-        let fixed_binding = FixedModelBinding {
-            model_id,
-            behavior_fingerprint: evidence.behavior_fingerprint,
-        };
+        let model_binding = model_binding_evidence(&self.definition_registry, &resolved.snapshot)?;
+        let fixed_binding =
+            fixed_model_binding(&definition.context_policy_bindings, &model_binding)
+                .map_err(ScriptApplicationError::Definition)?;
         let model_snapshot = serde_json::to_value(&resolved.snapshot)
             .map_err(|error| ScriptApplicationError::Serialization(error.to_string()))?;
         let generation_mode = script_generation_mode(resolved.snapshot.reasoning_effort.as_deref());

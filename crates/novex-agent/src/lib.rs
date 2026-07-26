@@ -12,13 +12,16 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 mod audited_model;
+mod context_audit;
 
 pub use audited_model::{
-    AuditedCallOwner, AuditedModelError, AuditedModelExecutor, AuditedModelRequest,
-    AuditedModelResponse, AuditedParsedModelResponse, AuditedTerminalStatus, BoundModelResolver,
-    FinishAuditedCall, FixedModelBinding, ModelCallAuditStore, PrepareAuditedCall,
-    ResolvedBoundModel,
+    text_context_candidate, AuditedCallOwner, AuditedModelError, AuditedModelExecutor,
+    AuditedModelRequest, AuditedModelResponse, AuditedParsedModelResponse, AuditedTerminalStatus,
+    BoundModelResolver, FinishAuditedCall, FixedDefinitionBinding, FixedModelBinding,
+    ModelCallAuditStore, PrepareAuditedCall, PrepareAuditedCallWithContext, ResolvedBoundModel,
+    TextContextCandidateInput,
 };
+pub use context_audit::{ContextAuditStore, PersistContextCompileAttempt, PersistContextSnapshot};
 
 pub const CRATE_PURPOSE: &str = "novex-agent";
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -76,6 +79,7 @@ pub struct RunRecord {
     pub input: Value,
     pub output: Option<Value>,
     pub error_message: Option<String>,
+    pub context_compile_attempt_id: Option<Uuid>,
     pub model_id: Option<Uuid>,
     pub model_snapshot: Option<Value>,
     pub started_at: DateTime<Utc>,
@@ -103,6 +107,7 @@ pub struct FinishRun {
     pub status: RunStatus,
     pub output: Option<Value>,
     pub error_message: Option<String>,
+    pub context_compile_attempt_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -350,6 +355,7 @@ impl RunLifecycleCoordinator {
                         status: RunStatus::Succeeded,
                         output: success_output(&value),
                         error_message: None,
+                        context_compile_attempt_id: None,
                     })
                     .await
                     .map_err(RunLifecycleError::Store)?;
@@ -476,6 +482,7 @@ impl AgentRunCoordinator {
                 status: RunStatus::Succeeded,
                 output: Some(json!({ "assistant_message_id": assistant_message.id })),
                 error_message: None,
+                context_compile_attempt_id: None,
             })
             .await
             .map_err(KernelError::Store)?;
@@ -494,6 +501,7 @@ async fn finish_failed_run(runs: &dyn RunRecorder, run_id: Uuid, message: String
             status: RunStatus::Failed,
             output: None,
             error_message: Some(message),
+            context_compile_attempt_id: None,
         })
         .await;
 }

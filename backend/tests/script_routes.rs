@@ -274,6 +274,32 @@ async fn response_json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&body).unwrap()
 }
 
+async fn context_snapshot(pool: &PgPool, id: Uuid) -> (Value, Value, Value) {
+    sqlx::query_as(
+        "SELECT decisions, selected_order, logical_input FROM context_snapshots WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+fn assert_three_atomic_script_decisions(decisions: &Value) {
+    let decisions = decisions.as_array().unwrap();
+    assert_eq!(decisions.len(), 3);
+    for render_order in 0..3 {
+        let decision = decisions
+            .iter()
+            .find(|decision| decision["render_order"] == render_order)
+            .unwrap();
+        assert_eq!(decision["source_kind"], "user_instruction");
+        assert_eq!(decision["trust"], "user_instruction");
+        assert_eq!(decision["priority"], "p0");
+        assert_eq!(decision["required"], true);
+        assert_eq!(decision["decision"], "selected");
+    }
+}
+
 #[tokio::test]
 async fn script_routes_generate_read_list_and_update_status() {
     let (admin_pool, test_pool, database_name, test_url) = migrated_pool().await;
@@ -340,8 +366,11 @@ async fn script_routes_generate_read_list_and_update_status() {
     assert_eq!(run.3["model_id"], model_id.to_string());
     assert!(run.3.get("api_key").is_none());
     assert!(run.3.get("api_secret").is_none());
-    let call = sqlx::query_as::<_, (String, String, i32, Value, Value, Option<String>)>(
-        "SELECT node_key,status,attempt,prompt_snapshot,context_sources,structured_parse_status FROM model_calls WHERE agent_run_id=$1",
+    let call = sqlx::query_as::<
+        _,
+        (String, String, i32, Value, Value, Option<String>, Option<Uuid>),
+    >(
+        "SELECT node_key,status,attempt,prompt_snapshot,context_sources,structured_parse_status,context_snapshot_id FROM model_calls WHERE agent_run_id=$1",
     )
     .bind(run.0)
     .fetch_one(&test_pool)
@@ -360,8 +389,27 @@ async fn script_routes_generate_read_list_and_update_status() {
         call.3["output_schema"]["schema"]["properties"]["scenes"]["maxItems"],
         5
     );
-    assert_eq!(call.4[0]["source"], "script_generation_request");
+    assert_eq!(call.3["variables"]["scene_count"], 5);
+    assert_eq!(call.3["fragments"], json!([]));
+    assert_eq!(call.4.as_array().unwrap().len(), 3);
+    assert!(call
+        .4
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|source| source["source"] == "user_instruction"));
     assert_eq!(call.5.as_deref(), Some("succeeded"));
+    let context = context_snapshot(&test_pool, call.6.unwrap()).await;
+    assert_three_atomic_script_decisions(&context.0);
+    assert_eq!(
+        context.1,
+        json!([
+            "script.complete:request:attempt:1",
+            "script.complete:constraints:attempt:1",
+            "script.complete:output_example:attempt:1"
+        ])
+    );
+    assert_eq!(context.2, call.3["logical_input"]);
     let binding_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM agent_run_bindings WHERE agent_run_id=$1 AND agent_key='video.script' AND model_id=$2",
     )
@@ -514,9 +562,9 @@ async fn generate_route_uses_stepwise_single_scene_mode_for_xhigh() {
     let generated = response_json(generate_response).await;
     assert_eq!(generated["scenes"].as_array().unwrap().len(), 3);
 
-    let calls = sqlx::query_as::<_, (String, String, i32, Value)>(
+    let calls = sqlx::query_as::<_, (String, String, i32, Value, Option<Uuid>)>(
         r#"
-        SELECT mc.node_key,mc.status,mc.attempt,mc.prompt_snapshot
+        SELECT mc.node_key,mc.status,mc.attempt,mc.prompt_snapshot,mc.context_snapshot_id
         FROM model_calls mc
         JOIN agent_runs ar ON ar.id=mc.agent_run_id
         WHERE ar.project_id=$1
@@ -537,10 +585,42 @@ async fn generate_route_uses_stepwise_single_scene_mode_for_xhigh() {
         .all(|call| call.1 == "succeeded" && call.2 == 1));
     assert_eq!(calls[0].3["output_schema"]["name"], "script_metadata");
     assert_eq!(calls[1].3["output_schema"]["name"], "script_scene");
+    let snapshot_ids = calls.iter().map(|call| call.4.unwrap()).collect::<Vec<_>>();
+    assert_eq!(
+        snapshot_ids
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        4
+    );
+    for (index, call) in calls.iter().enumerate() {
+        assert_eq!(call.3["fragments"], json!([]));
+        let context = context_snapshot(&test_pool, call.4.unwrap()).await;
+        assert_three_atomic_script_decisions(&context.0);
+        assert_eq!(context.2, call.3["logical_input"]);
+        let expected_order = if index == 0 {
+            json!([
+                "script.metadata:request:attempt:1",
+                "script.metadata:constraints:attempt:1",
+                "script.metadata:output_example:attempt:1"
+            ])
+        } else {
+            let sequence = index;
+            json!([
+                format!("script.single_scene:scene-{sequence}-request:attempt:1"),
+                format!("script.single_scene:scene-{sequence}-constraints:attempt:1"),
+                format!("script.single_scene:scene-{sequence}-output-example:attempt:1")
+            ])
+        };
+        assert_eq!(context.1, expected_order);
+    }
 
     {
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 4);
+        for (request, call) in requests.iter().zip(&calls) {
+            assert_eq!(request["messages"][1]["content"], call.3["user"]);
+        }
         assert!(requests[0]["messages"][1]["content"]
             .as_str()
             .unwrap()

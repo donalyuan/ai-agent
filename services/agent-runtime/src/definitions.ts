@@ -1,6 +1,16 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, normalize, sep } from "node:path";
+import {
+  finalizeContext,
+  type CompiledContext,
+  type ContextPolicyDefinition,
+  type ContextSnapshot,
+  type LogicalMessage,
+  type LogicalModelInput,
+  type PreparedPromptEnvelope,
+  type TokenizerProfile,
+} from "./context.js";
 
 export type DefinitionStatus = "candidate" | "active" | "supported" | "revoked";
 export type ExecutorOwner = "rust" | "pi";
@@ -49,6 +59,7 @@ export function validateModelCapabilities(requirements: ModelRequirements, capab
 export interface VersionedReference {
   key: string;
   version: string;
+  context_policy?: { key: string; version: string };
 }
 
 export interface AgentDefinition {
@@ -91,25 +102,42 @@ export type ActivationEvidence =
   | { type: "eval_report"; report_id: string };
 
 export interface DefinitionReleaseEvidence {
-  definition_kind: "agent" | "prompt";
+  definition_kind: "agent" | "prompt" | "context_policy" | "tokenizer_profile";
   definition_key: string;
   definition_version: string;
   definition_digest: string;
+  legacy_digests: Array<{
+    algorithm: "canonical-json-with-status@1";
+    registry_digest: string;
+    definition_digest: string;
+  }>;
   activation_evidence: ActivationEvidence;
 }
 
 interface RegistryDocument {
-  schema_version: "1";
+  schema_version: "1" | "2";
   agents: AgentDefinition[];
   prompts: PromptDefinition[];
+  context_policies: ContextPolicyDefinition[];
+  tokenizer_profiles: TokenizerProfile[];
 }
 
 export interface DefinitionRegistry {
   readonly digest: string;
   readonly agents: readonly AgentDefinition[];
   readonly prompts: readonly PromptDefinition[];
+  readonly context_policies: readonly ContextPolicyDefinition[];
+  readonly tokenizer_profiles: readonly TokenizerProfile[];
   readonly templates: ReadonlyMap<string, string>;
   readonly releases: readonly DefinitionReleaseEvidence[];
+  readonly context_baseline: ContextBaselineEvidence;
+}
+
+export interface ContextBaselineEvidence {
+  readonly report_id: string;
+  readonly reference: string;
+  readonly sha256: string;
+  readonly equivalent_nodes: readonly string[];
 }
 
 export interface AssetReference {
@@ -135,7 +163,7 @@ export interface PromptCompileInput {
 }
 
 export interface PromptSnapshot {
-  readonly schema_version: "1";
+  readonly schema_version: "1" | "2";
   readonly registry_digest: string;
   readonly agent_key: string;
   readonly agent_version: string;
@@ -150,6 +178,73 @@ export interface PromptSnapshot {
   readonly output_schema: unknown | null;
   readonly tool_schema: unknown | null;
   readonly max_output_tokens: number | null;
+  readonly context_snapshot_id?: string;
+  readonly context_digest?: string;
+  readonly logical_input?: LogicalModelInput;
+}
+
+export interface PreparedPrompt {
+  readonly snapshot: PromptSnapshot;
+  readonly placeholder: string;
+  readonly envelope: PreparedPromptEnvelope;
+}
+
+export interface FinalizedPrompt {
+  readonly promptSnapshot: PromptSnapshot;
+  readonly contextSnapshot: ContextSnapshot;
+}
+
+export function readPromptSnapshot(value: unknown): PromptSnapshot {
+  const snapshot = object(value, "prompt snapshot");
+  const commonKeys = [
+    "schema_version", "registry_digest", "agent_key", "agent_version", "prompt_key", "prompt_version", "node_key",
+    "system", "user", "variables", "fragments", "tool_profile", "output_schema", "tool_schema", "max_output_tokens",
+  ] as const;
+  const allowedKeys = new Set<string>([...commonKeys, "context_snapshot_id", "context_digest", "logical_input"]);
+  const unknownKey = Object.keys(snapshot).find((key) => !allowedKeys.has(key));
+  const missingKey = commonKeys.find((key) => !(key in snapshot));
+  if (unknownKey || missingKey) throw new Error("prompt compile error: invalid prompt snapshot fields");
+  if ((snapshot.schema_version !== "1" && snapshot.schema_version !== "2")
+    || typeof snapshot.registry_digest !== "string" || !/^[0-9a-f]{64}$/.test(snapshot.registry_digest)
+    || ![snapshot.agent_key, snapshot.agent_version, snapshot.prompt_key, snapshot.prompt_version, snapshot.node_key,
+      snapshot.system, snapshot.user].every((item) => typeof item === "string" && item.length > 0)
+    || (snapshot.tool_profile !== "chat" && snapshot.tool_profile !== "workspace")
+    || snapshot.variables === null || typeof snapshot.variables !== "object" || Array.isArray(snapshot.variables)
+    || !Array.isArray(snapshot.fragments)
+    || !(snapshot.max_output_tokens === null || positiveInteger(snapshot.max_output_tokens))) {
+    throw new Error("prompt compile error: invalid prompt snapshot contract");
+  }
+  if (snapshot.schema_version === "1") {
+    if (snapshot.context_snapshot_id !== undefined || snapshot.context_digest !== undefined || snapshot.logical_input !== undefined) {
+      throw new Error("prompt compile error: PromptSnapshot v1 contains v2 fields");
+    }
+  } else {
+    if (typeof snapshot.context_snapshot_id !== "string" || !snapshot.context_snapshot_id.trim()
+      || typeof snapshot.context_digest !== "string" || !/^[0-9a-f]{64}$/.test(snapshot.context_digest)
+      || snapshot.fragments.length !== 0) {
+      throw new Error("prompt compile error: invalid PromptSnapshot v2 contract");
+    }
+    const logical = object(snapshot.logical_input, "prompt snapshot logical_input");
+    exactKeys(logical, ["system", "messages", "tool_schema", "output_schema"], "prompt snapshot logical_input");
+    if (logical.system !== snapshot.system || canonicalJson(logical.tool_schema) !== canonicalJson(snapshot.tool_schema)
+      || canonicalJson(logical.output_schema) !== canonicalJson(snapshot.output_schema)
+      || !Array.isArray(logical.messages) || logical.messages.length === 0) {
+      throw new Error("prompt compile error: invalid PromptSnapshot v2 logical input");
+    }
+    for (const rawMessage of logical.messages) {
+      const message = object(rawMessage, "prompt snapshot logical message");
+      if (Object.keys(message).some((key) => !["role", "content", "thinking", "tool_call_id"].includes(key))
+        || typeof message.role !== "string" || !message.role || !("content" in message)
+        || (message.thinking !== undefined && typeof message.thinking !== "string")
+        || (message.tool_call_id !== undefined && typeof message.tool_call_id !== "string")) {
+        throw new Error("prompt compile error: invalid PromptSnapshot v2 logical message fields");
+      }
+    }
+    if (renderLogicalMessages(logical.messages as LogicalMessage[]) !== snapshot.user) {
+      throw new Error("prompt compile error: invalid PromptSnapshot v2 logical message");
+    }
+  }
+  return deepFreeze(structuredClone(snapshot)) as unknown as PromptSnapshot;
 }
 
 export interface ModelBehavior {
@@ -159,6 +254,8 @@ export interface ModelBehavior {
   reasoning_effort: string | null;
   max_output_tokens: number;
   context_window: number;
+  tokenizer_profile_key: string;
+  tokenizer_profile_version: string;
   settings: unknown;
 }
 
@@ -190,16 +287,50 @@ export async function loadDefinitionRegistry(directory: string): Promise<Definit
   const release = object(JSON.parse(await readFile(join(directory, "release-index.json"), "utf8")), "release-index");
   exactKeys(release, ["schema_version", "registry_digest", "releases"], "release-index");
   const digest = sha256Hex(canonicalJson(value));
-  if (release.schema_version !== "1" || release.registry_digest !== digest || !Array.isArray(release.releases)) {
+  if (release.schema_version !== document.schema_version || release.registry_digest !== digest || !Array.isArray(release.releases)) {
     throw new Error("invalid definition registry: release index does not match immutable registry digest");
   }
   const releases = parseReleaseEvidence(release.releases, document);
+  const baselineReference = "agent-definitions/fixtures/context-eval-contract.json";
+  const baselineRaw = await readFile(join(directory, "fixtures/context-eval-contract.json"), "utf8");
+  const contextBaseline = parseContextBaselineEvidence(JSON.parse(baselineRaw), baselineReference, baselineRaw);
   return deepFreeze({
     digest,
     agents: Object.freeze(document.agents),
     prompts: Object.freeze(document.prompts),
+    context_policies: Object.freeze(document.context_policies),
+    tokenizer_profiles: Object.freeze(document.tokenizer_profiles),
     templates,
     releases: Object.freeze(releases),
+    context_baseline: contextBaseline,
+  });
+}
+
+function parseContextBaselineEvidence(value: unknown, reference: string, raw: string): ContextBaselineEvidence {
+  const contract = object(value, "context-eval-contract");
+  const productionNodes = Array.isArray(contract.production_nodes)
+    && contract.production_nodes.every((item) => typeof item === "string" && item.length > 0)
+    ? [...contract.production_nodes].sort()
+    : [];
+  const report = object(contract.baseline_report, "context-eval-contract.baseline_report");
+  const nodeResults = Array.isArray(report.node_results) ? report.node_results : [];
+  const equivalentNodes = nodeResults.flatMap((item, index) => {
+    const result = object(item, `context-eval-contract.baseline_report.node_results[${index}]`);
+    return typeof result.node_key === "string" && result.equivalent === true ? [result.node_key] : [];
+  }).sort();
+  if (typeof report.report_id !== "string" || report.report_id.trim() === ""
+    || report.mode !== "golden_baseline" || report.passed !== true
+    || report.actual_real_model_calls !== 0
+    || new Set(productionNodes).size !== productionNodes.length
+    || new Set(equivalentNodes).size !== equivalentNodes.length
+    || canonicalJson(productionNodes) !== canonicalJson(equivalentNodes)) {
+    throw new Error("invalid definition registry: Context baseline evidence is incomplete or non-equivalent");
+  }
+  return Object.freeze({
+    report_id: report.report_id,
+    reference,
+    sha256: sha256Hex(raw),
+    equivalent_nodes: Object.freeze(equivalentNodes),
   });
 }
 
@@ -207,8 +338,12 @@ function parseReleaseEvidence(values: unknown[], document: RegistryDocument): De
   const identities = new Set<string>();
   return values.map((value, index) => {
     const release = object(value, `release-index.releases[${index}]`);
-    exactKeys(release, ["definition_kind", "definition_key", "definition_version", "definition_digest", "activation_evidence"], `release-index.releases[${index}]`);
-    if (!(["agent", "prompt"] as unknown[]).includes(release.definition_kind)
+    exactKeys(release, [
+      "definition_kind", "definition_key", "definition_version", "definition_digest",
+      ...(Object.hasOwn(release, "legacy_digests") ? ["legacy_digests"] : []),
+      "activation_evidence",
+    ], `release-index.releases[${index}]`);
+    if (!(["agent", "prompt", "context_policy", "tokenizer_profile"] as unknown[]).includes(release.definition_kind)
       || typeof release.definition_key !== "string" || !release.definition_key
       || typeof release.definition_version !== "string" || !release.definition_version
       || typeof release.definition_digest !== "string" || !/^[0-9a-f]{64}$/.test(release.definition_digest)) {
@@ -219,9 +354,35 @@ function parseReleaseEvidence(values: unknown[], document: RegistryDocument): De
     identities.add(identity);
     const definition = release.definition_kind === "agent"
       ? document.agents.find((item) => item.agent_key === release.definition_key && item.version === release.definition_version)
-      : document.prompts.find((item) => item.prompt_key === release.definition_key && item.version === release.definition_version);
+      : release.definition_kind === "prompt"
+        ? document.prompts.find((item) => item.prompt_key === release.definition_key && item.version === release.definition_version)
+        : release.definition_kind === "context_policy"
+          ? document.context_policies.find((item) => item.policy_key === release.definition_key && item.version === release.definition_version)
+          : document.tokenizer_profiles.find((item) => item.profile_key === release.definition_key && item.version === release.definition_version);
     if (!definition || definitionDigest(definition) !== release.definition_digest) {
       throw new Error(`invalid definition registry: release evidence digest mismatch for ${identity}`);
+    }
+    const legacy_digests = release.legacy_digests === undefined ? [] : release.legacy_digests;
+    if (!Array.isArray(legacy_digests)) {
+      throw new Error(`invalid definition registry: malformed legacy digest evidence for ${identity}`);
+    }
+    const parsedLegacy = legacy_digests.map((item, legacyIndex) => {
+      const legacy = object(item, `${identity}.legacy_digests[${legacyIndex}]`);
+      exactKeys(legacy, ["algorithm", "registry_digest", "definition_digest"], `${identity}.legacy_digests[${legacyIndex}]`);
+      if (legacy.algorithm !== "canonical-json-with-status@1"
+        || typeof legacy.registry_digest !== "string" || !/^[0-9a-f]{64}$/.test(legacy.registry_digest)
+        || typeof legacy.definition_digest !== "string" || !/^[0-9a-f]{64}$/.test(legacy.definition_digest)
+        || legacy.definition_digest === release.definition_digest) {
+        throw new Error(`invalid definition registry: malformed legacy digest evidence for ${identity}`);
+      }
+      return {
+        algorithm: legacy.algorithm,
+        registry_digest: legacy.registry_digest,
+        definition_digest: legacy.definition_digest,
+      } as const;
+    });
+    if (new Set(parsedLegacy.map((item) => `${item.algorithm}:${item.registry_digest}:${item.definition_digest}`)).size !== parsedLegacy.length) {
+      throw new Error(`invalid definition registry: duplicate legacy digest evidence for ${identity}`);
     }
     const rawEvidence = object(release.activation_evidence, `${identity}.activation_evidence`);
     let activation_evidence: ActivationEvidence;
@@ -242,10 +403,11 @@ function parseReleaseEvidence(values: unknown[], document: RegistryDocument): De
       throw new Error(`invalid definition registry: invalid activation evidence for ${identity}`);
     }
     return {
-      definition_kind: release.definition_kind as "agent" | "prompt",
+      definition_kind: release.definition_kind as DefinitionReleaseEvidence["definition_kind"],
       definition_key: release.definition_key,
       definition_version: release.definition_version,
       definition_digest: release.definition_digest,
+      legacy_digests: parsedLegacy,
       activation_evidence,
     };
   });
@@ -291,6 +453,127 @@ export function compilePromptForReplay(
   toolSchema: unknown | null = null,
 ): PromptSnapshot {
   return compilePromptInternal(registry, agentKey, agentVersion, nodeKey, input, toolProfile, toolSchema, true);
+}
+
+export function preparePrompt(
+  registry: DefinitionRegistry,
+  agentKey: string,
+  agentVersion: string,
+  nodeKey: string,
+  variables: Readonly<Record<string, unknown>>,
+  profile: "chat" | "workspace",
+  toolSchema: unknown | null,
+  modelMaxOutputTokens: number,
+): PreparedPrompt {
+  const placeholder = "__NOVEX_COMPILED_CONTEXT_V2__";
+  const agent = registry.agents.find((item) => item.agent_key === agentKey && item.version === agentVersion);
+  const reference = agent?.nodes[nodeKey];
+  const prompt = reference === undefined ? undefined
+    : registry.prompts.find((item) => item.prompt_key === reference.key && item.version === reference.version);
+  const placeholderTrust = prompt?.variables.find((item) => item.value_type === "fragments")?.trust;
+  if (placeholderTrust === undefined) throw new Error("prompt compile error: fragments variable is not declared");
+  const snapshot = compilePrompt(registry, agentKey, agentVersion, nodeKey, {
+    schema_version: "1", variables: structuredClone(variables),
+    fragments: [{ id: "context-placeholder", trust: placeholderTrust, source: "context_compiler", content: placeholder }],
+  }, profile, toolSchema);
+  if (!snapshot.user.includes(placeholder) || !positiveInteger(modelMaxOutputTokens)) {
+    throw new Error("prompt compile error: governed context prepare contract is invalid");
+  }
+  const envelope: PreparedPromptEnvelope = {
+    system: snapshot.system,
+    user_template_fixed: snapshot.user.replace(placeholder, ""),
+    tool_schema: snapshot.tool_schema,
+    output_schema: snapshot.output_schema,
+    protocol_envelope_tokens: 0,
+    max_output_tokens: snapshot.max_output_tokens === null
+      ? modelMaxOutputTokens : Math.min(snapshot.max_output_tokens, modelMaxOutputTokens),
+  };
+  return deepFreeze({ snapshot, placeholder, envelope });
+}
+
+/** Uses the actual public Models context for Pi-owned standalone summary prompts. */
+export function preparePromptMessages(
+  registry: DefinitionRegistry,
+  agentKey: string,
+  agentVersion: string,
+  nodeKey: string,
+  profile: "chat" | "workspace",
+  system: string,
+  toolSchema: unknown | null,
+  maxOutputTokens: number,
+): PreparedPrompt {
+  if (!system.trim() || !positiveInteger(maxOutputTokens)) {
+    throw new Error("prompt compile error: Pi model context is invalid");
+  }
+  const base = preparePrompt(
+    registry, agentKey, agentVersion, nodeKey, {}, profile, toolSchema, maxOutputTokens,
+  );
+  return deepFreeze({
+    ...base,
+    snapshot: { ...base.snapshot, system, max_output_tokens: maxOutputTokens },
+    envelope: { ...base.envelope, system, max_output_tokens: maxOutputTokens },
+  });
+}
+
+export function finalizePrompt(
+  prepared: PreparedPrompt,
+  contextSnapshotId: string,
+  context: CompiledContext,
+  tokenizerProfile: TokenizerProfile,
+): FinalizedPrompt {
+  if (prepared.snapshot.node_key !== context.node_key || prepared.snapshot.system !== context.logical_input.system
+    || !contextSnapshotId.trim()) {
+    throw new Error("prompt compile error: compiled context does not match prepared prompt");
+  }
+  const dynamic = renderLogicalMessages(context.logical_input.messages);
+  const user = prepared.snapshot.user.replace(prepared.placeholder, dynamic);
+  const logical_input: LogicalModelInput = {
+    system: prepared.snapshot.system,
+    messages: [{ role: "user", content: user }],
+    tool_schema: prepared.snapshot.tool_schema,
+    output_schema: prepared.snapshot.output_schema,
+  };
+  const contextSnapshot = finalizeContext(context, tokenizerProfile, logical_input);
+  const promptSnapshot: PromptSnapshot = deepFreeze({
+    ...prepared.snapshot,
+    schema_version: "2",
+    user,
+    fragments: [],
+    context_snapshot_id: contextSnapshotId,
+    context_digest: contextSnapshot.digest,
+    logical_input,
+  });
+  return deepFreeze({ promptSnapshot, contextSnapshot });
+}
+
+/** Finalizes Pi's native multi-message input without collapsing the public hook result. */
+export function finalizePromptMessages(
+  prepared: PreparedPrompt,
+  contextSnapshotId: string,
+  context: CompiledContext,
+  tokenizerProfile: TokenizerProfile,
+): FinalizedPrompt {
+  if (prepared.snapshot.node_key !== context.node_key || prepared.snapshot.system !== context.logical_input.system
+    || !contextSnapshotId.trim() || context.logical_input.messages.length === 0) {
+    throw new Error("prompt compile error: compiled context does not match prepared prompt");
+  }
+  const logical_input: LogicalModelInput = structuredClone(context.logical_input);
+  const user = renderLogicalMessages(logical_input.messages);
+  const contextSnapshot = finalizeContext(context, tokenizerProfile, logical_input);
+  const promptSnapshot: PromptSnapshot = deepFreeze({
+    ...prepared.snapshot,
+    schema_version: "2",
+    user,
+    fragments: [],
+    context_snapshot_id: contextSnapshotId,
+    context_digest: contextSnapshot.digest,
+    logical_input,
+  });
+  return deepFreeze({ promptSnapshot, contextSnapshot });
+}
+
+function renderLogicalMessages(messages: readonly LogicalMessage[]): string {
+  return messages.map((message) => typeof message.content === "string" ? message.content : canonicalJson(message.content)).join("\n");
 }
 
 function compilePromptInternal(
@@ -405,10 +688,13 @@ export function behaviorFingerprint(input: ModelBehavior): { digest: string; nor
     reasoning_effort: input.reasoning_effort?.trim().toLowerCase() || null,
     max_output_tokens: input.max_output_tokens,
     context_window: input.context_window,
+    tokenizer_profile_key: input.tokenizer_profile_key.trim(),
+    tokenizer_profile_version: input.tokenizer_profile_version.trim(),
     settings: removeSensitiveFields(input.settings),
   };
   if (!["openai_responses", "openai_chat_completions"].includes(normalized.protocol)
     || !normalized.upstream_model || !positiveInteger(normalized.max_output_tokens) || !positiveInteger(normalized.context_window)
+    || !normalized.tokenizer_profile_key || !normalized.tokenizer_profile_version
     || (normalized.reasoning_effort !== null && !["minimal", "low", "medium", "high", "xhigh"].includes(normalized.reasoning_effort))
     || normalized.settings === null || typeof normalized.settings !== "object" || Array.isArray(normalized.settings)) {
     throw new Error("model fingerprint error: model behavior is incomplete");
@@ -436,20 +722,28 @@ export function sha256Hex(value: string | Uint8Array): string {
 }
 
 /** Lifecycle status is release metadata and must not invalidate an immutable binding. */
-export function definitionDigest(definition: AgentDefinition | PromptDefinition): string {
+export function definitionDigest(definition: AgentDefinition | PromptDefinition | ContextPolicyDefinition | TokenizerProfile): string {
   const { status: _status, ...content } = definition;
   return sha256Hex(canonicalJson(content));
 }
 
 function parseRegistry(value: unknown): RegistryDocument {
   const root = object(value, "registry");
-  exactKeys(root, ["schema_version", "agents", "prompts"], "registry");
-  if (root.schema_version !== "1" || !Array.isArray(root.agents) || !Array.isArray(root.prompts)) {
+  const schemaVersion = root.schema_version;
+  exactKeys(root, schemaVersion === "2"
+    ? ["schema_version", "agents", "prompts", "context_policies", "tokenizer_profiles"]
+    : ["schema_version", "agents", "prompts"], "registry");
+  if ((schemaVersion !== "1" && schemaVersion !== "2") || !Array.isArray(root.agents) || !Array.isArray(root.prompts)
+    || (schemaVersion === "2" && (!Array.isArray(root.context_policies) || !Array.isArray(root.tokenizer_profiles)))) {
     throw new Error("invalid definition registry: invalid root contract");
   }
   const agents = root.agents.map((item, index) => parseAgent(item, index));
   const prompts = root.prompts.map((item, index) => parsePrompt(item, index));
-  return { schema_version: "1", agents, prompts };
+  const context_policies = schemaVersion === "2"
+    ? (root.context_policies as unknown[]).map((item, index) => parseContextPolicy(item, index)) : [];
+  const tokenizer_profiles = schemaVersion === "2"
+    ? (root.tokenizer_profiles as unknown[]).map((item, index) => parseTokenizerProfile(item, index)) : [];
+  return { schema_version: schemaVersion, agents, prompts, context_policies, tokenizer_profiles };
 }
 
 function parseAgent(value: unknown, index: number): AgentDefinition {
@@ -460,8 +754,13 @@ function parseAgent(value: unknown, index: number): AgentDefinition {
   const nodes = object(item.nodes, "nodes");
   for (const [node, reference] of Object.entries(nodes)) {
     const versioned = object(reference, node);
-    exactKeys(versioned, ["key", "version"], node);
+    exactKeys(versioned, "context_policy" in versioned ? ["key", "version", "context_policy"] : ["key", "version"], node);
     if (!validKey(versioned.key) || !validVersion(versioned.version)) throw new Error(`invalid definition registry: invalid reference ${node}`);
+    if ("context_policy" in versioned) {
+      const policy = object(versioned.context_policy, `${node}.context_policy`);
+      exactKeys(policy, ["key", "version"], `${node}.context_policy`);
+      if (!validKey(policy.key) || !validVersion(policy.version)) throw new Error(`invalid definition registry: invalid context policy reference ${node}`);
+    }
   }
   const statuses: DefinitionStatus[] = ["candidate", "active", "supported", "revoked"];
   const owners: ExecutorOwner[] = ["rust", "pi"];
@@ -481,6 +780,40 @@ function parseAgent(value: unknown, index: number): AgentDefinition {
     throw new Error(`invalid definition registry: agent[${index}] tools require workspace`);
   }
   return item as unknown as AgentDefinition;
+}
+
+function parseContextPolicy(value: unknown, index: number): ContextPolicyDefinition {
+  const item = object(value, `context_policy[${index}]`);
+  exactKeys(item, ["policy_key", "version", "status", "executor_owners", "allowed_sources", "required_sources", "stable_sort"], `context_policy[${index}]`);
+  if (!validKey(item.policy_key) || !validVersion(item.version)
+    || !["candidate", "active", "supported", "revoked"].includes(String(item.status))
+    || !stringArray(item.executor_owners, true) || !(item.executor_owners as string[]).every((owner) => owner === "rust" || owner === "pi")
+    || !stringArray(item.allowed_sources, true) || !stringArray(item.required_sources, false)
+    || canonicalJson(item.stable_sort) !== canonicalJson(["priority", "source_kind", "source_id", "source_version", "candidate_id"])) {
+    throw new Error(`invalid definition registry: invalid context policy[${index}] contract`);
+  }
+  return item as unknown as ContextPolicyDefinition;
+}
+
+function parseTokenizerProfile(value: unknown, index: number): TokenizerProfile {
+  const item = object(value, `tokenizer_profile[${index}]`);
+  exactKeys(item, ["profile_key", "version", "status", "implementation_version", "mode", "applicable_protocols", "applicable_model_families", "framing", "safety_reserve_tokens"], `tokenizer_profile[${index}]`);
+  const mode = object(item.mode, `tokenizer_profile[${index}].mode`);
+  const framing = object(item.framing, `tokenizer_profile[${index}].framing`);
+  exactKeys(framing, ["per_message_tokens", "per_tool_tokens", "request_tokens", "reply_priming_tokens"], `tokenizer_profile[${index}].framing`);
+  const validMode = mode.mode === "exact"
+    ? (exactKeys(mode, ["mode", "encoding", "asset_digest"], `tokenizer_profile[${index}].mode`),
+      ["cl100k_base", "o200k_base"].includes(String(mode.encoding)) && typeof mode.asset_digest === "string" && /^[0-9a-f]{64}$/.test(mode.asset_digest))
+    : mode.mode === "conservative"
+      ? (exactKeys(mode, ["mode", "algorithm"], `tokenizer_profile[${index}].mode`), mode.algorithm === "utf8-byte-upper-bound@1")
+      : false;
+  if (!validKey(item.profile_key) || !validVersion(item.version)
+    || !["candidate", "active", "supported", "revoked"].includes(String(item.status)) || typeof item.implementation_version !== "string" || !item.implementation_version
+    || !validMode || !stringArray(item.applicable_protocols, true) || !stringArray(item.applicable_model_families, true)
+    || Object.values(framing).some((amount) => !safeNonNegativeInteger(amount)) || !safeNonNegativeInteger(item.safety_reserve_tokens)) {
+    throw new Error(`invalid definition registry: invalid tokenizer profile[${index}] contract`);
+  }
+  return item as unknown as TokenizerProfile;
 }
 
 function parsePrompt(value: unknown, index: number): PromptDefinition {
@@ -514,6 +847,18 @@ function validateRegistry(document: RegistryDocument, templates: ReadonlyMap<str
   const agents = new Set<string>();
   const active = new Set<string>();
   const prompts = new Map<string, PromptDefinition>();
+  const policies = new Map<string, ContextPolicyDefinition>();
+  const profiles = new Set<string>();
+  for (const policy of document.context_policies) {
+    const id = `${policy.policy_key}@${policy.version}`;
+    if (policies.has(id)) throw new Error(`invalid definition registry: duplicate context policy ${id}`);
+    policies.set(id, policy);
+  }
+  for (const profile of document.tokenizer_profiles) {
+    const id = `${profile.profile_key}@${profile.version}`;
+    if (profiles.has(id)) throw new Error(`invalid definition registry: duplicate tokenizer profile ${id}`);
+    profiles.add(id);
+  }
   for (const prompt of document.prompts) {
     const id = `${prompt.prompt_key}@${prompt.version}`;
     if (prompts.has(id)) throw new Error(`invalid definition registry: duplicate prompt ${id}`);
@@ -546,6 +891,15 @@ function validateRegistry(document: RegistryDocument, templates: ReadonlyMap<str
       if ((agent.status === "active" || agent.status === "supported")
         && (prompt.status === "candidate" || prompt.status === "revoked")) {
         throw new Error(`invalid definition registry: executable agent references unavailable prompt at ${node}`);
+      }
+      if (document.schema_version === "2" && agent.status === "active") {
+        if (!reference.context_policy) throw new Error(`invalid definition registry: active agent node ${node} is missing context policy`);
+        const policy = policies.get(`${reference.context_policy.key}@${reference.context_policy.version}`);
+        if (!policy || !policy.executor_owners.includes(agent.executor_owner) || policy.status === "candidate" || policy.status === "revoked") {
+          throw new Error(`invalid definition registry: incompatible context policy reference at ${node}`);
+        }
+      } else if (document.schema_version === "2" && !reference.context_policy && agent.status !== "supported" && agent.status !== "revoked") {
+        throw new Error(`invalid definition registry: legacy node shape is not supported at ${node}`);
       }
     }
   }
@@ -634,6 +988,10 @@ function validVariableName(value: unknown): boolean {
 
 function positiveInteger(value: unknown): boolean {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function safeNonNegativeInteger(value: unknown): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function stringArray(value: unknown, nonEmpty: boolean): boolean {

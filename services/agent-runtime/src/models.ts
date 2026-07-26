@@ -11,9 +11,9 @@ import type { Pool, QueryResultRow } from "pg";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 import { RuntimeError } from "./errors.js";
-import { behaviorFingerprint, type ModelBehavior } from "./definitions.js";
+import { behaviorFingerprint, type DefinitionRegistry, type ModelBehavior } from "./definitions.js";
 import { redactUrl } from "./redaction.js";
-import { createAuditedModels } from "./audited-models.js";
+import { createAuditedModels, type AuditedModels } from "./audited-models.js";
 
 export type SupportedTextProtocol = "openai_responses" | "openai_chat_completions";
 
@@ -28,6 +28,9 @@ interface AiModelRow extends QueryResultRow {
   timeout_seconds: number;
   reasoning_effort: string | null;
   max_output_tokens: number | null;
+  context_window: number | null;
+  tokenizer_profile_key: string | null;
+  tokenizer_profile_version: string | null;
   settings: unknown;
 }
 
@@ -42,6 +45,8 @@ export interface ResolvedTextModel {
   reasoningEffort?: string;
   maxOutputTokens: number;
   contextWindow: number;
+  tokenizerProfileKey: string;
+  tokenizerProfileVersion: string;
   settings: unknown;
 }
 
@@ -55,12 +60,14 @@ export interface ModelSnapshot {
   max_output_tokens: number;
   timeout_seconds: number;
   context_window: number;
+  tokenizer_profile_key: string;
+  tokenizer_profile_version: string;
   behavior_settings: unknown;
   behavior_fingerprint: string;
 }
 
 export interface PiModelRuntime {
-  models: MutableModels;
+  models: AuditedModels;
   model: Model<Api>;
   streamOptions: { timeoutMs: number; maxRetries: 0 };
   thinkingLevel: ThinkingLevel;
@@ -68,18 +75,14 @@ export interface PiModelRuntime {
   secrets: readonly string[];
 }
 
-function requiredPositiveSetting(settings: unknown, key: string): number {
-  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
-    throw new RuntimeError("model_incompatible", 422, `模型缺少显式 ${key} 行为配置`);
-  }
-  const value = (settings as Record<string, unknown>)[key];
+function requiredPositiveInteger(value: unknown, key: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new RuntimeError("model_incompatible", 422, `模型缺少有效 ${key} 行为配置`);
   }
   return value;
 }
 
-function mapRow(row: AiModelRow): ResolvedTextModel {
+function mapRow(row: AiModelRow, definitions: DefinitionRegistry): ResolvedTextModel {
   if (row.auth_scheme !== "bearer") {
     throw new RuntimeError("model_incompatible", 422, "文本模型必须使用 bearer 认证");
   }
@@ -95,6 +98,19 @@ function mapRow(row: AiModelRow): ResolvedTextModel {
   if (row.max_output_tokens === null || !Number.isSafeInteger(row.max_output_tokens) || row.max_output_tokens <= 0) {
     throw new RuntimeError("model_incompatible", 422, "模型缺少有效 max_output_tokens 行为配置");
   }
+  const profileKey = row.tokenizer_profile_key?.trim();
+  const profileVersion = row.tokenizer_profile_version?.trim();
+  if (!profileKey || !profileVersion) {
+    throw new RuntimeError("tokenizer_profile_unavailable", 422, "模型缺少显式 Tokenizer Profile key/version");
+  }
+  const profile = definitions.tokenizer_profiles.find((item) =>
+    item.profile_key === profileKey && item.version === profileVersion);
+  if (!profile || !["active", "supported"].includes(profile.status)) {
+    throw new RuntimeError("tokenizer_profile_unavailable", 422, "模型引用的 Tokenizer Profile 不可用");
+  }
+  if (!profile.applicable_protocols.includes(row.api_protocol)) {
+    throw new RuntimeError("tokenizer_profile_unavailable", 422, "Tokenizer Profile 与模型协议不兼容");
+  }
 
   return {
     id: row.id,
@@ -106,7 +122,9 @@ function mapRow(row: AiModelRow): ResolvedTextModel {
     timeoutMs: row.timeout_seconds * 1_000,
     ...(row.reasoning_effort ? { reasoningEffort: row.reasoning_effort } : {}),
     maxOutputTokens: row.max_output_tokens,
-    contextWindow: requiredPositiveSetting(row.settings, "context_window"),
+    contextWindow: requiredPositiveInteger(row.context_window, "context_window"),
+    tokenizerProfileKey: profileKey,
+    tokenizerProfileVersion: profileVersion,
     settings: row.settings,
   };
 }
@@ -124,13 +142,17 @@ export function refreshPiModelRuntime(target: PiModelRuntime, refreshed: PiModel
 }
 
 export class ModelConfigRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly definitions: DefinitionRegistry,
+  ) {}
 
   async resolveEnabledText(modelId: string): Promise<ResolvedTextModel> {
     const result = await this.pool.query<AiModelRow>(
       `SELECT id::text, provider_name, api_protocol, auth_scheme, request_base_url,
               upstream_model, api_key, timeout_seconds, reasoning_effort,
-              max_output_tokens, settings
+              max_output_tokens, context_window, tokenizer_profile_key,
+              tokenizer_profile_version, settings
          FROM ai_models
         WHERE id = $1::uuid
           AND model_type = 'text'
@@ -142,7 +164,7 @@ export class ModelConfigRepository {
     if (!row) {
       throw new RuntimeError("model_not_found", 404, "未找到可用的文本模型配置");
     }
-    return mapRow(row);
+    return mapRow(row, this.definitions);
   }
 
   async ping(): Promise<void> {
@@ -187,6 +209,8 @@ export function createPiModelRuntime(config: ResolvedTextModel): PiModelRuntime 
     reasoning_effort: config.reasoningEffort ?? null,
     max_output_tokens: config.maxOutputTokens,
     context_window: config.contextWindow,
+    tokenizer_profile_key: config.tokenizerProfileKey,
+    tokenizer_profile_version: config.tokenizerProfileVersion,
     settings: config.settings,
   };
   const fingerprint = behaviorFingerprint(behavior);
@@ -206,6 +230,8 @@ export function createPiModelRuntime(config: ResolvedTextModel): PiModelRuntime 
       max_output_tokens: config.maxOutputTokens,
       timeout_seconds: config.timeoutMs / 1_000,
       context_window: config.contextWindow,
+      tokenizer_profile_key: config.tokenizerProfileKey,
+      tokenizer_profile_version: config.tokenizerProfileVersion,
       behavior_settings: fingerprint.normalized.settings,
       behavior_fingerprint: fingerprint.digest,
     },

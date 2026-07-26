@@ -9,13 +9,13 @@ Novex 面向个人本地使用，统一沉淀模型调用、Agent Runtime、Tool
 ## 目录结构
 
 ```text
-agent-definitions/        版本化 Agent/Prompt Registry、schema、模板和发布索引
+agent-definitions/        版本化 Agent/Prompt/Context Policy/Tokenizer Registry 与发布资产
 backend/                 Rust 控制面 API
 admin/                   Next.js 管理后台
 apps/
   video-agent/           视频内容生产业务应用
 crates/
-  novex-ai-core/         Definition、Prompt 编译、审计与通用 AI 领域边界
+  novex-ai-core/         Definition、Context/Prompt 编译、tokenizer、审计与通用 AI 领域边界
   novex-model/           模型注册、路由、能力描述和用量边界
   novex-agent/           受审计模型执行与 Agent Run 生命周期边界
   novex-rag/             chunk、embedding、retrieval、rerank、citation 边界
@@ -66,14 +66,20 @@ docker run --rm novex-agent-runtime-test npm test
 openspec validate realign-video-agent-workspace-boundary --json
 ```
 
-Agent Runtime 使用 Pi `0.82.0`、代码级 `agent-definitions/` 与 PostgreSQL `ai_models`，并将 Session Tree、固定 Definition/模型 binding 和 namespaced `ModelCall` 审计持久化到 `ai-agent-session-data` 卷中的 `/data/agent-sessions.sqlite`。Runtime 已采用 `toolContext + AgentHarnessTool` 契约，同时保留 Novex 自有工具 schema。仅运行 `npm run test` 会使用 fake provider，不调用真实模型、不触发视频生成或发布费用；Runtime API 和请求示例见 [`services/agent-runtime/README.md`](./services/agent-runtime/README.md)。
+Agent Runtime 使用 Pi `0.82.0`、代码级 `agent-definitions/` 与 PostgreSQL `ai_models`，并将 Session Tree、固定 Definition/模型/Context binding，以及 namespaced `ContextSnapshot`、`ContextCompileAttempt` 和 `ModelCall` 审计持久化到 `ai-agent-session-data` 卷中的 `/data/agent-sessions.sqlite`。Runtime 已采用 `toolContext + AgentHarnessTool` 契约，同时保留 Novex 自有工具 schema。仅运行 `npm run test` 会使用 fake provider，不调用真实模型、不触发视频生成或发布费用；Runtime API 和请求示例见 [`services/agent-runtime/README.md`](./services/agent-runtime/README.md)。
+
+### 文本模型配置
+
+PostgreSQL `ai_models` 是唯一模型配置来源。enabled 文本模型除协议、地址、上游模型和凭据外，还必须显式配置 `context_window`、`tokenizer_profile_key`、`tokenizer_profile_version`；Profile 必须存在、未 revoked，并适用于当前协议和由操作者确认的模型家族。系统不会根据不透明模型名猜测窗口或 tokenizer，也不会回退默认 Profile。图片、视频模型不填写这三个文本预算字段。
+
+缺失或不兼容配置会在 Session/Conversation/Run binding 或实际 provider 请求前 fail-closed；历史记录保持可读，补齐配置后仍需按固定 `behavior_fingerprint` 规则显式 rebind/fork。凭据轮换不改变 fingerprint，窗口、Profile 或其他预算行为变化会改变 fingerprint。
 
 ## 架构原则
 
 1. Pi Runtime 承担新工作台的通用 Turn、Tool Loop、SSE 和 Session Tree。
 2. Rust backend 继续拥有视频领域 Adapter、Run/Step、领域状态和高风险 Gate。
-3. `agent-definitions/` 是 Agent/Prompt 唯一事实源；数据库不得保存模板正文或覆盖代码定义。
-4. PostgreSQL `ai_models` 是模型配置唯一来源；Rust/Pi 每次模型调用都经固定 binding 和独立 `ModelCall` 审计。
+3. `agent-definitions/` 是 Agent/Prompt/Context Policy/Tokenizer Profile 唯一事实源；数据库不得保存可覆盖的定义正文。
+4. PostgreSQL `ai_models` 是模型配置唯一来源；Rust/Pi 每次模型调用都经固定 binding、受治理 Context 编译和独立 `ContextSnapshot + ModelCall` 审计。
 5. 业务应用放入 `apps/*`；video-agent 是第一个领域应用。
 6. 后续功能新增、行为修改、协议改造和测试规则变化必须走 OpenSpec。
 

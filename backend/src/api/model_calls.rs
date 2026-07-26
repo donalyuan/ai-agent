@@ -175,6 +175,7 @@ struct ModelCallRecordDto {
     status: &'static str,
     definition: DefinitionDto,
     prompt_snapshot: Value,
+    context: Option<ContextLinkDto>,
     context_sources: Value,
     memory_sources: Value,
     tool_schema: Option<Value>,
@@ -187,6 +188,15 @@ struct ModelCallRecordDto {
     structured_parse_status: Option<String>,
     prepared_at: DateTime<Utc>,
     completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextLinkDto {
+    id: Uuid,
+    digest: String,
+    policy: Value,
+    tokenizer_profile: Value,
+    budget: Value,
 }
 
 #[derive(Serialize)]
@@ -267,6 +277,76 @@ async fn replay_model_call(
     let record = state.model_call_repository()?.get(model_call_id).await?;
     let detail = detail_response(record.clone())?;
     let registry = state.definition_registry()?;
+    if record.prompt_snapshot.get("schema_version") == Some(&json!("2")) {
+        let mut diff = Vec::new();
+        let definition_resolved = registry
+            .agent(&record.agent_key, &record.agent_version)
+            .is_ok()
+            && registry.prompts().iter().any(|prompt| {
+                prompt.prompt_key == record.prompt_key && prompt.version == record.prompt_version
+            });
+        let context = match record.context_snapshot_id {
+            Some(id) => state.context_audit_repository()?.get_snapshot(id).await,
+            None => Err(
+                crate::repositories::ContextAuditRepositoryError::InvalidRecord(
+                    "ModelCall 缺少 ContextSnapshot".into(),
+                ),
+            ),
+        };
+        match context {
+            Ok(context) => {
+                let policy_resolved = registry.context_policies().iter().any(|item| {
+                    item.policy_key == context.snapshot.policy_key
+                        && item.version == context.snapshot.policy_version
+                });
+                let profile_resolved = registry.tokenizer_profiles().iter().any(|item| {
+                    item.profile_key == context.snapshot.tokenizer_profile_key
+                        && item.version == context.snapshot.tokenizer_profile_version
+                });
+                if !policy_resolved || !profile_resolved {
+                    diff.push(json!({"path":"historical_context_dependency","kind":"missing"}));
+                } else {
+                    let mut context_value = serde_json::to_value(&context.snapshot)
+                        .map_err(|error| ModelCallApiError::internal(error.to_string()))?;
+                    let stored_digest = context_value.get("digest").cloned().unwrap_or(Value::Null);
+                    context_value.as_object_mut().unwrap().remove("digest");
+                    let computed = sha256_hex(canonical_json(&context_value).as_bytes());
+                    if stored_digest != json!(computed) {
+                        diff.push(json!({"path":"context.digest","kind":"changed"}));
+                    }
+                    if record.prompt_snapshot.get("context_snapshot_id")
+                        != record.context_snapshot_id.map(|id| json!(id)).as_ref()
+                    {
+                        diff.push(json!({"path":"prompt.context_snapshot_id","kind":"changed"}));
+                    }
+                    if record.prompt_snapshot.get("context_digest")
+                        != Some(&json!(context.snapshot.digest))
+                    {
+                        diff.push(json!({"path":"prompt.context_digest","kind":"changed"}));
+                    }
+                    if record.prompt_snapshot.get("logical_input")
+                        != Some(
+                            &serde_json::to_value(&context.snapshot.logical_input)
+                                .map_err(|error| ModelCallApiError::internal(error.to_string()))?,
+                        )
+                    {
+                        diff.push(json!({"path":"prompt.logical_input","kind":"changed"}));
+                    }
+                    if record.context_digest.as_deref() != Some(context.snapshot.digest.as_str()) {
+                        diff.push(json!({"path":"model_call.context_digest","kind":"changed"}));
+                    }
+                }
+            }
+            Err(_) => diff.push(json!({"path":"context_snapshot","kind":"missing"})),
+        }
+        return Ok(Json(json!({
+            "schema_version":"1", "mode":"dry_run", "source_model_call_id":model_call_id,
+            "source_record_hash":detail.record_hash, "validation_order":["context","prompt","model_call"],
+            "definition_resolved":definition_resolved, "compile_succeeded":definition_resolved && diff.is_empty(),
+            "side_effects":{"model_calls":0,"tools":0,"session_writes":0,"run_writes":0,"domain_writes":0},
+            "diff":diff,
+        })));
+    }
     let historical = serde_json::from_value::<ReplayPromptSnapshot>(record.prompt_snapshot.clone());
     let (definition_resolved, compile_succeeded, diff) = match historical {
         Ok(historical) => {
@@ -329,6 +409,7 @@ async fn replay_model_call(
         "mode":"dry_run",
         "source_model_call_id":model_call_id,
         "source_record_hash":detail.record_hash,
+        "validation_order":["context","prompt","model_call"],
         "definition_resolved":definition_resolved,
         "compile_succeeded":compile_succeeded,
         "side_effects":{"model_calls":0,"tools":0,"session_writes":0,"run_writes":0,"domain_writes":0},
@@ -411,6 +492,19 @@ fn summary_dto(record: ModelCallRecord) -> ModelCallSummaryDto {
 }
 
 fn record_dto(record: ModelCallRecord) -> ModelCallRecordDto {
+    let context = record.context_snapshot_id.map(|id| ContextLinkDto {
+        id,
+        digest: record.context_digest.clone().unwrap_or_default(),
+        policy: json!({
+            "key":record.context_policy_key.clone().unwrap_or_default(),
+            "version":record.context_policy_version.clone().unwrap_or_default(),
+        }),
+        tokenizer_profile: json!({
+            "key":record.tokenizer_profile_key.clone().unwrap_or_default(),
+            "version":record.tokenizer_profile_version.clone().unwrap_or_default(),
+        }),
+        budget: record.context_budget_summary.clone().unwrap_or(Value::Null),
+    });
     ModelCallRecordDto {
         id: record.id,
         owner: owner_dto(record.owner),
@@ -422,6 +516,7 @@ fn record_dto(record: ModelCallRecord) -> ModelCallRecordDto {
         status: record.status.as_str(),
         definition: definition_dto(&record),
         prompt_snapshot: record.prompt_snapshot,
+        context,
         context_sources: record.context_sources,
         memory_sources: record.memory_sources,
         tool_schema: record.tool_schema,

@@ -5,21 +5,22 @@ use crate::application::agents::adapters::{
     AgentRuntimeError, AuditedTopicReviewExecution, TopicAgentAdapter,
 };
 use crate::application::agents::kernel::{
-    active_rust_definition_binding, PostgresAgentKernelStore,
+    active_rust_definition_binding, fixed_model_binding, PostgresAgentKernelStore,
 };
-use crate::domain::conversation::ModelBindingEvidence;
 use crate::domain::script::ScriptStyle;
 use crate::domain::topic::{
     ContentTopic, ContentTopicFilter, ContentTopicStatus, TopicGenerationBatchSummary,
     TopicGroupSort, TopicGroupSummary, TopicQualityEvaluation, TopicReviewSnapshot,
 };
-use crate::model_routing::{model_behavior_evidence, ModelClientResolver, ModelResolveError};
+use crate::model_routing::{
+    model_behavior_evidence, model_binding_evidence, ModelClientResolver, ModelResolveError,
+};
 use crate::repositories::{
     CreateContentTopicInput, PostgresConversationRepository, PostgresProjectRepository,
     PostgresTopicRepository, ProjectRepository, ProjectRepositoryError, TopicRepository,
     TopicRepositoryError, UpdateContentTopicInput,
 };
-use novex_agent::{AuditedExecutionBinding, AuditedModelExecutor, FixedModelBinding};
+use novex_agent::{AuditedExecutionBinding, AuditedModelExecutor};
 use novex_ai_core::{validate_model_capabilities, DefinitionRegistry};
 use serde_json::Value;
 use std::{fmt, sync::Arc};
@@ -125,12 +126,10 @@ impl TopicService {
             .map_err(|_| TopicApplicationError::ModelCapabilityMismatch)?;
         let definition = active_rust_definition_binding(&self.definition_registry, "video.topic")
             .map_err(TopicApplicationError::Definition)?;
-        let model_binding = ModelBindingEvidence {
-            model_id,
-            behavior_fingerprint: evidence.behavior_fingerprint.clone(),
-            model_capabilities: serde_json::to_value(&evidence.capabilities)
-                .map_err(|error| TopicApplicationError::Serialization(error.to_string()))?,
-        };
+        let model_binding = model_binding_evidence(&self.definition_registry, &resolved.snapshot)?;
+        let fixed_binding =
+            fixed_model_binding(&definition.context_policy_bindings, &model_binding)
+                .map_err(TopicApplicationError::Definition)?;
         let store = Arc::new(PostgresAgentKernelStore::new(
             self.conversation_repository.clone(),
         ));
@@ -146,10 +145,7 @@ impl TopicService {
                         executor: self.audited_model_executor.clone(),
                         agent_key: definition.agent_key,
                         agent_version: definition.agent_version,
-                        binding: FixedModelBinding {
-                            model_id,
-                            behavior_fingerprint: evidence.behavior_fingerprint,
-                        },
+                        binding: fixed_binding,
                     },
                 },
                 self.conversation_repository.clone(),

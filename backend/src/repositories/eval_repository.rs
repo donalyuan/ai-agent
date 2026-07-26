@@ -1,4 +1,4 @@
-use novex_eval::{EvalMode, EvalReport, EvalRunSpec};
+use novex_eval::{CandidateRef, EvalDefinitionKind, EvalMode, EvalReport, EvalRunSpec};
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use std::fmt;
@@ -14,10 +14,14 @@ pub struct StoredEvalRun {
     pub id: Uuid,
     pub status: String,
     pub validation_mode: String,
+    pub definition_kind: String,
     pub candidate_key: String,
     pub candidate_version: String,
     pub candidate_digest: String,
     pub approval_snapshot: Value,
+    pub context_case_set: Option<Value>,
+    pub context_policy: Option<Value>,
+    pub tokenizer_profile: Option<Value>,
     pub actual_real_model_calls: i32,
 }
 
@@ -29,6 +33,10 @@ pub struct StoredEvalReport {
     pub gate_results: Value,
     pub aggregate_metrics: Value,
     pub redacted_case_results: Value,
+    pub context_node_results: Option<Value>,
+    pub context_selection_diff: Option<Value>,
+    pub context_budget_ledgers: Option<Value>,
+    pub tokenizer_metrics: Option<Value>,
     pub source_deleted: bool,
 }
 
@@ -53,27 +61,49 @@ impl PostgresEvalRepository {
             .as_ref()
             .map(|binding| binding.behavior_fingerprint.as_str());
         let approval_snapshot = json!({
-            "schema_version": "1",
+            "schema_version": if spec.context.is_some() { "2" } else { "1" },
             "approved_real_calls": spec.budget.approved_real_calls,
             "model_binding": spec.model_binding,
             "budget": spec.budget,
+            "definition_kind": definition_kind_name(spec.candidate.definition_kind),
+            "context": spec.context,
         });
+        let context_case_set = spec.context.as_ref().map(|context| {
+            json!({
+                "schema_version": context.schema_version,
+                "version": spec.case_set_version,
+            })
+        });
+        let context_policy = spec
+            .context
+            .as_ref()
+            .map(|context| serde_json::to_value(&context.policy))
+            .transpose()?;
+        let tokenizer_profile = spec
+            .context
+            .as_ref()
+            .map(|context| serde_json::to_value(&context.tokenizer_profile))
+            .transpose()?;
         let row = sqlx::query(
             r#"
             INSERT INTO eval_runs (
-                candidate_key, candidate_version, candidate_digest,
+                definition_kind, candidate_key, candidate_version, candidate_digest,
                 baseline_key, baseline_version, case_set_version, evaluator_version,
                 validation_mode, model_id, behavior_fingerprint, approved_real_calls,
                 approval_snapshot, max_cases, max_input_tokens, max_output_tokens,
-                max_retries, max_cost_micros
+                max_retries, max_cost_micros, context_case_set, context_policy,
+                tokenizer_profile
             ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                $13, $14, $15, $16, $17
+                $13, $14, $15, $16, $17, $18, $19, $20, $21
             )
-            RETURNING id, status, validation_mode, candidate_key, candidate_version,
-                      candidate_digest, approval_snapshot, actual_real_model_calls
+            RETURNING id, status, validation_mode, definition_kind, candidate_key,
+                      candidate_version, candidate_digest, approval_snapshot,
+                      context_case_set, context_policy, tokenizer_profile,
+                      actual_real_model_calls
             "#,
         )
+        .bind(definition_kind_name(spec.candidate.definition_kind))
         .bind(&spec.candidate.key)
         .bind(&spec.candidate.version)
         .bind(&spec.candidate.digest)
@@ -95,6 +125,9 @@ impl PostgresEvalRepository {
         .bind(to_i64(spec.budget.max_output_tokens, "max_output_tokens")?)
         .bind(to_i32(spec.budget.max_retries, "max_retries")?)
         .bind(to_i64(spec.budget.max_cost_micros, "max_cost_micros")?)
+        .bind(context_case_set)
+        .bind(context_policy)
+        .bind(tokenizer_profile)
         .fetch_one(&self.pool)
         .await?;
         stored_run(row)
@@ -108,7 +141,8 @@ impl PostgresEvalRepository {
         let mut transaction = self.pool.begin().await?;
         let run = sqlx::query(
             r#"
-            SELECT candidate_key, candidate_version, candidate_digest, validation_mode, status
+            SELECT definition_kind, candidate_key, candidate_version, candidate_digest,
+                   validation_mode, status
             FROM eval_runs WHERE id = $1 FOR UPDATE
             "#,
         )
@@ -120,7 +154,9 @@ impl PostgresEvalRepository {
         if status != "pending" && status != "running" {
             return Err(EvalRepositoryError::Immutable);
         }
-        if run.try_get::<String, _>("candidate_key")? != report.candidate.key
+        if run.try_get::<String, _>("definition_kind")?
+            != definition_kind_name(report.candidate.definition_kind)
+            || run.try_get::<String, _>("candidate_key")? != report.candidate.key
             || run.try_get::<String, _>("candidate_version")? != report.candidate.version
             || run.try_get::<String, _>("candidate_digest")? != report.candidate.digest
             || run.try_get::<String, _>("validation_mode")? != mode_name(report.mode)
@@ -129,6 +165,26 @@ impl PostgresEvalRepository {
         }
         let usage = &report.usage;
         let terminal = if report.passed { "passed" } else { "failed" };
+        let context_node_results = report
+            .context
+            .as_ref()
+            .map(|context| serde_json::to_value(&context.node_results))
+            .transpose()?;
+        let context_selection_diff = report
+            .context
+            .as_ref()
+            .map(|context| serde_json::to_value(&context.selection_diff))
+            .transpose()?;
+        let context_budget_ledgers = report
+            .context
+            .as_ref()
+            .map(|context| serde_json::to_value(&context.budget_ledgers))
+            .transpose()?;
+        let tokenizer_metrics = report
+            .context
+            .as_ref()
+            .map(|context| serde_json::to_value(&context.tokenizer_metrics))
+            .transpose()?;
         sqlx::query(
             r#"
             UPDATE eval_runs
@@ -155,17 +211,26 @@ impl PostgresEvalRepository {
         let row = sqlx::query(
             r#"
             INSERT INTO eval_reports (
-                eval_run_id, passed, gate_results, aggregate_metrics, redacted_case_results
-            ) VALUES ($1, $2, $3, $4, $5)
+                eval_run_id, schema_version, passed, gate_results, aggregate_metrics,
+                redacted_case_results, context_node_results, context_selection_diff,
+                context_budget_ledgers, tokenizer_metrics
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id, eval_run_id, passed, gate_results, aggregate_metrics,
-                      redacted_case_results, source_deleted
+                      redacted_case_results, context_node_results,
+                      context_selection_diff, context_budget_ledgers,
+                      tokenizer_metrics, source_deleted
             "#,
         )
         .bind(run_id)
+        .bind(&report.schema_version)
         .bind(report.passed)
         .bind(serde_json::to_value(&report.gates)?)
         .bind(serde_json::to_value(&report.usage)?)
         .bind(serde_json::to_value(&report.redacted_case_results)?)
+        .bind(context_node_results)
+        .bind(context_selection_diff)
+        .bind(context_budget_ledgers)
+        .bind(tokenizer_metrics)
         .fetch_one(&mut *transaction)
         .await?;
         transaction.commit().await?;
@@ -174,28 +239,35 @@ impl PostgresEvalRepository {
 
     pub async fn activation_report_id(
         &self,
-        candidate_key: &str,
-        candidate_version: &str,
-        candidate_digest: &str,
+        candidate: &CandidateRef,
     ) -> Result<Uuid, EvalRepositoryError> {
         sqlx::query_scalar(
             r#"
             SELECT reports.id
             FROM eval_reports reports
             JOIN eval_runs runs ON runs.id = reports.eval_run_id
-            WHERE runs.candidate_key = $1
-              AND runs.candidate_version = $2
-              AND runs.candidate_digest = $3
-              AND runs.validation_mode IN ('golden_baseline', 'real_model')
+            WHERE runs.definition_kind = $1
+              AND runs.candidate_key = $2
+              AND runs.candidate_version = $3
+              AND runs.candidate_digest = $4
+              AND (
+                    (runs.definition_kind IN ('context_policy', 'tokenizer_profile')
+                        AND runs.validation_mode IN ('golden_baseline', 'zero_cost', 'real_model')
+                        AND reports.context_node_results IS NOT NULL)
+                    OR
+                    (runs.definition_kind IN ('agent', 'prompt')
+                        AND runs.validation_mode IN ('golden_baseline', 'real_model'))
+              )
               AND runs.status = 'passed'
               AND reports.passed
             ORDER BY reports.completed_at DESC
             LIMIT 1
             "#,
         )
-        .bind(candidate_key)
-        .bind(candidate_version)
-        .bind(candidate_digest)
+        .bind(definition_kind_name(candidate.definition_kind))
+        .bind(&candidate.key)
+        .bind(&candidate.version)
+        .bind(&candidate.digest)
         .fetch_optional(&self.pool)
         .await?
         .ok_or(EvalRepositoryError::ActivationEvidenceMissing)
@@ -203,10 +275,15 @@ impl PostgresEvalRepository {
 }
 
 fn validate_spec(spec: &EvalRunSpec) -> Result<(), EvalRepositoryError> {
+    let context_candidate = matches!(
+        spec.candidate.definition_kind,
+        EvalDefinitionKind::ContextPolicy | EvalDefinitionKind::TokenizerProfile
+    );
     if spec.candidate.key.is_empty()
         || spec.candidate.version.is_empty()
         || spec.candidate.digest.len() != 64
         || spec.budget.max_cases == 0
+        || context_candidate != spec.context.is_some()
     {
         return Err(EvalRepositoryError::InvalidInput(
             "candidate or budget is invalid".into(),
@@ -237,6 +314,15 @@ fn mode_name(mode: EvalMode) -> &'static str {
     }
 }
 
+pub(crate) fn definition_kind_name(kind: EvalDefinitionKind) -> &'static str {
+    match kind {
+        EvalDefinitionKind::Agent => "agent",
+        EvalDefinitionKind::Prompt => "prompt",
+        EvalDefinitionKind::ContextPolicy => "context_policy",
+        EvalDefinitionKind::TokenizerProfile => "tokenizer_profile",
+    }
+}
+
 fn to_i64(value: u64, name: &str) -> Result<i64, EvalRepositoryError> {
     i64::try_from(value)
         .map_err(|_| EvalRepositoryError::InvalidInput(format!("{name} exceeds database range")))
@@ -252,10 +338,14 @@ fn stored_run(row: sqlx::postgres::PgRow) -> Result<StoredEvalRun, EvalRepositor
         id: row.try_get("id")?,
         status: row.try_get("status")?,
         validation_mode: row.try_get("validation_mode")?,
+        definition_kind: row.try_get("definition_kind")?,
         candidate_key: row.try_get("candidate_key")?,
         candidate_version: row.try_get("candidate_version")?,
         candidate_digest: row.try_get("candidate_digest")?,
         approval_snapshot: row.try_get("approval_snapshot")?,
+        context_case_set: row.try_get("context_case_set")?,
+        context_policy: row.try_get("context_policy")?,
+        tokenizer_profile: row.try_get("tokenizer_profile")?,
         actual_real_model_calls: row.try_get("actual_real_model_calls")?,
     })
 }
@@ -268,6 +358,10 @@ fn stored_report(row: sqlx::postgres::PgRow) -> Result<StoredEvalReport, EvalRep
         gate_results: row.try_get("gate_results")?,
         aggregate_metrics: row.try_get("aggregate_metrics")?,
         redacted_case_results: row.try_get("redacted_case_results")?,
+        context_node_results: row.try_get("context_node_results")?,
+        context_selection_diff: row.try_get("context_selection_diff")?,
+        context_budget_ledgers: row.try_get("context_budget_ledgers")?,
+        tokenizer_metrics: row.try_get("tokenizer_metrics")?,
         source_deleted: row.try_get("source_deleted")?,
     })
 }
