@@ -8,6 +8,7 @@ pub mod error;
 pub mod health;
 pub mod materials;
 pub mod model_calls;
+pub mod production;
 pub mod projects;
 pub mod publication;
 pub mod router;

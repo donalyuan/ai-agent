@@ -1,0 +1,7 @@
+prompt_key: "character_critic.general"
+version: "1"
+lifecycle: "active"
+model_requirements:
+  tier: "standard"
+  context_window: 16384
+description: "character_critic 角色 Prompt 定义"

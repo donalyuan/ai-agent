@@ -1,0 +1,15 @@
+role_key: "cinematographer"
+role_name: "摄影指导"
+responsibilities:
+  - "基于镜头合约提供摄影视角建议，包括运镜方式、光影风格和构图原则"
+  - "评估每个镜头的技术可行性，识别潜在的视觉冲突"
+  - "为导演提供摄影执行层面的专业协作建议"
+# 摄影指导以协作建议形式输出，不产出独立落库产物
+input_artifacts:
+  - "shot_contract"
+output_artifacts: []
+allowed_tools: []
+prompt_definition_ref:
+  key: "cinematographer.general"
+  version: "@1"
+lifecycle: "active"

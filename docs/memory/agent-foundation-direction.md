@@ -50,12 +50,16 @@ metadata:
 
 ## 虚拟制作团队
 
-- Video Agent 的长期目标是受控的 `Virtual Production Crew Agent`，参考 `Emily2040/seedance-2.0` 的“主路由器 + 按需专业 Skill + 共享项目状态 + Prompt Compiler + Gate”思想，但不把其文档式 Skill 包直接当作后端多 Agent Runtime。
-- 第一版采用一个 `ProductionOrchestrator`、多个版本化 `RoleDefinition`、共享 `ProductionState`、结构化阶段产物、固定 Gate 和 `PromptCompiler`，而不是多个独立 Agent 自由讨论。
-- 专业角色方向包括制片人、编剧、导演、摄影指导、表演指导、剪辑师、声音指导和 QC。简单短视频应走 Fast Lane，不强制启动完整制作团队。
-- “演员”优先建模为持久化 `CharacterBible` 与受约束的 `PerformanceDirector`；需要角色视角校验时可以增加 `CharacterCritic`，但角色不得拥有发布、付费生成、删除或正式记忆写入权。
-- 共享制作状态至少逐步覆盖 `CreativeBrief`、`StoryBible`、`CharacterBible`、`ScriptDraft`、`DirectorialTreatment`、`ShotContract`、`PerformanceBrief`、`SoundPlan`、`ContinuityLedger` 和 `TakeReview`。
-- 各角色只拥有自己的结构化产物，通过新版本或修改建议协作，不直接覆盖其他角色的已确认产物。实际生成结果经接受后覆盖计划状态，成为后续镜头的连续性事实来源。
+> **已落地**：`establish-virtual-production-crew` change 已完成核心基础设施实施（2026-07-27）。实现位于 `crates/novex-production-crew`，HTTP API 挂载于 `/api/v1/production/`。
+
+- Video Agent 的长期目标是受控的 `Virtual Production Crew Agent`，采用一个 `ProductionOrchestrator`、多个版本化 `RoleDefinition`、共享 `ProductionState`、结构化阶段产物、固定 Gate 和 `PromptCompiler`，而不是多个独立 Agent 自由讨论。
+- 专业角色已实现：制片人（producer）、编剧（screenwriter）、导演（director）、摄影指导（cinematographer）、表演指导（performance_director）、声音指导（sound_director）、剪辑师（editor）、质量控制（qc）、角色校验器（character_critic，可选）。
+- 简单短视频走 Fast Lane（`project_type = fast_lane`），不强制启动完整制作团队；复杂场景走 Full Crew（`project_type = full_crew`）。
+- 共享制作状态覆盖10种产物：`CreativeBrief`、`StoryBible`、`CharacterBible`、`ScriptDraft`、`DirectorialTreatment`、`ShotContract`、`PerformanceBrief`、`SoundPlan`、`ContinuityLedger`、`TakeReview`，对应12张 PostgreSQL 表（含 `collaboration_suggestions`）。
+- 各角色只拥有自己的结构化产物，通过 `collaboration_suggestions` 提出修改建议，不直接覆盖其他角色的已确认产物。
+- 质量闸门已实现：`ProducerGate`、`ScriptApprovalGate`、`TechnicalFeasibilityGate`、`QualityGate`、`BudgetGate`、`PublishGate`。
+- 角色 YAML manifest 在 `crates/novex-production-crew/roles/`；Prompt 模板在 `crates/novex-production-crew/prompts/roles/`。
+- 后续待完成：与现有 `AuditedModelExecutor`/`PromptCompiler` 集成（Phase 7.3）、集成测试（Phase 9）、Admin 前端管理界面（独立 change）、Prompt 质量评测（独立 change）。
 
 ## 实施顺序与边界
 

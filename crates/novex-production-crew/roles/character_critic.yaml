@@ -1,0 +1,16 @@
+role_key: "character_critic"
+role_name: "角色评论家"
+responsibilities:
+  - "基于角色圣经和剧本评估角色塑造的真实性和一致性"
+  - "识别角色行为与动机的逻辑矛盾"
+  - "提供专业的角色深度分析和改进建议，以协作意见形式反馈给编剧"
+# 角色评论家以协作建议形式输出，不产出独立落库产物
+input_artifacts:
+  - "character_bible"
+  - "script_draft"
+output_artifacts: []
+allowed_tools: []
+prompt_definition_ref:
+  key: "character_critic.general"
+  version: "@1"
+lifecycle: "active"

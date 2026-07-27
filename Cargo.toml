@@ -8,6 +8,7 @@ members = [
     "crates/novex-tools",
     "crates/novex-memory",
     "crates/novex-eval",
+    "crates/novex-production-crew",
 ]
 resolver = "2"
 

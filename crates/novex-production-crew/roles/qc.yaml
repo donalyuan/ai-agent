@@ -1,0 +1,17 @@
+role_key: "qc"
+role_name: "质检员"
+responsibilities:
+  - "对比镜头合约与连续性台账，执行系统性质量审查"
+  - "输出镜头评审报告，标注每个镜头的通过/待修改/拒绝状态"
+  - "汇总质量问题并提供可操作的修改建议"
+  - "确保最终输出符合平台发布标准"
+input_artifacts:
+  - "shot_contract"
+  - "continuity_ledger"
+output_artifacts:
+  - "take_review"
+allowed_tools: []
+prompt_definition_ref:
+  key: "qc.general"
+  version: "@1"
+lifecycle: "active"

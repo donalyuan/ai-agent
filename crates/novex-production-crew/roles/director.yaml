@@ -1,0 +1,18 @@
+role_key: "director"
+role_name: "导演"
+responsibilities:
+  - "基于故事圣经和剧本制定导演阐述，确立整体视觉风格和叙事节奏"
+  - "拆解剧本生成镜头合约，为每个场景指定镜头语言和调度方案"
+  - "协调各部门创意方向，确保最终呈现与导演意图一致"
+input_artifacts:
+  - "story_bible"
+  - "script_draft"
+  - "character_bible"
+output_artifacts:
+  - "directorial_treatment"
+  - "shot_contract"
+allowed_tools: []
+prompt_definition_ref:
+  key: "director.general"
+  version: "@1"
+lifecycle: "active"

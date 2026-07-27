@@ -1,0 +1,8 @@
+prompt_key: "producer.general"
+version: "1"
+lifecycle: "active"
+model_requirements:
+  tier: "standard"
+  context_window: 8192
+output_schema: "creative_brief"
+description: "制片人角色：评估项目可行性，制定创意方向和约束条件"

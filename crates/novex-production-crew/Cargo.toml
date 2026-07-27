@@ -1,0 +1,34 @@
+[package]
+name = "novex-production-crew"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# 数据库
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# UUID 和时间
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# 错误处理
+thiserror = "1.0"
+anyhow = "1.0"
+
+# 日志
+tracing = "0.1"
+
+# JSON Schema 验证
+jsonschema = "0.17"
+
+[dev-dependencies]
+tokio-test = "0.4"

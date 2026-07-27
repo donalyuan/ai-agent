@@ -1,7 +1,7 @@
 //! 组合各业务 Router、跨域策略和静态素材服务，不承载具体业务 handler。
 
 use crate::api::{
-    ai_models, asset_generation, contexts, conversations, health, materials, model_calls, projects,
+    ai_models, asset_generation, contexts, conversations, health, materials, model_calls, production, projects,
     publication, scripts, sound_subtitle, topics, tos_staging_tool, work_generation, work_library,
     workspace,
 };
@@ -49,6 +49,7 @@ pub fn build_app_with_state(state: AppState) -> Router {
         .merge(work_library::router())
         .merge(publication::router())
         .merge(tos_staging_tool::router())
+        .merge(production::router())
         .nest_service(
             "/assets",
             ServeDir::new(state.config.asset_storage_root.clone()),
