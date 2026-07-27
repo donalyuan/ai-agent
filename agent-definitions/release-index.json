@@ -1,6 +1,6 @@
 {
   "schema_version": "2",
-  "registry_digest": "fce2739ee6e4636bf38c9b2dda294452f3a543676022e1b1e02ff64b37527eb1",
+  "registry_digest": "e72b2c9c532e77786492f505052751767bf9770a247d64b119b34a57fba4d0a8",
   "releases": [
     {
       "definition_kind": "agent",
@@ -506,6 +506,105 @@
       }
     },
     {
+      "definition_kind": "agent",
+      "definition_key": "production.producer",
+      "definition_version": "2.0.0",
+      "definition_digest": "0d6613aa6decba75dfb33ca57c0a713ea8225b3bf96d1703664851f066be17c7",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.screenwriter",
+      "definition_version": "2.0.0",
+      "definition_digest": "02b597a832e4cdc8780f597f39ff7f9bf4f2abe93728af113322b08f946734c3",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.director",
+      "definition_version": "2.0.0",
+      "definition_digest": "a660236b80619f401a9a0072460578d9d8650c3af758e2c480e71ccf2691c4a0",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.cinematographer",
+      "definition_version": "2.0.0",
+      "definition_digest": "be0cca2a24da68aeebf36821b4e4c3e8bf64826b0701ecac73288c48e6f920cd",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.performance_director",
+      "definition_version": "2.0.0",
+      "definition_digest": "539ab0605a66463c09ebf6334cd15a45768202534a4fa2f25817f3e11c0dc24f",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.sound_director",
+      "definition_version": "2.0.0",
+      "definition_digest": "f95f8603dd51145f4249578e8fbfa2ef2f38c14d0aa964d0abf8df5b7af3bc5b",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.editor",
+      "definition_version": "2.0.0",
+      "definition_digest": "82f42e3851729f666e6140898328719f8fd6aaa1b335aaa07f7aa324c6d6804e",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.qc",
+      "definition_version": "2.0.0",
+      "definition_digest": "8dbac9468f11f645bf05468bd4c24f7f4411e55f1eae9a6d61f76e92ec428739",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.character_critic",
+      "definition_version": "2.0.0",
+      "definition_digest": "eeca01258157d9f716507046c18bc21a11914107bbacc5255cce97d99f26d3e0",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
       "definition_kind": "prompt",
       "definition_key": "project.strategy_draft",
       "definition_version": "2.0.0",
@@ -649,6 +748,105 @@
       }
     },
     {
+      "definition_kind": "prompt",
+      "definition_key": "production.producer.general",
+      "definition_version": "2.0.0",
+      "definition_digest": "13083c51e9b170aafad9fe8c53983bf9f8837e13babdd5084843dcf157611d05",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.screenwriter.general",
+      "definition_version": "2.0.0",
+      "definition_digest": "bf8a0e3b9a9f624f1bd23141dc77ec08e7d2315e6c43ab9685406d9f61bb67ff",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.director.general",
+      "definition_version": "2.0.0",
+      "definition_digest": "c0c110b9bd798fc37523fe106fe650ed553ca53b9ec3cbf3f32a207be8f4d43b",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.cinematographer.general",
+      "definition_version": "2.0.0",
+      "definition_digest": "cd0a98a426c297b1a6be4287aeed2333841983f5deeeb74fb5d2c519453a47f7",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.performance_director.general",
+      "definition_version": "2.0.0",
+      "definition_digest": "b962f89533e1a6249e46adb33e8f21a9791a54490ea54a3fb24c56bc270b3ea5",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.sound_director.general",
+      "definition_version": "2.0.0",
+      "definition_digest": "4d55d8a1764a2a0187a0e746eabac0053c97e3229874491ede5c07ffe84e26d5",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.editor.general",
+      "definition_version": "2.0.0",
+      "definition_digest": "050b4077bd1705a3da8bfa8ac6689f8bd4bcc7a0c2ff4784c34511f20d116a12",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.qc.general",
+      "definition_version": "2.0.0",
+      "definition_digest": "e92bdaa1d254f789421a178398891fd9b276b1dd6f0e5fc526b451a53623e1ef",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.character_critic.general",
+      "definition_version": "2.0.0",
+      "definition_digest": "b81662db2360a195e076d53378303c5434457741b2c961061a22f36531c54ca3",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
+        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+      }
+    },
+    {
       "definition_kind": "context_policy",
       "definition_key": "personal.branch_summary.baseline",
       "definition_version": "1.0.0",
@@ -686,6 +884,105 @@
       "definition_key": "personal.turn.baseline",
       "definition_version": "1.0.0",
       "definition_digest": "3765a624c6e11ba7ceaf5216cf64810afe6b7e6696a555c0c0f281e58d384fe6",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.character_critic.execute.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "ced9c6dc5cb473088d47688df1eb38fa3dd016e37622c6d2dd284dd8ea7f1018",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.cinematographer.execute.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "2d5cb8e8b47b3f2f242d8adefe6bc14d5ee99c9589a0f5a53d9e94c0a139a448",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.director.execute.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "907616db5ed711f6eda71925a59bba7c3e89928c9483b6266f1166c2a09807fd",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.editor.execute.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "be0b95cf0c0a6dc70f4bf265aa6e82579cbbb62ddb4fbad80b542f9f1f460896",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.performance_director.execute.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "9b43ae50403dfdb58be9f5cc0ed90560632e860b797bb686049b9a9dadaef727",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.producer.execute.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "cf3761e46edcc1394c05fb6dbbabb962fc0dcf8f3edc98cc7446f1a6ec046a5e",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.qc.execute.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "4758ef8987d18a21e7cbfa43a9f5897bcf4bffec76b8d169a8a4212e9a467390",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.screenwriter.execute.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "e41dfcf0c6078667c99b911436633cf56d258730b40acdd58c893e3f7f2d5854",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/context-contract.json",
+        "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.sound_director.execute.baseline",
+      "definition_version": "1.0.0",
+      "definition_digest": "f73258f0d7fd7dfb37111950001e4f8b2a4757d691b9e9b8d633dee1ec946ded",
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "agent-definitions/fixtures/context-contract.json",

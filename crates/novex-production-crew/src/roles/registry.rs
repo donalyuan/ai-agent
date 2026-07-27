@@ -1,9 +1,11 @@
 //! 角色注册表：运行时内存索引，提供角色查找和执行序列验证
 
 use crate::error::ProductionError;
+use crate::roles::loader::RoleLoader;
 use crate::ProductionResult;
 use crate::roles::definition::RoleDefinition;
 use std::collections::HashMap;
+use std::path::Path;
 
 pub struct RoleRegistry {
     /// 以 role_key 为键的角色索引，O(1) 查找
@@ -15,6 +17,18 @@ impl RoleRegistry {
         Self {
             roles: HashMap::new(),
         }
+    }
+
+    /// 从磁盘上的 roles 目录加载全部角色定义，注册为运行时索引。
+    ///
+    /// `roles_dir` 通常为 `{crate_root}/roles/`（容器内对应 `/app/crates/novex-production-crew/roles/`）。
+    pub fn bootstrap(roles_dir: &Path) -> ProductionResult<Self> {
+        let defs = RoleLoader::load_from_dir(roles_dir)?;
+        let mut registry = Self::new();
+        for def in defs {
+            registry.register(def);
+        }
+        Ok(registry)
     }
 
     /// 注册角色，同 role_key 会覆盖

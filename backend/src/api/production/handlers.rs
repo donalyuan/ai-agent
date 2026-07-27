@@ -156,17 +156,38 @@ pub async fn delete_production(
 
 /// POST /api/v1/production/productions/:id/roles/:role_key/execute
 pub async fn execute_role(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path((id, role_key)): Path<(Uuid, String)>,
-    Json(_req): Json<ExecuteRoleRequest>,
+    Json(req): Json<ExecuteRoleRequest>,
 ) -> impl IntoResponse {
-    // TODO: 调用 ProductionOrchestrator.execute_role()
-    // 需要注入：RoleRegistry、GateRegistry、AuditedModelExecutor
-    (StatusCode::NOT_IMPLEMENTED, Json(json!({
-        "error": "角色执行接口尚在实施中",
-        "project_id": id,
-        "role_key": role_key
-    }))).into_response()
+    let orchestrator = match state.production_orchestrator() {
+        Ok(o) => o,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "internal_error",
+                    "message": format!("执行器初始化失败: {}", e)
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let request_model_id = req
+        .context
+        .as_ref()
+        .and_then(|c| c.get("preferred_model_id"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<Uuid>().ok());
+
+    match orchestrator
+        .execute_role(id, role_key, req.user_input, request_model_id)
+        .await
+    {
+        Ok(result) => (StatusCode::OK, Json(serde_json::to_value(result).unwrap_or_default())).into_response(),
+        Err(e) => production_error_response(e).into_response(),
+    }
 }
 
 /// POST /api/v1/production/productions/:id/execute-flow
@@ -363,5 +384,75 @@ pub async fn get_audit_log(
     match repo.get_audit_log(id).await {
         Ok(items) => (StatusCode::OK, Json(json!({ "items": items }))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+/// 将 `ProductionError` 映射到标准化的 HTTP 错误响应。
+///
+/// HTTP 状态码和 error_code 对应关系见 design.md 错误处理映射章节。
+pub fn production_error_response(
+    error: novex_production_crew::error::ProductionError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    use novex_production_crew::error::ProductionError;
+    match error {
+        ProductionError::MissingInputArtifact { artifact_type } => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "missing_input_artifact",
+                "message": format!("角色需要 '{}'，但当前无已批准或草稿版本", artifact_type),
+                "required_artifacts": [artifact_type]
+            })),
+        ),
+        ProductionError::InvalidArtifactSchema { details } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": "invalid_artifact_schema",
+                "message": "角色输出不符合产物 schema",
+                "details": details
+            })),
+        ),
+        ProductionError::RoleNotFound { role_key } => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "role_not_found",
+                "message": format!("角色 '{}' 不存在", role_key)
+            })),
+        ),
+        ProductionError::GateRejected { gate_name, reason } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "gate_rejected",
+                "message": format!("{}: {}", gate_name, reason)
+            })),
+        ),
+        ProductionError::GateWaitApproval { artifact_id } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "waiting_approval",
+                "message": "需要人工审批才能继续",
+                "artifact_id": artifact_id
+            })),
+        ),
+        ProductionError::AgentExecution(msg) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": "agent_execution_failed",
+                "message": msg
+            })),
+        ),
+        ProductionError::ProjectNotFound { project_id } => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "project_not_found",
+                "message": format!("制作项目 {} 不存在", project_id)
+            })),
+        ),
+        other => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": "internal_error",
+                "message": other.to_string()
+            })),
+        ),
     }
 }

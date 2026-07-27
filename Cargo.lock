@@ -1625,6 +1625,8 @@ dependencies = [
  "async-trait",
  "chrono",
  "jsonschema",
+ "novex-agent",
+ "novex-ai-core",
  "serde",
  "serde_json",
  "serde_yaml",

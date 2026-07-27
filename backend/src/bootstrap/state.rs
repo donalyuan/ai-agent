@@ -257,6 +257,44 @@ impl AppState {
         ))
     }
 
+    /// 构造注入了 AI 基础设施依赖的 `ProductionOrchestrator`。
+    ///
+    /// 会加载宿主机上的角色 YAML 目录（容器内 `/app/crates/novex-production-crew/roles/`）。
+    /// 若目录不存在或加载失败，返回 `MissingDependency` 错误。
+    pub(crate) fn production_orchestrator(
+        &self,
+    ) -> Result<novex_production_crew::orchestrator::ProductionOrchestrator, AppStateError> {
+        use novex_production_crew::{
+            gates::GateRegistry,
+            orchestrator::ProductionOrchestrator,
+            roles::RoleRegistry,
+        };
+        use std::path::PathBuf;
+
+        let pool = self.database_pool()?;
+        let definition_registry = self.definition_registry()?;
+        let audited_executor = self.audited_model_executor(pool.clone())?;
+
+        // roles 目录在容器内固定路径（与 Docker Compose 挂载一致）
+        let roles_dir = PathBuf::from(
+            std::env::var("PRODUCTION_ROLES_DIR")
+                .unwrap_or_else(|_| "/app/crates/novex-production-crew/roles".into()),
+        );
+        let role_registry = RoleRegistry::bootstrap(&roles_dir).map_err(|_e| {
+            AppStateError::MissingDependency("production role definitions")
+        })?;
+
+        let gate_registry = GateRegistry::bootstrap();
+        let mut orchestrator = ProductionOrchestrator::new(
+            pool,
+            std::sync::Arc::new(role_registry),
+            std::sync::Arc::new(gate_registry),
+        );
+        orchestrator.audited_executor = Some(audited_executor);
+        orchestrator.definition_registry = Some(definition_registry);
+        Ok(orchestrator)
+    }
+
     pub(crate) fn publication_service(&self) -> Result<PublicationService, AppStateError> {
         let pool = self.database_pool()?;
         Ok(PublicationService::new(

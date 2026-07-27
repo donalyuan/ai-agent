@@ -51,6 +51,8 @@ metadata:
 ## 虚拟制作团队
 
 > **已落地**：`establish-virtual-production-crew` change 已完成核心基础设施实施（2026-07-27）。实现位于 `crates/novex-production-crew`，HTTP API 挂载于 `/api/v1/production/`。
+>
+> **角色执行已接通 AI 基础设施**：`wire-production-crew-role-execution` change 已完成（2026-07-27）。`POST /api/v1/production/productions/:id/roles/:role_key/execute` 现已真实调用 AI 模型并产出结构化产物。
 
 - Video Agent 的长期目标是受控的 `Virtual Production Crew Agent`，采用一个 `ProductionOrchestrator`、多个版本化 `RoleDefinition`、共享 `ProductionState`、结构化阶段产物、固定 Gate 和 `PromptCompiler`，而不是多个独立 Agent 自由讨论。
 - 专业角色已实现：制片人（producer）、编剧（screenwriter）、导演（director）、摄影指导（cinematographer）、表演指导（performance_director）、声音指导（sound_director）、剪辑师（editor）、质量控制（qc）、角色校验器（character_critic，可选）。
@@ -58,8 +60,12 @@ metadata:
 - 共享制作状态覆盖10种产物：`CreativeBrief`、`StoryBible`、`CharacterBible`、`ScriptDraft`、`DirectorialTreatment`、`ShotContract`、`PerformanceBrief`、`SoundPlan`、`ContinuityLedger`、`TakeReview`，对应12张 PostgreSQL 表（含 `collaboration_suggestions`）。
 - 各角色只拥有自己的结构化产物，通过 `collaboration_suggestions` 提出修改建议，不直接覆盖其他角色的已确认产物。
 - 质量闸门已实现：`ProducerGate`、`ScriptApprovalGate`、`TechnicalFeasibilityGate`、`QualityGate`、`BudgetGate`、`PublishGate`。
-- 角色 YAML manifest 在 `crates/novex-production-crew/roles/`；Prompt 模板在 `crates/novex-production-crew/prompts/roles/`。
-- 后续待完成：与现有 `AuditedModelExecutor`/`PromptCompiler` 集成（Phase 7.3）、集成测试（Phase 9）、Admin 前端管理界面（独立 change）、Prompt 质量评测（独立 change）。
+- 角色 YAML manifest 在 `crates/novex-production-crew/roles/`；Prompt 模板在 `crates/novex-production-crew/prompts/roles/` 以及 `agent-definitions/templates/production/`（DefinitionRegistry 使用）。
+- 9个角色的 `AgentDefinition` + `PromptDefinition` + `ContextPolicyDefinition` 已注册进 `agent-definitions/registry.json`（通过 build-registry-v2.mjs 生成）。
+- AI 基础设施已接通：`RoleExecutor::execute()` 通过 `AuditedModelExecutor.build_binding()` 构建 `FixedModelBinding`，调用 `execute_parsed()` 完成模型调用、Context 编译、ModelCall 审计记录写入与产物持久化。
+- `ProductionOrchestrator.execute_role()` 支持依赖注入（`audited_executor` + `definition_registry`），通过 `AppState::production_orchestrator()` 在生产环境组装。
+- 角色状态流转：producer完成 → `scripting`；screenwriter → `directing`；director → `generating`；editor → `qc`；qc → `approved`；纯协作角色（cinematographer、character_critic、performance_director、sound_director）不触发状态变更。
+- 后续待完成：`execute_flow` 异步顺序编排（独立 change）、Fast Lane AI 集成（独立 change）、Admin 前端管理界面（独立 change）、Prompt 质量评测 EvalRun（独立 change）。
 
 ## 实施顺序与边界
 

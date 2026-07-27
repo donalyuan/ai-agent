@@ -552,6 +552,333 @@
           }
         }
       }
+    },
+    {
+      "agent_key": "production.producer",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "role": "制片人",
+      "goals": [
+        "根据用户需求产出结构化创意简报（CreativeBrief）",
+        "评估项目可行性，确定目标受众、调性和约束条件"
+      ],
+      "constraints": [
+        "不得自行安排视频生成或发布",
+        "输出必须是包含 creative_brief 顶层键的纯 JSON"
+      ],
+      "model_requirements": {
+        "text": true,
+        "tool_calling": false,
+        "structured_output": true,
+        "vision": false,
+        "reasoning": false,
+        "min_context_window": 8192
+      },
+      "tool_profiles": [
+        "chat"
+      ],
+      "tools": [],
+      "nodes": {
+        "production.producer.execute": {
+          "key": "production.producer.general",
+          "version": "2.0.0",
+          "context_policy": {
+            "key": "production.producer.execute.baseline",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "agent_key": "production.screenwriter",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "role": "编剧",
+      "goals": [
+        "基于创意简报构建故事圣经、角色圣经和剧本草稿"
+      ],
+      "constraints": [
+        "不得自行安排视频生成、发布或修改其他角色的产物",
+        "输出必须是纯 JSON，严格遵循指定的输出 schema"
+      ],
+      "model_requirements": {
+        "text": true,
+        "tool_calling": false,
+        "structured_output": true,
+        "vision": false,
+        "reasoning": false,
+        "min_context_window": 16384
+      },
+      "tool_profiles": [
+        "chat"
+      ],
+      "tools": [],
+      "nodes": {
+        "production.screenwriter.execute": {
+          "key": "production.screenwriter.general",
+          "version": "2.0.0",
+          "context_policy": {
+            "key": "production.screenwriter.execute.baseline",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "agent_key": "production.director",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "role": "导演",
+      "goals": [
+        "制定导演阐述，确立整体视觉风格和叙事节奏",
+        "拆解剧本生成镜头合约，指定镜头语言和调度方案"
+      ],
+      "constraints": [
+        "不得自行安排视频生成或发布",
+        "输出必须是纯 JSON，不含任何说明文字"
+      ],
+      "model_requirements": {
+        "text": true,
+        "tool_calling": false,
+        "structured_output": true,
+        "vision": false,
+        "reasoning": false,
+        "min_context_window": 16384
+      },
+      "tool_profiles": [
+        "chat"
+      ],
+      "tools": [],
+      "nodes": {
+        "production.director.execute": {
+          "key": "production.director.general",
+          "version": "2.0.0",
+          "context_policy": {
+            "key": "production.director.execute.baseline",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "agent_key": "production.cinematographer",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "role": "摄影指导",
+      "goals": [
+        "基于镜头合约提供摄影视角建议，包括运镜方式、光影风格和构图原则"
+      ],
+      "constraints": [
+        "以协作建议形式输出，不产出独立落库产物",
+        "输出必须是纯 JSON，不含任何说明文字"
+      ],
+      "model_requirements": {
+        "text": true,
+        "tool_calling": false,
+        "structured_output": true,
+        "vision": false,
+        "reasoning": false,
+        "min_context_window": 8192
+      },
+      "tool_profiles": [
+        "chat"
+      ],
+      "tools": [],
+      "nodes": {
+        "production.cinematographer.execute": {
+          "key": "production.cinematographer.general",
+          "version": "2.0.0",
+          "context_policy": {
+            "key": "production.cinematographer.execute.baseline",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "agent_key": "production.performance_director",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "role": "表演指导",
+      "goals": [
+        "分析角色情绪节点，制定表演简报，为 AI 角色生成提供精确指引"
+      ],
+      "constraints": [
+        "不得自行安排视频生成或发布",
+        "输出必须是纯 JSON，不含任何说明文字"
+      ],
+      "model_requirements": {
+        "text": true,
+        "tool_calling": false,
+        "structured_output": true,
+        "vision": false,
+        "reasoning": false,
+        "min_context_window": 8192
+      },
+      "tool_profiles": [
+        "chat"
+      ],
+      "tools": [],
+      "nodes": {
+        "production.performance_director.execute": {
+          "key": "production.performance_director.general",
+          "version": "2.0.0",
+          "context_policy": {
+            "key": "production.performance_director.execute.baseline",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "agent_key": "production.sound_director",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "role": "声音指导",
+      "goals": [
+        "制定声音计划，覆盖配乐风格、音效设计和混音层次"
+      ],
+      "constraints": [
+        "不得自行安排视频生成或发布",
+        "输出必须是纯 JSON，不含任何说明文字"
+      ],
+      "model_requirements": {
+        "text": true,
+        "tool_calling": false,
+        "structured_output": true,
+        "vision": false,
+        "reasoning": false,
+        "min_context_window": 8192
+      },
+      "tool_profiles": [
+        "chat"
+      ],
+      "tools": [],
+      "nodes": {
+        "production.sound_director.execute": {
+          "key": "production.sound_director.general",
+          "version": "2.0.0",
+          "context_policy": {
+            "key": "production.sound_director.execute.baseline",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "agent_key": "production.editor",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "role": "剪辑师",
+      "goals": [
+        "基于镜头合约建立连续性台账，记录剪辑点、转场方式和节奏标注"
+      ],
+      "constraints": [
+        "不得自行安排视频生成或发布",
+        "输出必须是纯 JSON，不含任何说明文字"
+      ],
+      "model_requirements": {
+        "text": true,
+        "tool_calling": false,
+        "structured_output": true,
+        "vision": false,
+        "reasoning": false,
+        "min_context_window": 8192
+      },
+      "tool_profiles": [
+        "chat"
+      ],
+      "tools": [],
+      "nodes": {
+        "production.editor.execute": {
+          "key": "production.editor.general",
+          "version": "2.0.0",
+          "context_policy": {
+            "key": "production.editor.execute.baseline",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "agent_key": "production.qc",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "role": "质检员",
+      "goals": [
+        "对比镜头合约与连续性台账，执行系统性质量审查",
+        "输出镜头评审报告，标注每个镜头的通过/待修改/拒绝状态"
+      ],
+      "constraints": [
+        "不得自行安排视频生成或发布",
+        "输出必须是纯 JSON，不含任何说明文字"
+      ],
+      "model_requirements": {
+        "text": true,
+        "tool_calling": false,
+        "structured_output": true,
+        "vision": false,
+        "reasoning": false,
+        "min_context_window": 8192
+      },
+      "tool_profiles": [
+        "chat"
+      ],
+      "tools": [],
+      "nodes": {
+        "production.qc.execute": {
+          "key": "production.qc.general",
+          "version": "2.0.0",
+          "context_policy": {
+            "key": "production.qc.execute.baseline",
+            "version": "1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "agent_key": "production.character_critic",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "role": "角色评论家",
+      "goals": [
+        "评估角色塑造的真实性和一致性，提供改进建议"
+      ],
+      "constraints": [
+        "以协作建议形式输出，不产出独立落库产物",
+        "输出必须是纯 JSON，不含任何说明文字"
+      ],
+      "model_requirements": {
+        "text": true,
+        "tool_calling": false,
+        "structured_output": true,
+        "vision": false,
+        "reasoning": false,
+        "min_context_window": 8192
+      },
+      "tool_profiles": [
+        "chat"
+      ],
+      "tools": [],
+      "nodes": {
+        "production.character_critic.execute": {
+          "key": "production.character_critic.general",
+          "version": "2.0.0",
+          "context_policy": {
+            "key": "production.character_critic.execute.baseline",
+            "version": "1.0.0"
+          }
+        }
+      }
     }
   ],
   "prompts": [
@@ -1864,6 +2191,435 @@
       "output_schema": null,
       "tool_profile": null,
       "max_output_tokens": null
+    },
+    {
+      "prompt_key": "production.producer.general",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "system_template": "templates/production/producer.general.system.txt",
+      "user_template": "templates/production/producer.general.user.txt",
+      "variables": [
+        {
+          "name": "fragments",
+          "value_type": "fragments",
+          "required": true,
+          "trust": "reference",
+          "max_bytes": 65536
+        }
+      ],
+      "output_schema": {
+        "name": "creative_brief_output",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "creative_brief"
+          ],
+          "properties": {
+            "creative_brief": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "target_audience",
+                "key_messages"
+              ],
+              "properties": {
+                "target_audience": {
+                  "type": "string"
+                },
+                "tone": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "key_messages": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "constraints": {
+                  "type": "object"
+                },
+                "success_criteria": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "tool_profile": "chat",
+      "max_output_tokens": 2000
+    },
+    {
+      "prompt_key": "production.screenwriter.general",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "system_template": "templates/production/screenwriter.general.system.txt",
+      "user_template": "templates/production/screenwriter.general.user.txt",
+      "variables": [
+        {
+          "name": "fragments",
+          "value_type": "fragments",
+          "required": true,
+          "trust": "reference",
+          "max_bytes": 65536
+        }
+      ],
+      "output_schema": {
+        "name": "screenwriter_output",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "story_bible",
+            "character_bibles",
+            "script_draft"
+          ],
+          "properties": {
+            "story_bible": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "premise",
+                "theme"
+              ]
+            },
+            "character_bibles": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "character_id",
+                  "name"
+                ]
+              }
+            },
+            "script_draft": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "title",
+                "scenes"
+              ]
+            }
+          }
+        }
+      },
+      "tool_profile": "chat",
+      "max_output_tokens": 4000
+    },
+    {
+      "prompt_key": "production.director.general",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "system_template": "templates/production/director.general.system.txt",
+      "user_template": "templates/production/director.general.user.txt",
+      "variables": [
+        {
+          "name": "fragments",
+          "value_type": "fragments",
+          "required": true,
+          "trust": "reference",
+          "max_bytes": 65536
+        }
+      ],
+      "output_schema": {
+        "name": "director_output",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "directorial_treatment",
+            "shot_contracts"
+          ],
+          "properties": {
+            "directorial_treatment": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "visual_style",
+                "pacing"
+              ]
+            },
+            "shot_contracts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "shot_id",
+                  "description"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "tool_profile": "chat",
+      "max_output_tokens": 4000
+    },
+    {
+      "prompt_key": "production.cinematographer.general",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "system_template": "templates/production/cinematographer.general.system.txt",
+      "user_template": "templates/production/cinematographer.general.user.txt",
+      "variables": [
+        {
+          "name": "fragments",
+          "value_type": "fragments",
+          "required": true,
+          "trust": "reference",
+          "max_bytes": 65536
+        }
+      ],
+      "output_schema": {
+        "name": "cinematographer_output",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "collaboration_suggestions"
+          ],
+          "properties": {
+            "collaboration_suggestions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "content"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "tool_profile": "chat",
+      "max_output_tokens": 2000
+    },
+    {
+      "prompt_key": "production.performance_director.general",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "system_template": "templates/production/performance_director.general.system.txt",
+      "user_template": "templates/production/performance_director.general.user.txt",
+      "variables": [
+        {
+          "name": "fragments",
+          "value_type": "fragments",
+          "required": true,
+          "trust": "reference",
+          "max_bytes": 65536
+        }
+      ],
+      "output_schema": {
+        "name": "performance_director_output",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "performance_briefs"
+          ],
+          "properties": {
+            "performance_briefs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "character_id"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "tool_profile": "chat",
+      "max_output_tokens": 3000
+    },
+    {
+      "prompt_key": "production.sound_director.general",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "system_template": "templates/production/sound_director.general.system.txt",
+      "user_template": "templates/production/sound_director.general.user.txt",
+      "variables": [
+        {
+          "name": "fragments",
+          "value_type": "fragments",
+          "required": true,
+          "trust": "reference",
+          "max_bytes": 65536
+        }
+      ],
+      "output_schema": {
+        "name": "sound_director_output",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sound_plan"
+          ],
+          "properties": {
+            "sound_plan": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "music_style"
+              ]
+            }
+          }
+        }
+      },
+      "tool_profile": "chat",
+      "max_output_tokens": 2000
+    },
+    {
+      "prompt_key": "production.editor.general",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "system_template": "templates/production/editor.general.system.txt",
+      "user_template": "templates/production/editor.general.user.txt",
+      "variables": [
+        {
+          "name": "fragments",
+          "value_type": "fragments",
+          "required": true,
+          "trust": "reference",
+          "max_bytes": 65536
+        }
+      ],
+      "output_schema": {
+        "name": "editor_output",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "continuity_ledgers"
+          ],
+          "properties": {
+            "continuity_ledgers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "shot_id"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "tool_profile": "chat",
+      "max_output_tokens": 3000
+    },
+    {
+      "prompt_key": "production.qc.general",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "system_template": "templates/production/qc.general.system.txt",
+      "user_template": "templates/production/qc.general.user.txt",
+      "variables": [
+        {
+          "name": "fragments",
+          "value_type": "fragments",
+          "required": true,
+          "trust": "reference",
+          "max_bytes": 65536
+        }
+      ],
+      "output_schema": {
+        "name": "qc_output",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "take_reviews"
+          ],
+          "properties": {
+            "take_reviews": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "shot_id",
+                  "review_status"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "tool_profile": "chat",
+      "max_output_tokens": 3000
+    },
+    {
+      "prompt_key": "production.character_critic.general",
+      "version": "2.0.0",
+      "status": "active",
+      "executor_owner": "rust",
+      "system_template": "templates/production/character_critic.general.system.txt",
+      "user_template": "templates/production/character_critic.general.user.txt",
+      "variables": [
+        {
+          "name": "fragments",
+          "value_type": "fragments",
+          "required": true,
+          "trust": "reference",
+          "max_bytes": 65536
+        }
+      ],
+      "output_schema": {
+        "name": "character_critic_output",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "collaboration_suggestions"
+          ],
+          "properties": {
+            "collaboration_suggestions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "content"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "tool_profile": "chat",
+      "max_output_tokens": 2000
     }
   ],
   "context_policies": [
@@ -1990,6 +2746,357 @@
       "status": "active",
       "executor_owners": [
         "pi"
+      ],
+      "allowed_sources": [
+        "account_strategy",
+        "asset_store",
+        "conversation_entry",
+        "current_script",
+        "current_work",
+        "existing_topic",
+        "migration_baseline_fixture",
+        "pi_branch_entry",
+        "pi_compaction",
+        "pi_follow_up",
+        "pi_steer",
+        "pi_tool_exchange",
+        "project",
+        "script_scene",
+        "topic_batch",
+        "topic_candidate",
+        "user_instruction",
+        "voice_catalog",
+        "work_manifest"
+      ],
+      "required_sources": [
+        "user_instruction"
+      ],
+      "stable_sort": [
+        "priority",
+        "source_kind",
+        "source_id",
+        "source_version",
+        "candidate_id"
+      ]
+    },
+    {
+      "policy_key": "production.character_critic.execute.baseline",
+      "version": "1.0.0",
+      "status": "active",
+      "executor_owners": [
+        "rust"
+      ],
+      "allowed_sources": [
+        "account_strategy",
+        "asset_store",
+        "conversation_entry",
+        "current_script",
+        "current_work",
+        "existing_topic",
+        "migration_baseline_fixture",
+        "pi_branch_entry",
+        "pi_compaction",
+        "pi_follow_up",
+        "pi_steer",
+        "pi_tool_exchange",
+        "project",
+        "script_scene",
+        "topic_batch",
+        "topic_candidate",
+        "user_instruction",
+        "voice_catalog",
+        "work_manifest"
+      ],
+      "required_sources": [
+        "user_instruction"
+      ],
+      "stable_sort": [
+        "priority",
+        "source_kind",
+        "source_id",
+        "source_version",
+        "candidate_id"
+      ]
+    },
+    {
+      "policy_key": "production.cinematographer.execute.baseline",
+      "version": "1.0.0",
+      "status": "active",
+      "executor_owners": [
+        "rust"
+      ],
+      "allowed_sources": [
+        "account_strategy",
+        "asset_store",
+        "conversation_entry",
+        "current_script",
+        "current_work",
+        "existing_topic",
+        "migration_baseline_fixture",
+        "pi_branch_entry",
+        "pi_compaction",
+        "pi_follow_up",
+        "pi_steer",
+        "pi_tool_exchange",
+        "project",
+        "script_scene",
+        "topic_batch",
+        "topic_candidate",
+        "user_instruction",
+        "voice_catalog",
+        "work_manifest"
+      ],
+      "required_sources": [
+        "user_instruction"
+      ],
+      "stable_sort": [
+        "priority",
+        "source_kind",
+        "source_id",
+        "source_version",
+        "candidate_id"
+      ]
+    },
+    {
+      "policy_key": "production.director.execute.baseline",
+      "version": "1.0.0",
+      "status": "active",
+      "executor_owners": [
+        "rust"
+      ],
+      "allowed_sources": [
+        "account_strategy",
+        "asset_store",
+        "conversation_entry",
+        "current_script",
+        "current_work",
+        "existing_topic",
+        "migration_baseline_fixture",
+        "pi_branch_entry",
+        "pi_compaction",
+        "pi_follow_up",
+        "pi_steer",
+        "pi_tool_exchange",
+        "project",
+        "script_scene",
+        "topic_batch",
+        "topic_candidate",
+        "user_instruction",
+        "voice_catalog",
+        "work_manifest"
+      ],
+      "required_sources": [
+        "user_instruction"
+      ],
+      "stable_sort": [
+        "priority",
+        "source_kind",
+        "source_id",
+        "source_version",
+        "candidate_id"
+      ]
+    },
+    {
+      "policy_key": "production.editor.execute.baseline",
+      "version": "1.0.0",
+      "status": "active",
+      "executor_owners": [
+        "rust"
+      ],
+      "allowed_sources": [
+        "account_strategy",
+        "asset_store",
+        "conversation_entry",
+        "current_script",
+        "current_work",
+        "existing_topic",
+        "migration_baseline_fixture",
+        "pi_branch_entry",
+        "pi_compaction",
+        "pi_follow_up",
+        "pi_steer",
+        "pi_tool_exchange",
+        "project",
+        "script_scene",
+        "topic_batch",
+        "topic_candidate",
+        "user_instruction",
+        "voice_catalog",
+        "work_manifest"
+      ],
+      "required_sources": [
+        "user_instruction"
+      ],
+      "stable_sort": [
+        "priority",
+        "source_kind",
+        "source_id",
+        "source_version",
+        "candidate_id"
+      ]
+    },
+    {
+      "policy_key": "production.performance_director.execute.baseline",
+      "version": "1.0.0",
+      "status": "active",
+      "executor_owners": [
+        "rust"
+      ],
+      "allowed_sources": [
+        "account_strategy",
+        "asset_store",
+        "conversation_entry",
+        "current_script",
+        "current_work",
+        "existing_topic",
+        "migration_baseline_fixture",
+        "pi_branch_entry",
+        "pi_compaction",
+        "pi_follow_up",
+        "pi_steer",
+        "pi_tool_exchange",
+        "project",
+        "script_scene",
+        "topic_batch",
+        "topic_candidate",
+        "user_instruction",
+        "voice_catalog",
+        "work_manifest"
+      ],
+      "required_sources": [
+        "user_instruction"
+      ],
+      "stable_sort": [
+        "priority",
+        "source_kind",
+        "source_id",
+        "source_version",
+        "candidate_id"
+      ]
+    },
+    {
+      "policy_key": "production.producer.execute.baseline",
+      "version": "1.0.0",
+      "status": "active",
+      "executor_owners": [
+        "rust"
+      ],
+      "allowed_sources": [
+        "account_strategy",
+        "asset_store",
+        "conversation_entry",
+        "current_script",
+        "current_work",
+        "existing_topic",
+        "migration_baseline_fixture",
+        "pi_branch_entry",
+        "pi_compaction",
+        "pi_follow_up",
+        "pi_steer",
+        "pi_tool_exchange",
+        "project",
+        "script_scene",
+        "topic_batch",
+        "topic_candidate",
+        "user_instruction",
+        "voice_catalog",
+        "work_manifest"
+      ],
+      "required_sources": [
+        "user_instruction"
+      ],
+      "stable_sort": [
+        "priority",
+        "source_kind",
+        "source_id",
+        "source_version",
+        "candidate_id"
+      ]
+    },
+    {
+      "policy_key": "production.qc.execute.baseline",
+      "version": "1.0.0",
+      "status": "active",
+      "executor_owners": [
+        "rust"
+      ],
+      "allowed_sources": [
+        "account_strategy",
+        "asset_store",
+        "conversation_entry",
+        "current_script",
+        "current_work",
+        "existing_topic",
+        "migration_baseline_fixture",
+        "pi_branch_entry",
+        "pi_compaction",
+        "pi_follow_up",
+        "pi_steer",
+        "pi_tool_exchange",
+        "project",
+        "script_scene",
+        "topic_batch",
+        "topic_candidate",
+        "user_instruction",
+        "voice_catalog",
+        "work_manifest"
+      ],
+      "required_sources": [
+        "user_instruction"
+      ],
+      "stable_sort": [
+        "priority",
+        "source_kind",
+        "source_id",
+        "source_version",
+        "candidate_id"
+      ]
+    },
+    {
+      "policy_key": "production.screenwriter.execute.baseline",
+      "version": "1.0.0",
+      "status": "active",
+      "executor_owners": [
+        "rust"
+      ],
+      "allowed_sources": [
+        "account_strategy",
+        "asset_store",
+        "conversation_entry",
+        "current_script",
+        "current_work",
+        "existing_topic",
+        "migration_baseline_fixture",
+        "pi_branch_entry",
+        "pi_compaction",
+        "pi_follow_up",
+        "pi_steer",
+        "pi_tool_exchange",
+        "project",
+        "script_scene",
+        "topic_batch",
+        "topic_candidate",
+        "user_instruction",
+        "voice_catalog",
+        "work_manifest"
+      ],
+      "required_sources": [
+        "user_instruction"
+      ],
+      "stable_sort": [
+        "priority",
+        "source_kind",
+        "source_id",
+        "source_version",
+        "candidate_id"
+      ]
+    },
+    {
+      "policy_key": "production.sound_director.execute.baseline",
+      "version": "1.0.0",
+      "status": "active",
+      "executor_owners": [
+        "rust"
       ],
       "allowed_sources": [
         "account_strategy",

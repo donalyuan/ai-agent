@@ -183,6 +183,80 @@ impl AuditedModelExecutor {
             .map_err(AuditedModelError::FinishAudit)
     }
 
+    /// 为指定 agent 和模型 ID 构建不可漂移的 `FixedModelBinding`。
+    ///
+    /// 角色执行管道在发起 `execute()` 之前调用此方法一次，将当前的 Context Policy
+    /// 摘要和 Tokenizer Profile 摘要固定下来，确保整次执行可重放。
+    pub async fn build_binding(
+        &self,
+        agent_key: &str,
+        agent_version: &str,
+        model_id: Uuid,
+    ) -> Result<FixedModelBinding, AuditedModelError> {
+        // 解析模型，获取 behavior fingerprint 和 tokenizer profile 信息
+        let resolved = self
+            .models
+            .resolve(model_id)
+            .await
+            .map_err(AuditedModelError::ModelResolution)?;
+
+        // 获取 agent 的节点定义，计算各节点的 context policy 摘要
+        let agent = self
+            .registry
+            .agent(agent_key, agent_version)
+            .map_err(|e| AuditedModelError::Compile(e.to_string()))?;
+
+        let context_policy_bindings: std::collections::BTreeMap<String, FixedDefinitionBinding> =
+            agent
+                .nodes
+                .iter()
+                .map(|(node_key, reference)| {
+                    let policy_ref =
+                        reference.context_policy.as_ref().ok_or_else(|| {
+                            AuditedModelError::Compile(format!(
+                                "governed Context Policy binding is missing at node {node_key}"
+                            ))
+                        })?;
+                    let policy = self
+                        .registry
+                        .context_policy(&policy_ref.key, &policy_ref.version)
+                        .map_err(|e| AuditedModelError::Compile(e.to_string()))?;
+                    let digest = definition_digest(policy)
+                        .map_err(|e| AuditedModelError::Compile(e.to_string()))?;
+                    Ok((
+                        node_key.clone(),
+                        FixedDefinitionBinding {
+                            key: policy_ref.key.clone(),
+                            version: policy_ref.version.clone(),
+                            digest,
+                        },
+                    ))
+                })
+                .collect::<Result<_, AuditedModelError>>()?;
+
+        // 获取并摘要 tokenizer profile
+        let profile = self
+            .registry
+            .tokenizer_profile(
+                &resolved.tokenizer_profile_key,
+                &resolved.tokenizer_profile_version,
+            )
+            .map_err(|_| AuditedModelError::TokenizerProfileUnavailable)?;
+        let profile_digest = definition_digest(profile)
+            .map_err(|e| AuditedModelError::Compile(e.to_string()))?;
+
+        Ok(FixedModelBinding {
+            model_id: resolved.model_id,
+            behavior_fingerprint: resolved.behavior_fingerprint,
+            context_policy_bindings,
+            tokenizer_profile: FixedDefinitionBinding {
+                key: resolved.tokenizer_profile_key,
+                version: resolved.tokenizer_profile_version,
+                digest: profile_digest,
+            },
+        })
+    }
+
     pub async fn execute(
         &self,
         request: AuditedModelRequest,

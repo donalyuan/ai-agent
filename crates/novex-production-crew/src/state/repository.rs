@@ -381,6 +381,304 @@ impl ProductionStateRepository {
         Ok(vec![])
     }
 
+    /// 查询项目中指定产物类型的最新就绪版本（approved 优先，其次 draft）。
+    ///
+    /// 返回 `HashMap<ArtifactType, Value>` — 有内容才包含对应类型。
+    /// 用于角色执行前装配 ContextCandidate 列表。
+    pub async fn get_input_artifacts(
+        &self,
+        project_id: Uuid,
+        required: &[crate::state::artifacts::ArtifactType],
+    ) -> ProductionResult<std::collections::HashMap<crate::state::artifacts::ArtifactType, Value>> {
+        let mut result = std::collections::HashMap::new();
+
+        for &artifact_type in required {
+            let table = Self::artifact_type_to_table_key(artifact_type);
+            // 按状态优先级（approved=0 > draft=1）和版本降序取最新一条
+            let sql = format!(
+                "SELECT row_to_json(t) FROM {} t \
+                 WHERE production_project_id = $1 AND status IN ('approved','draft') \
+                 ORDER BY CASE status WHEN 'approved' THEN 0 ELSE 1 END, version DESC LIMIT 1",
+                table
+            );
+            let row: Option<Value> = sqlx::query_scalar(&sql)
+                .bind(project_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(ProductionError::Database)?;
+
+            if let Some(row) = row {
+                result.insert(artifact_type, row);
+            }
+        }
+        Ok(result)
+    }
+
+    /// 将 AI 输出的产物写入数据库（version 自增，status=draft）。
+    ///
+    /// `output` 是整个 AI 响应 JSON；方法按 `artifact_type` 提取对应键并插入。
+    /// 返回本次插入的 `ArtifactSummary` 列表（一个产物类型可能对应多条记录，如 character_bibles）。
+    pub async fn save_artifact(
+        &self,
+        project_id: Uuid,
+        artifact_type: crate::state::artifacts::ArtifactType,
+        output: &Value,
+        created_by: &str,
+    ) -> ProductionResult<Vec<crate::executor::role_executor::ArtifactSummary>> {
+        use crate::executor::role_executor::ArtifactSummary;
+        use crate::state::artifacts::ArtifactType;
+
+        let mut summaries = Vec::new();
+
+        match artifact_type {
+            // --- 无额外约束字段的单条产物 ---
+            ArtifactType::CreativeBrief
+            | ArtifactType::StoryBible
+            | ArtifactType::ScriptDraft
+            | ArtifactType::DirectorialTreatment
+            | ArtifactType::SoundPlan => {
+                let json_key = Self::artifact_type_to_output_key(artifact_type);
+                let content = output
+                    .get(json_key)
+                    .cloned()
+                    .ok_or_else(|| ProductionError::InvalidArtifactSchema {
+                        details: format!("AI 输出缺少必需键: {}", json_key),
+                    })?;
+                let table = Self::artifact_type_to_table_key(artifact_type);
+                let (id, version) = self
+                    .insert_simple_artifact(project_id, table, &content, created_by)
+                    .await?;
+                summaries.push(ArtifactSummary {
+                    artifact_type,
+                    id,
+                    version,
+                    character_id: None,
+                    shot_id: None,
+                });
+            }
+
+            // --- 按 character_id 分条的产物数组 ---
+            ArtifactType::CharacterBible | ArtifactType::PerformanceBrief => {
+                let json_key = Self::artifact_type_to_output_key(artifact_type);
+                let items = output
+                    .get(json_key)
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| ProductionError::InvalidArtifactSchema {
+                        details: format!("AI 输出键 {} 应为数组", json_key),
+                    })?;
+                let table = Self::artifact_type_to_table_key(artifact_type);
+                for item in items {
+                    let character_id = item
+                        .get("character_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("default")
+                        .to_string();
+                    let (id, version) = self
+                        .insert_character_artifact(
+                            project_id, table, &character_id, item, created_by,
+                        )
+                        .await?;
+                    summaries.push(ArtifactSummary {
+                        artifact_type,
+                        id,
+                        version,
+                        character_id: Some(character_id),
+                        shot_id: None,
+                    });
+                }
+            }
+
+            // --- 按 shot_id 分条的产物数组 ---
+            ArtifactType::ShotContract
+            | ArtifactType::ContinuityLedger
+            | ArtifactType::TakeReview => {
+                let json_key = Self::artifact_type_to_output_key(artifact_type);
+                let items = output
+                    .get(json_key)
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| ProductionError::InvalidArtifactSchema {
+                        details: format!("AI 输出键 {} 应为数组", json_key),
+                    })?;
+                let table = Self::artifact_type_to_table_key(artifact_type);
+                for item in items {
+                    let shot_id = item
+                        .get("shot_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("default")
+                        .to_string();
+                    let scene_id = item
+                        .get("scene_id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| {
+                            item.get("scene_number")
+                                .and_then(|v| v.as_i64())
+                                .map(|_| "1")
+                        })
+                        .unwrap_or("1")
+                        .to_string();
+                    let (id, version) = self
+                        .insert_shot_artifact(
+                            project_id, table, &shot_id, &scene_id, item, created_by,
+                        )
+                        .await?;
+                    summaries.push(ArtifactSummary {
+                        artifact_type,
+                        id,
+                        version,
+                        character_id: None,
+                        shot_id: Some(shot_id),
+                    });
+                }
+            }
+        }
+
+        Ok(summaries)
+    }
+
+    /// 插入无额外约束字段的单条产物，返回 (id, version)
+    async fn insert_simple_artifact(
+        &self,
+        project_id: Uuid,
+        table: &str,
+        content: &Value,
+        created_by: &str,
+    ) -> ProductionResult<(Uuid, i32)> {
+        let sql = format!(
+            "INSERT INTO {} (production_project_id, version, content, created_by) \
+             VALUES ($1, (SELECT COALESCE(MAX(version), 0) + 1 FROM {} WHERE production_project_id = $1), $2, $3) \
+             RETURNING id, version",
+            table, table
+        );
+        let row: (Uuid, i32) = sqlx::query_as(&sql)
+            .bind(project_id)
+            .bind(content)
+            .bind(created_by)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(ProductionError::Database)?;
+        Ok(row)
+    }
+
+    /// 插入按 character_id 分条的产物，返回 (id, version)
+    async fn insert_character_artifact(
+        &self,
+        project_id: Uuid,
+        table: &str,
+        character_id: &str,
+        content: &Value,
+        created_by: &str,
+    ) -> ProductionResult<(Uuid, i32)> {
+        let sql = format!(
+            "INSERT INTO {} (production_project_id, character_id, version, content, created_by) \
+             VALUES ($1, $2, \
+               (SELECT COALESCE(MAX(version), 0) + 1 FROM {} \
+                WHERE production_project_id = $1 AND character_id = $2), \
+               $3, $4) \
+             RETURNING id, version",
+            table, table
+        );
+        let row: (Uuid, i32) = sqlx::query_as(&sql)
+            .bind(project_id)
+            .bind(character_id)
+            .bind(content)
+            .bind(created_by)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(ProductionError::Database)?;
+        Ok(row)
+    }
+
+    /// 插入按 shot_id 分条的产物（shot_contracts、continuity_ledgers、take_reviews），返回 (id, version)
+    async fn insert_shot_artifact(
+        &self,
+        project_id: Uuid,
+        table: &str,
+        shot_id: &str,
+        scene_id: &str,
+        content: &Value,
+        created_by: &str,
+    ) -> ProductionResult<(Uuid, i32)> {
+        // shot_contracts 表需要 scene_id；其他表（continuity_ledger、take_review）只需 shot_id
+        // 统一包含 scene_id，无 scene_id 列的表忽略该插入（通过表名区分）
+        let sql = if table == "shot_contracts" {
+            format!(
+                "INSERT INTO {} (production_project_id, shot_id, scene_id, version, content, created_by) \
+                 VALUES ($1, $2, $3, \
+                   (SELECT COALESCE(MAX(version), 0) + 1 FROM {} \
+                    WHERE production_project_id = $1 AND shot_id = $2), \
+                   $4, $5) \
+                 RETURNING id, version",
+                table, table
+            )
+        } else {
+            format!(
+                "INSERT INTO {} (production_project_id, shot_id, version, content, created_by) \
+                 VALUES ($1, $2, \
+                   (SELECT COALESCE(MAX(version), 0) + 1 FROM {} \
+                    WHERE production_project_id = $1 AND shot_id = $2), \
+                   $3, $4) \
+                 RETURNING id, version",
+                table, table
+            )
+        };
+
+        let row: (Uuid, i32) = if table == "shot_contracts" {
+            sqlx::query_as(&sql)
+                .bind(project_id)
+                .bind(shot_id)
+                .bind(scene_id)
+                .bind(content)
+                .bind(created_by)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(ProductionError::Database)?
+        } else {
+            sqlx::query_as(&sql)
+                .bind(project_id)
+                .bind(shot_id)
+                .bind(content)
+                .bind(created_by)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(ProductionError::Database)?
+        };
+        Ok(row)
+    }
+
+    /// 产物类型 → DB 表名（用于动态 SQL，来自白名单，不存在注入风险）
+    fn artifact_type_to_table_key(artifact_type: crate::state::artifacts::ArtifactType) -> &'static str {
+        use crate::state::artifacts::ArtifactType;
+        match artifact_type {
+            ArtifactType::CreativeBrief => "creative_briefs",
+            ArtifactType::StoryBible => "story_bibles",
+            ArtifactType::CharacterBible => "character_bibles",
+            ArtifactType::ScriptDraft => "script_drafts",
+            ArtifactType::DirectorialTreatment => "directorial_treatments",
+            ArtifactType::ShotContract => "shot_contracts",
+            ArtifactType::PerformanceBrief => "performance_briefs",
+            ArtifactType::SoundPlan => "sound_plans",
+            ArtifactType::ContinuityLedger => "continuity_ledgers",
+            ArtifactType::TakeReview => "take_reviews",
+        }
+    }
+
+    /// 产物类型 → AI 输出 JSON 顶层键名（与 validate_output 中的 key 保持一致）
+    fn artifact_type_to_output_key(artifact_type: crate::state::artifacts::ArtifactType) -> &'static str {
+        use crate::state::artifacts::ArtifactType;
+        match artifact_type {
+            ArtifactType::CreativeBrief => "creative_brief",
+            ArtifactType::StoryBible => "story_bible",
+            ArtifactType::CharacterBible => "character_bibles",
+            ArtifactType::ScriptDraft => "script_draft",
+            ArtifactType::DirectorialTreatment => "directorial_treatment",
+            ArtifactType::ShotContract => "shot_contracts",
+            ArtifactType::PerformanceBrief => "performance_briefs",
+            ArtifactType::SoundPlan => "sound_plan",
+            ArtifactType::ContinuityLedger => "continuity_ledgers",
+            ArtifactType::TakeReview => "take_reviews",
+        }
+    }
+
     /// 校验 artifact_type 并返回对应表名（白名单）
     fn validate_artifact_table(artifact_type: &str) -> ProductionResult<&'static str> {
         match artifact_type {

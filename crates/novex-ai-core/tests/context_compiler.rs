@@ -874,7 +874,7 @@ fn every_active_node_preserves_its_under_budget_legacy_compile_output_and_reads_
             checked += 1;
         }
     }
-    assert_eq!(checked, 18);
+    assert_eq!(checked, 27);
 }
 
 #[test]

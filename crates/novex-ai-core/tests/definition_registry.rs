@@ -70,11 +70,11 @@ fn load_registry_document(
 #[test]
 fn rust_loader_validates_registry_references_templates_and_owner() {
     let registry = DefinitionRegistry::load(registry_root()).unwrap();
-    assert_eq!(registry.agents().len(), 12);
-    assert_eq!(registry.prompts().len(), 26);
-    assert_eq!(registry.context_policies().len(), 18);
+    assert_eq!(registry.agents().len(), 21);
+    assert_eq!(registry.prompts().len(), 35);
+    assert_eq!(registry.context_policies().len(), 27);
     assert_eq!(registry.tokenizer_profiles().len(), 3);
-    assert_eq!(registry.release_evidence().len(), 59);
+    assert_eq!(registry.release_evidence().len(), 86);
     assert!(registry
         .active_agent("personal.general")
         .unwrap()
