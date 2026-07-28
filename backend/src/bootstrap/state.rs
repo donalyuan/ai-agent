@@ -7,6 +7,8 @@ use crate::application::asset_generation::AssetGenerationService;
 use crate::application::conversations::ConversationService;
 use crate::application::health::HealthService;
 use crate::application::materials::MaterialService;
+use crate::application::production_cancellation::ProductionCancellationService;
+use crate::application::production_workflow::ProductionWorkflowService;
 use crate::application::projects::ProjectService;
 use crate::application::publication::PublicationService;
 use crate::application::scripts::ScriptService;
@@ -108,6 +110,15 @@ impl AppState {
 
     pub fn with_llm_client(mut self, llm_client: Arc<dyn LLMClient>) -> Self {
         self.model_client_resolver = Some(Arc::new(StaticModelClientResolver::new(llm_client)));
+        self
+    }
+
+    /// 覆盖进程级 DefinitionRegistry，供受控部署装配和合同测试注入不可变 registry。
+    pub fn with_definition_registry(
+        mut self,
+        registry: Arc<novex_ai_core::DefinitionRegistry>,
+    ) -> Self {
+        self.definition_registry = Some(registry);
         self
     }
 
@@ -250,6 +261,27 @@ impl AppState {
         ))
     }
 
+    pub(crate) fn production_cancellation_service(
+        &self,
+    ) -> Result<ProductionCancellationService, AppStateError> {
+        let pool = self.database_pool()?;
+        Ok(ProductionCancellationService::new(
+            novex_production_crew::durable::repository::DurableProductionRepository::new(pool),
+            Arc::new(self.work_generation_service()?),
+        ))
+    }
+
+    pub(crate) fn production_workflow_service(
+        &self,
+    ) -> Result<ProductionWorkflowService, AppStateError> {
+        let pool = self.database_pool()?;
+        Ok(ProductionWorkflowService::new(
+            pool.clone(),
+            self.definition_registry()?,
+            self.audited_model_executor(pool)?,
+        ))
+    }
+
     pub(crate) fn work_library_service(&self) -> Result<WorkLibraryService, AppStateError> {
         Ok(WorkLibraryService::new(
             PostgresWorkLibraryRepository::new(self.database_pool()?),
@@ -265,9 +297,7 @@ impl AppState {
         &self,
     ) -> Result<novex_production_crew::orchestrator::ProductionOrchestrator, AppStateError> {
         use novex_production_crew::{
-            gates::GateRegistry,
-            orchestrator::ProductionOrchestrator,
-            roles::RoleRegistry,
+            gates::GateRegistry, orchestrator::ProductionOrchestrator, roles::RoleRegistry,
         };
         use std::path::PathBuf;
 
@@ -280,9 +310,8 @@ impl AppState {
             std::env::var("PRODUCTION_ROLES_DIR")
                 .unwrap_or_else(|_| "/app/crates/novex-production-crew/roles".into()),
         );
-        let role_registry = RoleRegistry::bootstrap(&roles_dir).map_err(|_e| {
-            AppStateError::MissingDependency("production role definitions")
-        })?;
+        let role_registry = RoleRegistry::bootstrap(&roles_dir)
+            .map_err(|_e| AppStateError::MissingDependency("production role definitions"))?;
 
         let gate_registry = GateRegistry::bootstrap();
         let mut orchestrator = ProductionOrchestrator::new(
@@ -292,7 +321,51 @@ impl AppState {
         );
         orchestrator.audited_executor = Some(audited_executor);
         orchestrator.definition_registry = Some(definition_registry);
+        let workflow_integration = Arc::new(
+            crate::application::production_workflow_integration::ProductionWorkflowIntegrationService::new(
+                self.asset_generation_service()?,
+                Some(self.work_generation_service()?),
+            ),
+        );
+        orchestrator.scene_visual_manifest_port = Some(workflow_integration.clone());
+        orchestrator.work_generation_planning_port = Some(workflow_integration.clone());
+        orchestrator.work_generation_run_port = Some(workflow_integration);
+        orchestrator.media_evidence_provider = Some(Arc::new(
+            crate::application::production_media_evidence::LocalFfprobeMediaEvidenceProvider::new(
+                self.config.asset_storage_root.clone(),
+            ),
+        ));
+        orchestrator.work_version_rework_port = Some(Arc::new(
+            crate::application::production_workflow_integration::ProductionWorkVersionReworkService::new(
+                PostgresWorkLibraryRepository::new(orchestrator.pool.clone()),
+            ),
+        ));
         Ok(orchestrator)
+    }
+
+    /// 构造进程级 Full Crew Runner；Runner 只消费 Redis 唤醒并从 PostgreSQL 恢复状态。
+    pub fn production_runner(
+        &self,
+    ) -> Result<crate::application::production_runner::ProductionWorkflowRunner, AppStateError>
+    {
+        let orchestrator = std::sync::Arc::new(self.production_orchestrator()?);
+        let queue_key = std::env::var("NOVEX_PRODUCTION_WAKEUP_QUEUE")
+            .unwrap_or_else(|_| "novex:production:wakeups".into());
+        crate::application::production_runner::ProductionWorkflowRunner::new(
+            self.database_pool()?,
+            orchestrator,
+            self.redis_client.clone(),
+            queue_key,
+            std::env::var("NOVEX_PRODUCTION_WORKER_ID")
+                .unwrap_or_else(|_| format!("api-runner-{}", uuid::Uuid::new_v4())),
+            std::time::Duration::from_secs(
+                std::env::var("NOVEX_PRODUCTION_LEASE_SECONDS")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(60),
+            ),
+        )
+        .map_err(|_| AppStateError::MissingDependency("production runner configuration"))
     }
 
     pub(crate) fn publication_service(&self) -> Result<PublicationService, AppStateError> {

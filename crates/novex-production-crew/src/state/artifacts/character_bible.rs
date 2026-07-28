@@ -23,7 +23,9 @@ pub struct CharacterBible {
 impl CharacterBible {
     pub fn validate(content: &Value) -> Result<(), String> {
         let name = content.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        if name.is_empty() { return Err("character_bible 必须包含非空 name".into()); }
+        if name.is_empty() {
+            return Err("character_bible 必须包含非空 name".into());
+        }
         Ok(())
     }
 }

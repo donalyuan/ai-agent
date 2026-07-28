@@ -30,9 +30,7 @@ pub fn route_execution(project: &ProductionProject) -> ProductionResult<Executio
         "fast_lane" => Ok(ExecutionPlan {
             project_type: ProjectType::FastLane,
             role_sequence: vec![],
-            gate_checkpoints: vec![
-                (0, "budget_gate".to_string()),
-            ],
+            gate_checkpoints: vec![(0, "budget_gate".to_string())],
         }),
         "full_crew" => Ok(ExecutionPlan {
             project_type: ProjectType::FullCrew,
@@ -48,11 +46,11 @@ pub fn route_execution(project: &ProductionProject) -> ProductionResult<Executio
             ],
             // Gate 检查点：在第 N 个角色执行前插入
             gate_checkpoints: vec![
-                (0, "budget_gate".to_string()),         // Producer 执行前
-                (1, "producer_gate".to_string()),       // Screenwriter 执行前
+                (0, "resource_safety_gate".to_string()), // Producer 执行前
+                (1, "producer_gate".to_string()),        // Screenwriter 执行前
                 (2, "script_approval_gate".to_string()), // Director 执行前
                 (3, "technical_feasibility_gate".to_string()), // Cinematographer 后
-                (7, "quality_gate".to_string()),        // QC 完成后
+                (7, "quality_gate".to_string()),         // QC 完成后
             ],
         }),
         other => Err(ProductionError::InvalidRoleSequence {
@@ -98,6 +96,14 @@ mod tests {
         assert_eq!(plan.project_type, ProjectType::FullCrew);
         assert!(!plan.role_sequence.is_empty());
         assert_eq!(plan.role_sequence[0], "producer");
+        assert!(plan
+            .gate_checkpoints
+            .iter()
+            .any(|(_, gate)| gate == "resource_safety_gate"));
+        assert!(plan
+            .gate_checkpoints
+            .iter()
+            .all(|(_, gate)| gate != "budget_gate"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{migrate::Migrate, postgres::PgPoolOptions, PgPool};
 use uuid::Uuid;
 
 mod support;
@@ -446,6 +446,14 @@ async fn migrations_create_video_agent_core_schema() {
         constraint_definition(&test_pool, "agent_runs", "agent_runs_type_check").await;
     assert!(conversation_agent_constraint.contains("sound"));
     assert!(run_agent_constraint.contains("sound"));
+    assert!(
+        run_agent_constraint.contains("work"),
+        "production migration must preserve the existing work agent type"
+    );
+    assert!(
+        run_agent_constraint.contains("production"),
+        "production role execution must be accepted by agent_runs"
+    );
 
     assert!(
         table_exists(&test_pool, "tos_staging_tool_configs").await,
@@ -1098,6 +1106,375 @@ async fn migrations_create_video_agent_core_schema() {
     .expect("script child menu seed query should run");
     assert_eq!(script_child_count, 1);
 
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn migrations_create_durable_full_crew_schema() {
+    let base_url = database_url();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let database_name = format!("video_agent_full_crew_schema_test_{}", suffix);
+    let admin_url = with_database_name(&base_url, "postgres");
+    let test_url = with_database_name(&base_url, &database_name);
+
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&admin_url)
+        .await
+        .expect("admin database should be reachable");
+    let database_name = create_database(&admin_pool, &admin_url, &database_name).await;
+    let test_pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&test_url)
+        .await
+        .expect("temporary full crew database should be reachable");
+
+    sqlx::migrate!("./migrations")
+        .run(&test_pool)
+        .await
+        .expect("full crew migrations should apply to a fresh database");
+
+    for table in [
+        "production_plan_snapshots",
+        "production_runs",
+        "production_revision_epochs",
+        "production_steps",
+        "production_step_attempts",
+        "artifact_package_snapshots",
+        "artifact_package_items",
+        "production_gate_decisions",
+        "production_resource_reservations",
+        "production_resource_usage",
+        "production_commands",
+        "production_domain_links",
+        "required_take_inventories",
+        "required_takes",
+        "media_evidence_snapshots",
+        "take_review_ledger_versions",
+    ] {
+        assert!(
+            table_exists(&test_pool, table).await,
+            "missing table {table}"
+        );
+    }
+
+    for column in [
+        "project_id",
+        "topic_id",
+        "source_snapshot",
+        "source_fingerprint",
+        "source_locked_at",
+        "script_promoted_at",
+        "archived_at",
+    ] {
+        assert!(
+            column_exists(&test_pool, "production_projects", column).await,
+            "production_projects.{column} should exist"
+        );
+    }
+
+    for column in [
+        "plan_snapshot_id",
+        "status",
+        "current_revision_epoch",
+        "resource_limits",
+        "binding_snapshot",
+        "cancellation_intent",
+        "actor_type",
+        "actor_id",
+    ] {
+        assert!(
+            column_exists(&test_pool, "production_runs", column).await,
+            "production_runs.{column} should exist"
+        );
+    }
+
+    for column in [
+        "revision_epoch",
+        "step_key",
+        "step_type",
+        "dependencies",
+        "lease_owner",
+        "lease_expires_at",
+        "attempt",
+        "side_effect_state",
+        "agent_run_id",
+        "model_call_id",
+        "context_snapshot_id",
+    ] {
+        assert!(
+            column_exists(&test_pool, "production_steps", column).await,
+            "production_steps.{column} should exist"
+        );
+    }
+
+    assert!(
+        index_exists(
+            &test_pool,
+            "production_projects_one_active_intent_per_topic"
+        )
+        .await,
+        "a topic must have at most one active full crew intent"
+    );
+    assert!(
+        index_exists(&test_pool, "production_runs_one_per_intent").await,
+        "an intent must have at most one run"
+    );
+    assert!(
+        index_exists(&test_pool, "production_steps_one_active_lease").await,
+        "a step must not expose two active claims"
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "production_commands",
+            "production_commands_idempotency_unique"
+        )
+        .await
+    );
+    assert!(
+        constraint_exists(
+            &test_pool,
+            "artifact_package_items",
+            "artifact_package_items_identity_unique"
+        )
+        .await
+    );
+    for constraint in [
+        "take_review_ledger_versions_pkey",
+        "take_review_ledger_versions_ledger_unique",
+        "take_review_ledger_versions_shot_unique",
+    ] {
+        assert!(
+            constraint_exists(&test_pool, "take_review_ledger_versions", constraint).await,
+            "take_review_ledger_versions must preserve exact append-only ledger mappings"
+        );
+    }
+    for (table, trigger) in [
+        (
+            "production_script_invalidations",
+            "production_script_invalidations_append_only",
+        ),
+        (
+            "production_package_invalidations",
+            "production_package_invalidations_append_only",
+        ),
+        (
+            "take_review_ledger_versions",
+            "take_review_ledger_versions_append_only",
+        ),
+        ("continuity_ledgers", "continuity_ledgers_append_only"),
+        ("take_reviews", "take_reviews_append_only"),
+    ] {
+        assert!(
+            trigger_exists(&test_pool, table, trigger).await,
+            "{table} must reject UPDATE and DELETE at the database boundary"
+        );
+    }
+
+    for column in [
+        "run_id",
+        "step_id",
+        "attempt",
+        "revision_epoch",
+        "work_version_id",
+        "inventory_id",
+        "evidence_snapshot_id",
+        "version",
+        "content_digest",
+        "audit_status",
+    ] {
+        assert!(
+            column_exists(&test_pool, "continuity_ledgers", column).await,
+            "continuity_ledgers.{column} should exist"
+        );
+        assert!(
+            column_exists(&test_pool, "take_reviews", column).await,
+            "take_reviews.{column} should exist"
+        );
+    }
+
+    let forbidden_columns = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name LIKE 'production_%'
+          AND (
+              lower(column_name) LIKE '%price%'
+              OR lower(column_name) LIKE '%currency%'
+              OR lower(column_name) LIKE '%amount%'
+              OR lower(column_name) LIKE '%api_key%'
+              OR lower(column_name) LIKE '%authorization%'
+          )
+        "#,
+    )
+    .fetch_all(&test_pool)
+    .await
+    .expect("sensitive and monetary column audit should run");
+    assert!(
+        forbidden_columns.is_empty(),
+        "full crew schema must not persist money or credentials: {forbidden_columns:?}"
+    );
+
+    test_pool.close().await;
+    drop_database(&admin_pool, &database_name).await;
+    admin_pool.close().await;
+}
+
+#[tokio::test]
+async fn durable_full_crew_migration_preserves_legacy_and_formal_domain_data() {
+    let base_url = database_url();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let database_name = format!("video_agent_full_crew_upgrade_test_{}", suffix);
+    let admin_url = with_database_name(&base_url, "postgres");
+    let test_url = with_database_name(&base_url, &database_name);
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&admin_url)
+        .await
+        .expect("admin database should be reachable");
+    let database_name = create_database(&admin_pool, &admin_url, &database_name).await;
+    let test_pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&test_url)
+        .await
+        .expect("temporary upgrade database should be reachable");
+
+    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+    let mut connection = test_pool.acquire().await.expect("migration connection");
+    connection
+        .ensure_migrations_table()
+        .await
+        .expect("migration history should be initialized");
+    for migration in MIGRATOR
+        .iter()
+        .filter(|migration| migration.version <= 20260727020000)
+    {
+        connection
+            .apply(migration)
+            .await
+            .expect("legacy baseline migration should apply");
+    }
+
+    let project_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO projects (name, positioning) VALUES ('历史账号', '历史定位') RETURNING id",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .expect("formal project fixture should insert");
+    let script_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO scripts (project_id, title, hook, content, status)
+        VALUES ($1, '历史脚本', '历史 hook', '{}'::jsonb, 'approved') RETURNING id
+        "#,
+    )
+    .bind(project_id)
+    .fetch_one(&mut *connection)
+    .await
+    .expect("formal script fixture should insert");
+    sqlx::query(
+        "INSERT INTO scenes (script_id, sequence, narration, visual_description, emotion, duration_sec) VALUES ($1, 1, '旁白', '画面', '平静', 5)",
+    )
+    .bind(script_id)
+    .execute(&mut *connection)
+    .await
+    .expect("formal scene fixture should insert");
+    let production_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO production_projects (title, project_type, status, user_id, metadata)
+        VALUES ('历史制作骨架', 'full_crew', 'created', $1, '{}'::jsonb) RETURNING id
+        "#,
+    )
+    .bind(Uuid::new_v4())
+    .fetch_one(&mut *connection)
+    .await
+    .expect("legacy production fixture should insert");
+    sqlx::query(
+        r#"
+        INSERT INTO creative_briefs (production_project_id, content)
+        VALUES ($1, '{"target_audience":"历史受众","key_messages":[]}'::jsonb)
+        "#,
+    )
+    .bind(production_id)
+    .execute(&mut *connection)
+    .await
+    .expect("legacy artifact fixture should insert");
+    sqlx::query(
+        r#"
+        INSERT INTO continuity_ledgers (production_project_id, shot_id, content)
+        VALUES ($1, 'legacy-shot', '{}'::jsonb)
+        "#,
+    )
+    .bind(production_id)
+    .execute(&mut *connection)
+    .await
+    .expect("legacy quality fixture should insert");
+
+    let durable_migration = MIGRATOR
+        .iter()
+        .find(|migration| migration.version == 20260727030000)
+        .expect("durable migration should exist");
+    connection
+        .apply(durable_migration)
+        .await
+        .expect("durable migration should upgrade the old schema");
+    drop(connection);
+
+    let legacy_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM production_projects WHERE id = $1")
+            .bind(production_id)
+            .fetch_one(&test_pool)
+            .await
+            .expect("legacy production should remain queryable");
+    assert_eq!(legacy_status, "legacy_unbound");
+    let artifact_audit = sqlx::query_scalar::<_, String>(
+        "SELECT audit_status FROM creative_briefs WHERE production_project_id = $1",
+    )
+    .bind(production_id)
+    .fetch_one(&test_pool)
+    .await
+    .expect("legacy artifact should remain queryable");
+    assert_eq!(artifact_audit, "legacy_partial_audit");
+    let quality_audit = sqlx::query_scalar::<_, String>(
+        "SELECT audit_status FROM continuity_ledgers WHERE production_project_id = $1",
+    )
+    .bind(production_id)
+    .fetch_one(&test_pool)
+    .await
+    .expect("legacy quality evidence should remain queryable");
+    assert_eq!(quality_audit, "legacy_partial_audit");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM scripts WHERE id = $1")
+            .bind(script_id)
+            .fetch_one(&test_pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM scenes WHERE script_id = $1")
+            .bind(script_id)
+            .fetch_one(&test_pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        sqlx::query("UPDATE production_projects SET status = 'active' WHERE id = $1")
+            .bind(production_id)
+            .execute(&test_pool)
+            .await
+            .is_err(),
+        "legacy_unbound production must not become a startable bound intent"
+    );
+
+    MIGRATOR
+        .run(&test_pool)
+        .await
+        .expect("replaying the complete migration set should be idempotent");
     test_pool.close().await;
     drop_database(&admin_pool, &database_name).await;
     admin_pool.close().await;

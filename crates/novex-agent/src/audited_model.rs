@@ -1,12 +1,13 @@
 use async_trait::async_trait;
 use novex_ai_core::{
-    canonical_json, definition_digest, sha256_hex, validate_model_capabilities,
+    canonical_json, definition_digest, redact_audit_value, sha256_hex, validate_model_capabilities,
     CompileFailureStage, ContextAtomicGroup, ContextCandidate, ContextCompileAttempt,
     ContextCompileRequest, ContextCompiler, ContextPayload, ContextPriority, DefinitionRegistry,
     ExecutorOwner, ModelCapabilities, PromptCompiler, PromptPrepareInput, PromptSnapshot,
     TrustLevel,
 };
 use novex_model::{LLMClient, LLMError, LLMJsonSchema, LLMPrompt};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -22,7 +23,8 @@ pub enum AuditedCallOwner {
     EvalRun(Uuid),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FixedModelBinding {
     pub model_id: Uuid,
     pub behavior_fingerprint: String,
@@ -32,11 +34,20 @@ pub struct FixedModelBinding {
     pub tokenizer_profile: FixedDefinitionBinding,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FixedDefinitionBinding {
     pub key: String,
     pub version: String,
     pub digest: String,
+}
+
+/// Run 创建时可持久化的完整模型 binding 证据，不包含 client、凭据或原始认证配置。
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedBindingEvidence {
+    pub binding: FixedModelBinding,
+    pub capabilities: ModelCapabilities,
+    pub max_output_tokens: u64,
 }
 
 #[derive(Clone)]
@@ -150,6 +161,130 @@ struct ProviderOutput {
     known_secrets: Vec<String>,
 }
 
+/// 已完成 Context 编译和审计持久化、但尚未调用 provider 的请求。
+pub struct PreparedAuditedModelCall {
+    owner: AuditedCallOwner,
+    model_call_id: Uuid,
+    context_snapshot_id: Uuid,
+    prompt: LLMPrompt,
+    client: Arc<dyn LLMClient>,
+    known_secrets: Vec<String>,
+    context_audit: Arc<dyn ContextAuditStore>,
+}
+
+impl PreparedAuditedModelCall {
+    pub fn model_call_id(&self) -> Uuid {
+        self.model_call_id
+    }
+
+    pub fn context_snapshot_id(&self) -> Uuid {
+        self.context_snapshot_id
+    }
+
+    /// 调用 provider，但把 ModelCall 终态留给业务事务统一提交。
+    pub async fn execute(self) -> PreparedAuditedModelOutcome {
+        match self.client.generate_script(self.prompt).await {
+            Ok(output) => PreparedAuditedModelOutcome::Succeeded(PreparedAuditedModelSuccess {
+                model_call_id: self.model_call_id,
+                output,
+                known_secrets: self.known_secrets,
+            }),
+            Err(error) => {
+                let profile_incompatible = is_provider_context_overflow(&error);
+                let result_uncertain = matches!(error, LLMError::Timeout | LLMError::Transport(_));
+                let error_kind = if profile_incompatible {
+                    "tokenizer_profile_incompatible"
+                } else {
+                    llm_error_kind(&error)
+                };
+                let raw_message = error.to_string();
+                let message = redact_audit_value(&json!(raw_message), &self.known_secrets)
+                    .as_str()
+                    .unwrap_or("provider error was redacted")
+                    .to_string();
+                if profile_incompatible {
+                    let _ = self
+                        .context_audit
+                        .block_tokenizer_profile_binding(self.owner)
+                        .await;
+                }
+                PreparedAuditedModelOutcome::Failed(PreparedAuditedModelFailure {
+                    model_call_id: self.model_call_id,
+                    error_kind: error_kind.into(),
+                    message: message.clone(),
+                    result_uncertain,
+                    finish: FinishAuditedCall {
+                        id: self.model_call_id,
+                        status: AuditedTerminalStatus::Failed,
+                        output_snapshot: None,
+                        usage_snapshot: None,
+                        error_snapshot: Some(json!({
+                            "kind": error_kind,
+                            "message": message,
+                            "result_uncertain": result_uncertain,
+                        })),
+                        structured_parse_status: None,
+                        known_secrets: self.known_secrets,
+                    },
+                })
+            }
+        }
+    }
+}
+
+/// provider 已成功返回，但 ModelCall 尚未写入终态。
+pub struct PreparedAuditedModelSuccess {
+    pub model_call_id: Uuid,
+    pub output: String,
+    known_secrets: Vec<String>,
+}
+
+impl PreparedAuditedModelSuccess {
+    pub fn contains_known_secret(&self) -> bool {
+        self.known_secrets
+            .iter()
+            .any(|secret| !secret.is_empty() && self.output.contains(secret))
+    }
+
+    pub fn finish(
+        self,
+        status: AuditedTerminalStatus,
+        usage_snapshot: Option<Value>,
+        error_snapshot: Option<Value>,
+        structured_parse_status: Option<String>,
+    ) -> FinishAuditedCall {
+        FinishAuditedCall {
+            id: self.model_call_id,
+            status,
+            output_snapshot: Some(json!({"text": self.output})),
+            usage_snapshot,
+            error_snapshot,
+            structured_parse_status,
+            known_secrets: self.known_secrets,
+        }
+    }
+}
+
+/// provider 已失败，调用方必须把该证据与业务失败终态一起提交。
+pub struct PreparedAuditedModelFailure {
+    pub model_call_id: Uuid,
+    pub error_kind: String,
+    pub message: String,
+    pub result_uncertain: bool,
+    finish: FinishAuditedCall,
+}
+
+impl PreparedAuditedModelFailure {
+    pub fn into_finish(self) -> FinishAuditedCall {
+        self.finish
+    }
+}
+
+pub enum PreparedAuditedModelOutcome {
+    Succeeded(PreparedAuditedModelSuccess),
+    Failed(PreparedAuditedModelFailure),
+}
+
 pub struct AuditedModelExecutor {
     registry: Arc<DefinitionRegistry>,
     models: Arc<dyn BoundModelResolver>,
@@ -193,7 +328,19 @@ impl AuditedModelExecutor {
         agent_version: &str,
         model_id: Uuid,
     ) -> Result<FixedModelBinding, AuditedModelError> {
-        // 解析模型，获取 behavior fingerprint 和 tokenizer profile 信息
+        Ok(self
+            .build_binding_evidence(agent_key, agent_version, model_id)
+            .await?
+            .binding)
+    }
+
+    /// 解析并校验 Run 创建时需要冻结的 Definition/model binding 证据。
+    pub async fn build_binding_evidence(
+        &self,
+        agent_key: &str,
+        agent_version: &str,
+        model_id: Uuid,
+    ) -> Result<ResolvedBindingEvidence, AuditedModelError> {
         let resolved = self
             .models
             .resolve(model_id)
@@ -205,18 +352,19 @@ impl AuditedModelExecutor {
             .registry
             .agent(agent_key, agent_version)
             .map_err(|e| AuditedModelError::Compile(e.to_string()))?;
+        validate_model_capabilities(&agent.model_requirements, &resolved.capabilities)
+            .map_err(|_| AuditedModelError::ModelCapabilityMismatch)?;
 
         let context_policy_bindings: std::collections::BTreeMap<String, FixedDefinitionBinding> =
             agent
                 .nodes
                 .iter()
                 .map(|(node_key, reference)| {
-                    let policy_ref =
-                        reference.context_policy.as_ref().ok_or_else(|| {
-                            AuditedModelError::Compile(format!(
-                                "governed Context Policy binding is missing at node {node_key}"
-                            ))
-                        })?;
+                    let policy_ref = reference.context_policy.as_ref().ok_or_else(|| {
+                        AuditedModelError::Compile(format!(
+                            "governed Context Policy binding is missing at node {node_key}"
+                        ))
+                    })?;
                     let policy = self
                         .registry
                         .context_policy(&policy_ref.key, &policy_ref.version)
@@ -242,18 +390,22 @@ impl AuditedModelExecutor {
                 &resolved.tokenizer_profile_version,
             )
             .map_err(|_| AuditedModelError::TokenizerProfileUnavailable)?;
-        let profile_digest = definition_digest(profile)
-            .map_err(|e| AuditedModelError::Compile(e.to_string()))?;
+        let profile_digest =
+            definition_digest(profile).map_err(|e| AuditedModelError::Compile(e.to_string()))?;
 
-        Ok(FixedModelBinding {
-            model_id: resolved.model_id,
-            behavior_fingerprint: resolved.behavior_fingerprint,
-            context_policy_bindings,
-            tokenizer_profile: FixedDefinitionBinding {
-                key: resolved.tokenizer_profile_key,
-                version: resolved.tokenizer_profile_version,
-                digest: profile_digest,
+        Ok(ResolvedBindingEvidence {
+            binding: FixedModelBinding {
+                model_id: resolved.model_id,
+                behavior_fingerprint: resolved.behavior_fingerprint,
+                context_policy_bindings,
+                tokenizer_profile: FixedDefinitionBinding {
+                    key: resolved.tokenizer_profile_key,
+                    version: resolved.tokenizer_profile_version,
+                    digest: profile_digest,
+                },
             },
+            capabilities: resolved.capabilities,
+            max_output_tokens: resolved.max_output_tokens,
         })
     }
 
@@ -332,10 +484,11 @@ impl AuditedModelExecutor {
         }
     }
 
-    async fn execute_provider(
+    /// 完成绑定、Prompt、Context 与 prepared ModelCall 持久化，但不调用模型 provider。
+    pub async fn prepare(
         &self,
         request: AuditedModelRequest,
-    ) -> Result<ProviderOutput, AuditedModelError> {
+    ) -> Result<PreparedAuditedModelCall, AuditedModelError> {
         if !self
             .context_audit
             .binding_is_executable(request.owner)
@@ -505,11 +658,28 @@ impl AuditedModelExecutor {
                 .map_err(AuditedModelError::PrepareAudit)?;
         }
 
-        match resolved.client.generate_script(prompt).await {
+        Ok(PreparedAuditedModelCall {
+            owner: request.owner,
+            model_call_id: call_id,
+            context_snapshot_id,
+            prompt,
+            client: resolved.client,
+            known_secrets: resolved.known_secrets,
+            context_audit: self.context_audit.clone(),
+        })
+    }
+
+    async fn execute_provider(
+        &self,
+        request: AuditedModelRequest,
+    ) -> Result<ProviderOutput, AuditedModelError> {
+        let prepared = self.prepare(request).await?;
+        let call_id = prepared.model_call_id;
+        match prepared.client.generate_script(prepared.prompt).await {
             Ok(output) => Ok(ProviderOutput {
                 model_call_id: call_id,
                 output,
-                known_secrets: resolved.known_secrets,
+                known_secrets: prepared.known_secrets,
             }),
             Err(error) => {
                 let profile_incompatible = is_provider_context_overflow(&error);
@@ -528,13 +698,13 @@ impl AuditedModelExecutor {
                             "message": error.to_string(),
                         })),
                         structured_parse_status: None,
-                        known_secrets: resolved.known_secrets.clone(),
+                        known_secrets: prepared.known_secrets.clone(),
                     })
                     .await
                     .map_err(AuditedModelError::FinishAudit)?;
                 if profile_incompatible {
                     self.context_audit
-                        .block_tokenizer_profile_binding(request.owner)
+                        .block_tokenizer_profile_binding(prepared.owner)
                         .await
                         .map_err(AuditedModelError::BindingAudit)?;
                     Err(AuditedModelError::TokenizerProfileIncompatible {

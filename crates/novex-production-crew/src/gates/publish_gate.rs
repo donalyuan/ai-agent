@@ -23,7 +23,11 @@ impl Gate for PublishGate {
     async fn check(&self, context: &GateContext) -> ProductionResult<GateDecision> {
         // 检查所有必需产物是否有 approved 版本
         for artifact_type in REQUIRED_ARTIFACT_TYPES {
-            let artifacts = context.artifacts.get(*artifact_type).cloned().unwrap_or_default();
+            let artifacts = context
+                .artifacts
+                .get(*artifact_type)
+                .cloned()
+                .unwrap_or_default();
             let has_approved = artifacts
                 .iter()
                 .any(|a| a.get("status").and_then(|s| s.as_str()) == Some("approved"));
@@ -35,7 +39,11 @@ impl Gate for PublishGate {
         }
 
         // 检查 take_review：所有评审必须通过（无 rejected）
-        let reviews = context.artifacts.get("take_review").cloned().unwrap_or_default();
+        let reviews = context
+            .artifacts
+            .get("take_review")
+            .cloned()
+            .unwrap_or_default();
         if !reviews.is_empty() {
             let has_rejected = reviews
                 .iter()
@@ -67,6 +75,9 @@ mod tests {
             artifacts: HashMap::new(),
             project_metadata: json!({}),
         };
-        assert!(matches!(gate.check(&ctx).await.unwrap(), GateDecision::Reject { .. }));
+        assert!(matches!(
+            gate.check(&ctx).await.unwrap(),
+            GateDecision::Reject { .. }
+        ));
     }
 }

@@ -9,10 +9,10 @@ ALTER TABLE agent_runs
 ALTER TABLE agent_runs
     ADD CONSTRAINT agent_runs_type_check CHECK (
         agent_type IN (
-            'topic', 'script', 'material', 'sound', 'video',
+            'topic', 'script', 'material', 'sound', 'work', 'video',
             'publish', 'optimization', 'production'
         )
     );
 
 COMMENT ON CONSTRAINT agent_runs_type_check ON agent_runs IS
-    '允许的 agent 类型；production 用于虚拟制作团队角色执行';
+    '允许的 agent 类型；work 用于作品会话，production 用于虚拟制作团队角色执行';

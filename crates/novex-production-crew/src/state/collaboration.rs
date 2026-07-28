@@ -22,7 +22,9 @@ impl CollaborationManager {
         project_id: Uuid,
         data: Value,
     ) -> ProductionResult<Value> {
-        self.repo.create_collaboration_suggestion(project_id, data).await
+        self.repo
+            .create_collaboration_suggestion(project_id, data)
+            .await
     }
 
     /// 列出项目协作建议（可按 to_role / status 过滤）

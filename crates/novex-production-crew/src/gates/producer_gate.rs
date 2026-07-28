@@ -13,12 +13,16 @@ impl Gate for ProducerGate {
     }
 
     async fn check(&self, context: &GateContext) -> ProductionResult<GateDecision> {
-        let briefs = context.artifacts.get("creative_brief").cloned().unwrap_or_default();
+        let briefs = context
+            .artifacts
+            .get("creative_brief")
+            .cloned()
+            .unwrap_or_default();
 
         // 必须有至少一个 approved 的 CreativeBrief
-        let approved = briefs.iter().any(|b| {
-            b.get("status").and_then(|s| s.as_str()) == Some("approved")
-        });
+        let approved = briefs
+            .iter()
+            .any(|b| b.get("status").and_then(|s| s.as_str()) == Some("approved"));
 
         if !approved {
             return Ok(GateDecision::Reject {
@@ -27,9 +31,10 @@ impl Gate for ProducerGate {
         }
 
         // 检查 brief 内容完整性
-        if let Some(brief) = briefs.iter().find(|b| {
-            b.get("status").and_then(|s| s.as_str()) == Some("approved")
-        }) {
+        if let Some(brief) = briefs
+            .iter()
+            .find(|b| b.get("status").and_then(|s| s.as_str()) == Some("approved"))
+        {
             let content = brief.get("content");
             let target_audience = content
                 .and_then(|c| c.get("target_audience"))
@@ -66,16 +71,19 @@ mod tests {
     async fn test_pass_with_approved_brief() {
         let gate = ProducerGate;
         let mut artifacts = HashMap::new();
-        artifacts.insert("creative_brief".to_string(), vec![json!({
-            "status": "approved",
-            "content": {
-                "target_audience": "25-40岁科技爱好者",
-                "key_messages": ["健康监测", "长续航"],
-                "tone": ["活泼"],
-                "constraints": {},
-                "success_criteria": []
-            }
-        })]);
+        artifacts.insert(
+            "creative_brief".to_string(),
+            vec![json!({
+                "status": "approved",
+                "content": {
+                    "target_audience": "25-40岁科技爱好者",
+                    "key_messages": ["健康监测", "长续航"],
+                    "tone": ["活泼"],
+                    "constraints": {},
+                    "success_criteria": []
+                }
+            })],
+        );
         let ctx = GateContext {
             project_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),

@@ -10,6 +10,7 @@ const publishedV1Path = resolve(root, "fixtures/registry-published-v1.json");
 const deployedV1Path = resolve(root, "fixtures/registry-deployed-20260724-v1.json");
 const baselinePath = resolve(root, "../backend/tests/fixtures/versioned_prompt_baseline.json");
 const contextFixturePath = resolve(root, "fixtures/context-contract.json");
+const productionCandidateContractPath = resolve(root, "fixtures/production-crew-candidate-registry-contract-v3.json");
 const tokenizerAssetPath = resolve(root, "tokenizers/encoding-contract-v1.json");
 
 const canonicalJson = (value) => JSON.stringify(normalize(value));
@@ -78,6 +79,219 @@ const activeAgents = sourceAgents.map((agent) => {
   }));
   return { ...agent, version: "2.0.0", status: "active", nodes };
 });
+const productionCandidateRoles = [
+  "producer", "screenwriter", "character_critic", "director", "cinematographer",
+  "performance_director", "sound_director", "editor", "qc",
+];
+const nonBlankString = { type: "string", minLength: 1 };
+const uuidString = { type: "string", format: "uuid" };
+const stringArray = (minItems = 0) => ({
+  type: "array", minItems, uniqueItems: true, items: nonBlankString,
+});
+const strictObject = (required, properties) => ({
+  type: "object", additionalProperties: false, required, properties,
+});
+const productionOutputSchemas = {
+  producer: strictObject(["creative_brief"], {
+    creative_brief: strictObject(
+      ["target_audience", "tone", "key_messages", "constraints", "success_criteria"],
+      {
+        target_audience: nonBlankString, tone: stringArray(1), key_messages: stringArray(1),
+        constraints: { type: "object" }, success_criteria: stringArray(1),
+      },
+    ),
+  }),
+  screenwriter: strictObject(["story_bible", "character_bibles", "script_draft"], {
+    story_bible: strictObject(["premise", "theme", "narrative_structure", "world"], {
+      premise: nonBlankString, theme: nonBlankString, narrative_structure: nonBlankString, world: nonBlankString,
+    }),
+    character_bibles: {
+      type: "array", minItems: 1, items: strictObject(
+        ["character_id", "name", "role", "personality", "motivation", "arc"],
+        { character_id: nonBlankString, name: nonBlankString, role: nonBlankString, personality: nonBlankString, motivation: nonBlankString, arc: nonBlankString },
+      ),
+    },
+    script_draft: strictObject(["title", "hook", "scenes"], {
+      title: nonBlankString,
+      hook: nonBlankString,
+      scenes: {
+        type: "array", minItems: 3, maxItems: 12,
+        items: strictObject(
+          ["sequence", "narration", "visual_description", "emotion", "duration_sec", "character_ids"],
+          {
+            sequence: { type: "integer", minimum: 1 }, narration: nonBlankString,
+            visual_description: nonBlankString, emotion: nonBlankString,
+            duration_sec: { type: "integer", minimum: 1, maximum: 30 }, character_ids: stringArray(),
+          },
+        ),
+      },
+    }),
+  }),
+  director: strictObject(["directorial_treatment", "shot_contracts"], {
+    directorial_treatment: strictObject(
+      ["visual_style", "pacing", "emotional_arc", "color_palette", "reference_works"],
+      {
+        visual_style: nonBlankString, pacing: nonBlankString, emotional_arc: nonBlankString,
+        color_palette: stringArray(1), reference_works: stringArray(),
+      },
+    ),
+    shot_contracts: {
+      type: "array", minItems: 1,
+      items: strictObject(
+        ["shot_id", "sequence", "scene_id", "shot_type", "camera_movement", "duration_sec", "description", "character_ids"],
+        {
+          shot_id: nonBlankString, sequence: { type: "integer", minimum: 1 }, scene_id: uuidString,
+          shot_type: nonBlankString, camera_movement: nonBlankString,
+          duration_sec: { type: "integer", minimum: 1, maximum: 30 }, description: nonBlankString,
+          character_ids: stringArray(),
+        },
+      ),
+    },
+  }),
+  cinematographer: strictObject(["collaboration_suggestions"], {
+    collaboration_suggestions: {
+      type: "array",
+      items: strictObject(
+        ["target_artifact_id", "target_artifact_version", "suggestion_type", "content", "priority", "blocking", "rationale"],
+        {
+          target_artifact_id: uuidString, target_artifact_version: { type: "integer", minimum: 1 },
+          suggestion_type: { enum: ["revision", "addition", "deletion"] }, content: nonBlankString,
+          priority: { enum: ["low", "medium", "high"] }, blocking: { type: "boolean" }, rationale: nonBlankString,
+        },
+      ),
+    },
+  }),
+  character_critic: strictObject(["collaboration_suggestions"], {
+    collaboration_suggestions: {
+      type: "array",
+      items: strictObject(
+        ["target_artifact_id", "target_artifact_version", "suggestion_type", "content", "priority", "blocking", "rationale"],
+        {
+          target_artifact_id: uuidString, target_artifact_version: { type: "integer", minimum: 1 },
+          suggestion_type: { enum: ["revision", "addition", "deletion"] }, content: nonBlankString,
+          priority: { enum: ["low", "medium", "high"] }, blocking: { type: "boolean" }, rationale: nonBlankString,
+        },
+      ),
+    },
+  }),
+  performance_director: strictObject(["performance_briefs"], {
+    performance_briefs: {
+      type: "array", minItems: 1,
+      items: strictObject(
+        ["character_bible_id", "character_id", "script_id", "emotional_arc", "body_language", "vocal_direction"],
+        {
+          character_bible_id: uuidString, character_id: nonBlankString, script_id: uuidString,
+          emotional_arc: {
+            type: "array", minItems: 1,
+            items: strictObject(["sequence", "scene_id", "emotion", "intensity", "notes"], {
+              sequence: { type: "integer", minimum: 1 }, scene_id: uuidString, emotion: nonBlankString,
+              intensity: { type: "integer", minimum: 1, maximum: 10 }, notes: nonBlankString,
+            }),
+          },
+          body_language: nonBlankString, vocal_direction: nonBlankString,
+        },
+      ),
+    },
+  }),
+  sound_director: strictObject(["sound_plan"], {
+    sound_plan: strictObject(["script_id", "music_style", "scene_sound_notes"], {
+      script_id: uuidString, music_style: nonBlankString,
+      scene_sound_notes: {
+        type: "array", minItems: 1,
+        items: strictObject(["sequence", "scene_id", "music_cue", "sfx_notes", "dialogue_direction"], {
+          sequence: { type: "integer", minimum: 1 }, scene_id: uuidString, music_cue: nonBlankString,
+          sfx_notes: stringArray(), dialogue_direction: nonBlankString,
+        }),
+      },
+    }),
+  }),
+  editor: strictObject(["continuity_ledgers"], {
+    continuity_ledgers: {
+      type: "array", minItems: 1,
+      items: strictObject(
+        ["order", "shot_contract_id", "work_version_id", "inventory_id", "evidence_snapshot_id", "visual_facts", "continuity_flags"],
+        {
+          order: { type: "integer", minimum: 1 }, shot_contract_id: uuidString, work_version_id: uuidString,
+          inventory_id: uuidString, evidence_snapshot_id: uuidString, visual_facts: stringArray(1),
+          continuity_flags: stringArray(),
+        },
+      ),
+    },
+  }),
+  qc: strictObject(["take_reviews"], {
+    take_reviews: {
+      type: "array", minItems: 1,
+      items: strictObject(
+        ["required_take_id", "work_version_id", "inventory_id", "evidence_snapshot_id", "applicable_shot_contract_ids", "review_status", "quality_assessment", "issues", "suggestions"],
+        {
+          required_take_id: uuidString, work_version_id: uuidString, inventory_id: uuidString,
+          evidence_snapshot_id: uuidString,
+          applicable_shot_contract_ids: { type: "array", minItems: 1, uniqueItems: true, items: uuidString },
+          review_status: { enum: ["approved", "needs_revision", "rejected"] },
+          quality_assessment: { type: "object", minProperties: 1, additionalProperties: { type: "number", minimum: 0, maximum: 10 } },
+          issues: stringArray(), suggestions: stringArray(),
+        },
+      ),
+    },
+  }),
+};
+const productionCandidatePoliciesV2 = productionCandidateRoles.map((role) => ({
+  policy_key: `production.${role}.execute.baseline`,
+  version: "2.0.0",
+  status: "candidate",
+  executor_owners: ["rust"],
+  allowed_sources: ["project", "script_revision_command", "user_instruction"],
+  required_sources: ["project", "script_revision_command", "user_instruction"],
+  stable_sort: ["priority", "source_kind", "source_id", "source_version", "candidate_id"],
+}));
+const productionCandidatePolicies = productionCandidateRoles.map((role) => ({
+  policy_key: `production.${role}.execute.baseline`,
+  version: "3.0.0",
+  status: "candidate",
+  executor_owners: ["rust"],
+  allowed_sources: ["project", "script_revision_command", "user_instruction"],
+  required_sources: ["project", "user_instruction"],
+  stable_sort: ["priority", "source_kind", "source_id", "source_version", "candidate_id"],
+}));
+const productionCandidatePrompts = productionCandidateRoles.map((role) => {
+  const active = activePrompts.find((prompt) => prompt.prompt_key === `production.${role}.general`);
+  if (!active) throw new Error(`missing active production prompt for ${role}`);
+  return {
+    ...active,
+    version: "3.0.0",
+    status: "candidate",
+    system_template: `templates/production/${role}.full-crew-v3.system.txt`,
+    output_schema: {
+      name: `production_${role}_output_v3`,
+      strict: true,
+      schema: productionOutputSchemas[role],
+    },
+  };
+});
+const productionCandidateAgents = productionCandidateRoles.map((role) => {
+  const active = activeAgents.find((agent) => agent.agent_key === `production.${role}`);
+  if (!active) throw new Error(`missing active production agent for ${role}`);
+  const nodes = Object.fromEntries(Object.keys(active.nodes).map((node) => [node, {
+    key: `production.${role}.general`,
+    version: "3.0.0",
+    context_policy: { key: `production.${role}.execute.baseline`, version: "3.0.0" },
+  }]));
+  const mediaRequirements = ["editor", "qc"].includes(role)
+    ? { ...active.model_requirements, vision: true }
+    : active.model_requirements;
+  return {
+    ...active,
+    version: "3.0.0",
+    status: "candidate",
+    constraints: [
+      ...active.constraints,
+      "只允许引用当前 ProductionRun 输入快照中的真实领域 ID 和版本",
+      "不得绕过 package Gate、调用媒体 provider 或修改其他角色的产物",
+    ],
+    model_requirements: mediaRequirements,
+    nodes,
+  };
+});
 const tokenizerAssetDigest = sha256(await readFile(tokenizerAssetPath));
 const framing = { per_message_tokens: 3, per_tool_tokens: 4, request_tokens: 3, reply_priming_tokens: 3 };
 const tokenizerProfiles = [
@@ -99,13 +313,15 @@ const tokenizerProfiles = [
 ];
 const registry = {
   schema_version: "2",
-  agents: [...v1Agents, ...activeAgents],
-  prompts: [...v1Prompts, ...activePrompts],
-  context_policies: policies.sort((left, right) => left.policy_key.localeCompare(right.policy_key, "en")),
+  agents: [...v1Agents, ...activeAgents, ...productionCandidateAgents],
+  prompts: [...v1Prompts, ...activePrompts, ...productionCandidatePrompts],
+  context_policies: [...policies, ...productionCandidatePoliciesV2, ...productionCandidatePolicies]
+    .sort((left, right) => left.policy_key.localeCompare(right.policy_key, "en") || left.version.localeCompare(right.version, "en")),
   tokenizer_profiles: tokenizerProfiles,
 };
 const baselineDigest = sha256(await readFile(baselinePath));
 const contextFixtureDigest = sha256(await readFile(contextFixturePath));
+const productionCandidateContractDigest = sha256(await readFile(productionCandidateContractPath));
 const evidence = (definition_kind, definition_key, definition_version, definition, reference, digest, legacy_digests = []) => ({
   definition_kind, definition_key, definition_version, definition_digest: definitionDigest(definition),
   ...(legacy_digests.length > 0 ? { legacy_digests } : {}),
@@ -134,8 +350,15 @@ const releases = [
     "backend/tests/fixtures/versioned_prompt_baseline.json", baselineDigest)),
   ...activePrompts.map((prompt) => evidence("prompt", prompt.prompt_key, prompt.version, prompt,
     "backend/tests/fixtures/versioned_prompt_baseline.json", baselineDigest)),
+  ...productionCandidateAgents.map((agent) => evidence("agent", agent.agent_key, agent.version, agent,
+    "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json", productionCandidateContractDigest)),
+  ...productionCandidatePrompts.map((prompt) => evidence("prompt", prompt.prompt_key, prompt.version, prompt,
+    "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json", productionCandidateContractDigest)),
   ...registry.context_policies.map((policy) => evidence("context_policy", policy.policy_key, policy.version, policy,
-    "agent-definitions/fixtures/context-contract.json", contextFixtureDigest)),
+    policy.status === "candidate"
+      ? "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json"
+      : "agent-definitions/fixtures/context-contract.json",
+    policy.status === "candidate" ? productionCandidateContractDigest : contextFixtureDigest)),
   ...tokenizerProfiles.map((profile) => evidence("tokenizer_profile", profile.profile_key, profile.version, profile,
     "agent-definitions/tokenizers/encoding-contract-v1.json", tokenizerAssetDigest)),
 ];

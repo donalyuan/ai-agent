@@ -5,6 +5,6 @@ pub mod collaboration;
 pub mod repository;
 pub mod versioning;
 
+pub use collaboration::CollaborationManager;
 pub use repository::ProductionStateRepository;
 pub use versioning::ArtifactVersionManager;
-pub use collaboration::CollaborationManager;

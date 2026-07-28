@@ -19,8 +19,12 @@ pub struct TakeReview {
 }
 
 impl TakeReview {
-    pub fn is_approved(&self) -> bool { self.status == "approved" }
-    pub fn is_rejected(&self) -> bool { self.status == "rejected" }
+    pub fn is_approved(&self) -> bool {
+        self.status == "approved"
+    }
+    pub fn is_rejected(&self) -> bool {
+        self.status == "rejected"
+    }
 
     pub fn validate(content: &Value) -> Result<(), String> {
         if content.get("quality_assessment").is_none() {

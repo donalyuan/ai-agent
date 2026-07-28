@@ -101,6 +101,22 @@ describe("governed ContextCompiler", () => {
     expect(() => compileContext(request([oversized]))).toThrow(expect.objectContaining({ code: "context_content_hash_mismatch" }));
   });
 
+  it("requires every policy source to exist and remain eligible", () => {
+    const requiredFixture = candidate("required-fixture", "required fixture", "confirmed_fact", "p1", true);
+    const missingSource = request([requiredFixture]);
+    missingSource.policy.allowed_sources.push("project");
+    missingSource.policy.required_sources = ["fixture", "project"];
+    expect(() => compileContext(missingSource)).toThrow(expect.objectContaining({
+      stage: "eligibility", code: "required_context_unavailable",
+    }));
+
+    const expiredSource = request([{ ...requiredFixture, valid_until: "2026-07-24T00:00:00Z" }]);
+    expiredSource.policy.required_sources = ["fixture"];
+    expect(() => compileContext(expiredSource)).toThrow(expect.objectContaining({
+      stage: "eligibility", code: "required_context_unavailable",
+    }));
+  });
+
   it("keeps tool request/result atomic and failure attempts payload-free", () => {
     const toolRequest = { ...candidate("tool-request", '{"call":"1"}', "reference", "p0", true), atomic_group_id: "tool-1" };
     const toolResult = { ...candidate("tool-result", '{"result":"ok"}', "reference", "p0", true), atomic_group_id: "tool-1" };

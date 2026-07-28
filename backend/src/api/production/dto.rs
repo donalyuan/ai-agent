@@ -1,119 +1,59 @@
-//! Production API 请求/响应 DTO
+//! Production API 请求 DTO；所有 Full Crew 命令拒绝未声明字段。
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde_json::Value;
 use uuid::Uuid;
 
-/// 创建制作项目请求
+/// 旧 ProductionProject 入口仅保留 Fast Lane，Full Crew 必须使用 intents API。
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateProductionRequest {
     pub title: String,
     pub description: Option<String>,
-    pub project_type: String, // "fast_lane" | "full_crew"
-    pub initial_input: serde_json::Value,
-}
-
-/// 项目响应
-#[derive(Debug, Serialize)]
-pub struct ProductionResponse {
-    pub id: Uuid,
-    pub title: String,
     pub project_type: String,
-    pub status: String,
-    pub user_id: Uuid,
-    pub created_at: String,
-    pub updated_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub artifacts: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_role: Option<String>,
+    pub initial_input: Value,
 }
 
-/// 列表响应（分页）
-#[derive(Debug, Serialize)]
-pub struct ProductionListResponse {
-    pub items: Vec<ProductionSummary>,
-    pub total: i64,
-    pub page: i64,
-    pub page_size: i64,
-}
-
-/// 项目摘要
-#[derive(Debug, Serialize)]
-pub struct ProductionSummary {
-    pub id: Uuid,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateProductionIntentRequest {
+    pub project_id: Uuid,
+    pub topic_id: Uuid,
     pub title: String,
-    pub project_type: String,
-    pub status: String,
-    pub created_at: String,
-    pub updated_at: String,
+    pub description: Option<String>,
+    pub initial_input: Value,
 }
 
-/// 执行角色请求
 #[derive(Debug, Deserialize)]
-pub struct ExecuteRoleRequest {
-    #[serde(default)]
-    pub user_input: Option<String>,
-    #[serde(default)]
-    pub context: Option<serde_json::Value>,
-}
+#[serde(deny_unknown_fields)]
+pub struct StartProductionRunRequest {}
 
-/// 角色执行结果响应
-#[derive(Debug, Serialize)]
-pub struct RoleExecutionResponse {
-    pub role: String,
-    pub status: String,
-    pub execution_time_ms: u64,
-    pub output_artifacts: Vec<ArtifactSummaryDto>,
-    pub model_call_id: Option<Uuid>,
-    pub next_role: Option<String>,
-}
-
-/// 产物摘要DTO
-#[derive(Debug, Serialize)]
-pub struct ArtifactSummaryDto {
-    #[serde(rename = "type")]
-    pub artifact_type: String,
-    pub id: Uuid,
-    pub version: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub character_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shot_id: Option<String>,
-}
-
-/// 执行流程请求
 #[derive(Debug, Deserialize)]
-pub struct ExecuteFlowRequest {
-    pub roles: Vec<String>,
+#[serde(deny_unknown_fields)]
+pub struct ApprovePackageRequest {
     #[serde(default)]
-    pub auto_approve: bool,
-    #[serde(default)]
-    pub user_input: Option<String>,
+    pub note: Option<String>,
 }
 
-/// 流程状态响应
-#[derive(Debug, Serialize)]
-pub struct FlowStatusResponse {
-    pub flow_id: Uuid,
-    pub status: String,
-    pub completed_roles: Vec<String>,
-    pub current_role: Option<String>,
-    pub pending_roles: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub waiting_for: Option<GateWaitingDto>,
-}
-
-/// Gate等待信息DTO
-#[derive(Debug, Serialize)]
-pub struct GateWaitingDto {
-    #[serde(rename = "type")]
-    pub gate_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub artifact_id: Option<Uuid>,
-}
-
-/// Fast Lane请求
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RejectPackageRequest {
+    pub reason: String,
+    pub affected_owners: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyProductionCommandRequest {}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelProductionRunRequest {
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FastLaneRequest {
     pub prompt: String,
     #[serde(default)]
@@ -122,10 +62,29 @@ pub struct FastLaneRequest {
     pub duration_seconds: Option<u32>,
 }
 
-/// Fast Lane响应
-#[derive(Debug, Serialize)]
-pub struct FastLaneResponse {
-    pub job_id: Uuid,
-    pub status: String,
-    pub estimated_time_seconds: u64,
+#[cfg(test)]
+mod tests {
+    use super::{EmptyProductionCommandRequest, StartProductionRunRequest};
+    use serde_json::json;
+
+    #[test]
+    fn production_commands_reject_plan_role_model_actor_and_context_overrides() {
+        assert!(serde_json::from_value::<StartProductionRunRequest>(json!({})).is_ok());
+        assert!(serde_json::from_value::<EmptyProductionCommandRequest>(json!({})).is_ok());
+        for payload in [
+            json!({"roles": ["producer"]}),
+            json!({"auto_approve": true}),
+            json!({"skip_gates": ["brief_approval"]}),
+            json!({"plan_version": "client-version"}),
+            json!({"preferred_model_id": uuid::Uuid::new_v4()}),
+            json!({"context": {"source": "client"}}),
+            json!({"user_id": uuid::Uuid::new_v4()}),
+            json!({"user_input": "绕过计划输入"}),
+        ] {
+            assert!(
+                serde_json::from_value::<StartProductionRunRequest>(payload.clone()).is_err(),
+                "dynamic production payload must be rejected: {payload}"
+            );
+        }
+    }
 }

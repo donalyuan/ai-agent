@@ -11,6 +11,47 @@ use axum::{
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
+        // Full Crew 持久化命令 API
+        .route(
+            "/api/v1/production/intents",
+            post(handlers::create_production_intent),
+        )
+        .route(
+            "/api/v1/production/intents/:intent_id/runs",
+            post(handlers::start_production_run),
+        )
+        .route(
+            "/api/v1/production/intents/:intent_id",
+            get(handlers::get_production_intent).delete(handlers::delete_production_intent),
+        )
+        .route(
+            "/api/v1/production/intents/:intent_id/archive",
+            post(handlers::archive_production_intent),
+        )
+        .route(
+            "/api/v1/production/runs/:run_id",
+            get(handlers::get_production_run),
+        )
+        .route(
+            "/api/v1/production/runs/:run_id/cancel",
+            post(handlers::cancel_production_run),
+        )
+        .route(
+            "/api/v1/production/runs/:run_id/packages/:digest/approve",
+            post(handlers::approve_package),
+        )
+        .route(
+            "/api/v1/production/runs/:run_id/packages/:digest/reject",
+            post(handlers::reject_package),
+        )
+        .route(
+            "/api/v1/production/runs/:run_id/resume",
+            post(handlers::resume_production_run),
+        )
+        .route(
+            "/api/v1/production/runs/:run_id/steps/:step_id/retry",
+            post(handlers::retry_production_step),
+        )
         // 项目管理
         .route(
             "/api/v1/production/productions",
@@ -19,19 +60,6 @@ pub(crate) fn router() -> Router<AppState> {
         .route(
             "/api/v1/production/productions/:id",
             get(handlers::get_production).delete(handlers::delete_production),
-        )
-        // 角色执行
-        .route(
-            "/api/v1/production/productions/:id/roles/:role_key/execute",
-            post(handlers::execute_role),
-        )
-        .route(
-            "/api/v1/production/productions/:id/execute-flow",
-            post(handlers::execute_flow),
-        )
-        .route(
-            "/api/v1/production/productions/:id/flows/:flow_id",
-            get(handlers::get_flow_status),
         )
         // 产物管理
         .route(

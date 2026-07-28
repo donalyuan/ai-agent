@@ -234,7 +234,7 @@ async fn work_agent_reuses_current_draft_and_returns_confirmable_diff() {
             && decision["priority"] == "p1"
     }));
     assert!(selected.iter().any(|decision| {
-        decision["source_kind"] == "conversation_entry"
+        decision["source_kind"] == "user_instruction"
             && decision["trust"] == "user_instruction"
             && decision["priority"] == "p0"
     }));

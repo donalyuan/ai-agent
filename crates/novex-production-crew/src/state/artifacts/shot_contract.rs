@@ -24,8 +24,13 @@ pub struct ShotContract {
 
 impl ShotContract {
     pub fn validate(content: &Value) -> Result<(), String> {
-        let st = content.get("shot_type").and_then(|v| v.as_str()).unwrap_or("");
-        if st.is_empty() { return Err("shot_contract 必须包含 shot_type".into()); }
+        let st = content
+            .get("shot_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if st.is_empty() {
+            return Err("shot_contract 必须包含 shot_type".into());
+        }
         Ok(())
     }
 }

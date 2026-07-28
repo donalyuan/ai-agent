@@ -313,6 +313,31 @@ fn compiler_fails_closed_for_conflicts_required_budget_and_invalid_hashes() {
 }
 
 #[test]
+fn policy_required_sources_must_exist_and_required_candidates_must_remain_eligible() {
+    let required_fixture = candidate(
+        "required-fixture",
+        "required fixture",
+        TrustLevel::ConfirmedFact,
+        ContextPriority::P1,
+        true,
+    );
+    let mut missing_source = request(vec![required_fixture.clone()]);
+    missing_source.policy.allowed_sources.push("project".into());
+    missing_source.policy.required_sources = vec!["fixture".into(), "project".into()];
+    let error = ContextCompiler::compile(missing_source).unwrap_err();
+    assert_eq!(error.stage, CompileFailureStage::Eligibility);
+    assert_eq!(error.code, "required_context_unavailable");
+
+    let mut expired = required_fixture;
+    expired.valid_until = Some("2026-07-24T00:00:00Z".into());
+    let mut expired_source = request(vec![expired]);
+    expired_source.policy.required_sources = vec!["fixture".into()];
+    let error = ContextCompiler::compile(expired_source).unwrap_err();
+    assert_eq!(error.stage, CompileFailureStage::Eligibility);
+    assert_eq!(error.code, "required_context_unavailable");
+}
+
+#[test]
 fn tool_groups_are_atomic_and_compile_attempts_do_not_contain_payloads() {
     let mut tool_request = candidate(
         "tool-request",
@@ -815,29 +840,30 @@ fn every_active_node_preserves_its_under_budget_legacy_compile_output_and_reads_
                 policy: policy.clone(),
                 tokenizer_profile: tokenizer_profile.clone(),
                 prepared_prompt: prepared.envelope.clone(),
-                candidates: vec![ContextCandidate {
-                    candidate_id: "golden".into(),
-                    source_kind: policy
-                        .required_sources
-                        .first()
-                        .unwrap_or(&policy.allowed_sources[0])
-                        .clone(),
-                    source_id: "golden".into(),
-                    source_version: "1".into(),
-                    fact_key: None,
-                    trust,
-                    priority: ContextPriority::P0,
-                    required: true,
-                    render_order: 0,
-                    observed_at: "2026-07-25T00:00:00Z".into(),
-                    valid_until: None,
-                    supersedes: vec![],
-                    content_hash: sha256_hex(
-                        canonical_json(&serde_json::to_value(&payload).unwrap()).as_bytes(),
-                    ),
-                    atomic_group_id: None,
-                    payload,
-                }],
+                candidates: policy
+                    .required_sources
+                    .iter()
+                    .enumerate()
+                    .map(|(index, source_kind)| ContextCandidate {
+                        candidate_id: format!("golden-{source_kind}"),
+                        source_kind: source_kind.clone(),
+                        source_id: format!("golden-{source_kind}"),
+                        source_version: "1".into(),
+                        fact_key: None,
+                        trust,
+                        priority: ContextPriority::P0,
+                        required: true,
+                        render_order: index as u32,
+                        observed_at: "2026-07-25T00:00:00Z".into(),
+                        valid_until: None,
+                        supersedes: vec![],
+                        content_hash: sha256_hex(
+                            canonical_json(&serde_json::to_value(&payload).unwrap()).as_bytes(),
+                        ),
+                        atomic_group_id: None,
+                        payload: payload.clone(),
+                    })
+                    .collect(),
                 atomic_groups: vec![],
             })
             .unwrap();

@@ -26,5 +26,7 @@ impl ScriptDraft {
         }
         Ok(())
     }
-    pub fn is_approved(&self) -> bool { self.status == "approved" }
+    pub fn is_approved(&self) -> bool {
+        self.status == "approved"
+    }
 }

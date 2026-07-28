@@ -173,6 +173,54 @@ async fn passing_report(pool: &PgPool, kind: &str, key: &str, version: &str, dig
     .unwrap()
 }
 
+async fn passing_real_report(
+    pool: &PgPool,
+    kind: &str,
+    key: &str,
+    version: &str,
+    digest: &str,
+) -> Uuid {
+    let model_id = insert_enabled_text_model(pool).await;
+    let run_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO eval_runs (
+            definition_kind, candidate_key, candidate_version, candidate_digest,
+            case_set_version, evaluator_version, validation_mode, model_id,
+            behavior_fingerprint, approved_real_calls, approval_snapshot,
+            max_cases, max_input_tokens, max_output_tokens, max_retries, max_cost_micros,
+            status, actual_cases, actual_input_tokens, actual_output_tokens,
+            actual_cost_micros, actual_real_model_calls
+        ) VALUES (
+            $1, $2, $3, $4, 'production-crew-real-v3@1', 'novex-eval@1',
+            'real_model', $5, $6, TRUE,
+            '{"schema_version":"1","approved_real_calls":true}',
+            1, 100, 100, 0, 1000, 'passed', 1, 50, 50, 100, 1
+        ) RETURNING id
+        "#,
+    )
+    .bind(kind)
+    .bind(key)
+    .bind(version)
+    .bind(digest)
+    .bind(model_id)
+    .bind("c".repeat(64))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query_scalar(
+        r#"
+        INSERT INTO eval_reports (
+            eval_run_id, passed, gate_results, aggregate_metrics, redacted_case_results
+        ) VALUES ($1, TRUE, '{}', '{"real_model_calls":1}', '[]')
+        RETURNING id
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
 async fn passing_context_report(
     pool: &PgPool,
     kind: &str,
@@ -505,6 +553,117 @@ async fn active_release_requires_exact_golden_or_passing_eval_report_evidence() 
 }
 
 #[tokio::test]
+async fn published_candidate_requires_an_exact_eval_report_before_activation() {
+    let (pool, _database) = test_pool().await;
+    let mut candidate_document: Value = serde_json::from_str(include_str!(
+        "../../agent-definitions/fixtures/registry-valid.json"
+    ))
+    .unwrap();
+    candidate_document["agents"][0]["status"] = json!("candidate");
+    candidate_document["prompts"][0]["status"] = json!("candidate");
+    let (candidate, candidate_dir) = registry_fixture(&candidate_document, "candidate-first");
+    let repository = PostgresDefinitionReleaseRepository::new(pool.clone());
+    repository.publish_registry(&candidate).await.unwrap();
+
+    let mut active_document = candidate_document;
+    active_document["agents"][0]["status"] = json!("active");
+    active_document["prompts"][0]["status"] = json!("active");
+    let (golden_only, golden_dir) = registry_fixture(&active_document, "candidate-golden-only");
+    assert!(matches!(
+        repository.publish_registry(&golden_only).await,
+        Err(DefinitionReleaseError::ActivationEvidence(_))
+    ));
+
+    let agent = &active_document["agents"][0];
+    let prompt = &active_document["prompts"][0];
+    let index_path = golden_dir.join("release-index.json");
+    let mut index: Value = serde_json::from_slice(&fs::read(&index_path).unwrap()).unwrap();
+    let golden_agent_report = passing_report(
+        &pool,
+        "agent",
+        agent["agent_key"].as_str().unwrap(),
+        agent["version"].as_str().unwrap(),
+        &definition_digest(agent).unwrap(),
+    )
+    .await;
+    let golden_prompt_report = passing_report(
+        &pool,
+        "prompt",
+        prompt["prompt_key"].as_str().unwrap(),
+        prompt["version"].as_str().unwrap(),
+        &definition_digest(prompt).unwrap(),
+    )
+    .await;
+    index["releases"][0]["activation_evidence"] =
+        json!({"type":"eval_report","report_id":golden_agent_report});
+    index["releases"][1]["activation_evidence"] =
+        json!({"type":"eval_report","report_id":golden_prompt_report});
+    fs::write(&index_path, serde_json::to_vec(&index).unwrap()).unwrap();
+    let zero_cost_evaluated = DefinitionRegistry::load(&golden_dir).unwrap();
+    assert!(matches!(
+        repository.publish_registry(&zero_cost_evaluated).await,
+        Err(DefinitionReleaseError::ActivationEvidence(_))
+    ));
+
+    let agent_report = passing_real_report(
+        &pool,
+        "agent",
+        agent["agent_key"].as_str().unwrap(),
+        agent["version"].as_str().unwrap(),
+        &definition_digest(agent).unwrap(),
+    )
+    .await;
+    let prompt_report = passing_real_report(
+        &pool,
+        "prompt",
+        prompt["prompt_key"].as_str().unwrap(),
+        prompt["version"].as_str().unwrap(),
+        &definition_digest(prompt).unwrap(),
+    )
+    .await;
+    index["releases"][0]["activation_evidence"] =
+        json!({"type":"eval_report","report_id":agent_report});
+    index["releases"][1]["activation_evidence"] =
+        json!({"type":"eval_report","report_id":prompt_report});
+    fs::write(&index_path, serde_json::to_vec(&index).unwrap()).unwrap();
+    let evaluated = DefinitionRegistry::load(&golden_dir).unwrap();
+    repository.publish_registry(&evaluated).await.unwrap();
+
+    let manifests: Vec<String> = sqlx::query_scalar(
+        r#"
+        SELECT entries.lifecycle_status
+        FROM definition_release_manifest_entries entries
+        JOIN definition_release_manifests manifests ON manifests.id = entries.manifest_id
+        WHERE entries.definition_kind = 'agent'
+          AND entries.definition_key = $1
+          AND entries.definition_version = $2
+          AND entries.definition_digest = $3
+        ORDER BY manifests.published_at
+        "#,
+    )
+    .bind(agent["agent_key"].as_str().unwrap())
+    .bind(agent["version"].as_str().unwrap())
+    .bind(definition_digest(agent).unwrap())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(manifests, ["candidate", "active"]);
+    let initial_status: String = sqlx::query_scalar(
+        "SELECT initial_status FROM definition_releases WHERE definition_kind='agent' AND definition_key=$1 AND definition_version=$2",
+    )
+    .bind(agent["agent_key"].as_str().unwrap())
+    .bind(agent["version"].as_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(initial_status, "candidate");
+
+    fs::remove_dir_all(candidate_dir).unwrap();
+    fs::remove_dir_all(golden_dir).unwrap();
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn context_policy_and_profile_activation_require_matching_context_reports() {
     let (pool, _database) = test_pool().await;
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -629,6 +788,35 @@ async fn lifecycle_manifests_and_code_rollback_are_immutable_and_preserve_histor
     let repository = PostgresDefinitionReleaseRepository::new(pool.clone());
 
     repository.publish_registry(&registries[0]).await.unwrap();
+    let agent_report_id = passing_real_report(
+        &pool,
+        "agent",
+        fixture["agents"][0]["agent_key"].as_str().unwrap(),
+        fixture["agents"][0]["version"].as_str().unwrap(),
+        &definition_digest(&fixture["agents"][0]).unwrap(),
+    )
+    .await;
+    let prompt_report_id = passing_real_report(
+        &pool,
+        "prompt",
+        fixture["prompts"][0]["prompt_key"].as_str().unwrap(),
+        fixture["prompts"][0]["version"].as_str().unwrap(),
+        &definition_digest(&fixture["prompts"][0]).unwrap(),
+    )
+    .await;
+    let active_index_path = directories[1].join("release-index.json");
+    let mut active_index: Value =
+        serde_json::from_slice(&fs::read(&active_index_path).unwrap()).unwrap();
+    active_index["releases"][0]["activation_evidence"] =
+        json!({"type":"eval_report","report_id":agent_report_id});
+    active_index["releases"][1]["activation_evidence"] =
+        json!({"type":"eval_report","report_id":prompt_report_id});
+    fs::write(
+        &active_index_path,
+        serde_json::to_vec(&active_index).unwrap(),
+    )
+    .unwrap();
+    registries[1] = DefinitionRegistry::load(&directories[1]).unwrap();
     repository.publish_registry(&registries[1]).await.unwrap();
     repository.publish_registry(&registries[2]).await.unwrap();
 
@@ -698,14 +886,7 @@ async fn lifecycle_manifests_and_code_rollback_are_immutable_and_preserve_histor
     .fetch_one(&pool)
     .await
     .unwrap();
-    let eval_report_id = passing_report(
-        &pool,
-        "agent",
-        "fixture.agent",
-        "1.0.0",
-        &definition_digest(&fixture["agents"][0]).unwrap(),
-    )
-    .await;
+    let eval_report_id = agent_report_id;
 
     // 回滚只重新发布既有 active manifest；不得改写 supported 快照或清理前向兼容数据。
     repository.publish_registry(&registries[1]).await.unwrap();

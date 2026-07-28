@@ -230,6 +230,7 @@ export class ProfileTokenizer {
 
 export function compileContext(request: ContextCompileRequest): CompiledContext {
   validateRequest(request);
+  validateRequiredSources(request);
   const tokenizer = ProfileTokenizer.create(request.tokenizer_profile);
   const budget = fixedBudget(request, tokenizer);
   const candidates = structuredClone(request.candidates).sort(stableCandidateOrder);
@@ -297,6 +298,13 @@ export function compileContext(request: ContextCompileRequest): CompiledContext 
   };
   compiled.digest = sha256Hex(canonicalJson({ ...compiled, digest: undefined }));
   return deepFreeze(compiled);
+}
+
+function validateRequiredSources(request: ContextCompileRequest): void {
+  const presentSources = new Set(request.candidates.map((candidate) => candidate.source_kind));
+  if (request.policy.required_sources.some((source) => !presentSources.has(source))) {
+    throw new ContextCompileError("eligibility", "required_context_unavailable");
+  }
 }
 
 export function finalizeContext(

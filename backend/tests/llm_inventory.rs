@@ -59,6 +59,7 @@ fn every_production_text_model_entrypoint_is_declared_in_the_baseline_inventory(
         "application/agents/adapters/topic_review.rs",
         "application/agents/adapters/sound.rs",
         "application/agents/adapters/work.rs",
+        "crates/novex-production-crew/src/executor/role_executor.rs",
     ] {
         assert!(
             declared_sources.contains(required),
@@ -169,10 +170,32 @@ fn production_model_calls_are_restricted_to_provider_and_audited_executor() {
             .expect("baseline inventory must be valid JSON");
     for node in fixture["rust_nodes"].as_array().unwrap() {
         let node_key = node["node_key"].as_str().unwrap();
+        let source = node["source"].as_str().expect("source must be a string");
+        let source_path = if source.starts_with("crates/") {
+            workspace.join(source)
+        } else {
+            workspace.join("backend/src").join(source)
+        };
+        let source_text = std::fs::read_to_string(&source_path).unwrap_or_else(|error| {
+            panic!(
+                "inventory source {} is unreadable: {error}",
+                source_path.display()
+            )
+        });
+        let has_entrypoint =
+            if source == "crates/novex-production-crew/src/executor/role_executor.rs" {
+                source_text.contains("format!(\"{}.execute\", frozen.definition_key)")
+            } else {
+                backend_text.contains(node_key)
+            };
         assert!(
-            backend_text.contains(node_key),
-            "生产节点 {node_key} 必须存在唯一受审计调用入口"
+            has_entrypoint,
+            "生产节点 {node_key} 必须在声明的 source 中存在受审计调用入口"
         );
+        if source.starts_with("crates/novex-production-crew/") {
+            assert!(source_text.contains("AuditedModelRequest"));
+            assert!(source_text.contains("audited_executor.prepare(request)"));
+        }
     }
     assert!(backend_text.contains("AuditedModelRequest"));
     assert!(backend_text.contains("FixedModelBinding"));
@@ -211,14 +234,21 @@ fn baseline_fixtures_cover_golden_contract_and_zero_external_effects() {
         golden_rust_nodes.insert(node_key.to_string());
         let agent_key = node["agent_key"].as_str().unwrap();
         let prompt_key = node["prompt_key"].as_str().unwrap();
-        let agent = registry.agent(agent_key, "1.0.0").unwrap();
+        // 旧业务节点保留 v1；制作团队首次进入版本化 registry 时即为 v2。
+        // 两类节点都必须继续与本 fixture 的不可变 Prompt/schema digest 精确匹配。
+        let agent = registry
+            .agent(agent_key, "1.0.0")
+            .or_else(|_| registry.active_agent(agent_key))
+            .unwrap_or_else(|error| panic!("inventory agent {agent_key} is missing: {error}"));
         assert_eq!(agent.executor_owner, novex_ai_core::ExecutorOwner::Rust);
         assert_eq!(agent.nodes[node_key].key, prompt_key);
+        let agent_version = agent.version.as_str();
+        let prompt_version = agent.nodes[node_key].version.as_str();
 
         let prompt = registry
             .prompts()
             .iter()
-            .find(|prompt| prompt.prompt_key == prompt_key && prompt.version == "1.0.0")
+            .find(|prompt| prompt.prompt_key == prompt_key && prompt.version == prompt_version)
             .expect("inventory prompt must exist");
         let system = std::fs::read_to_string(registry_root.join(&prompt.system_template))
             .unwrap()
@@ -228,7 +258,17 @@ fn baseline_fixtures_cover_golden_contract_and_zero_external_effects() {
             .unwrap()
             .trim_end_matches(['\r', '\n'])
             .to_string();
-        assert_eq!(system, node["system_prompt"]);
+        let recorded_system = node["system_prompt"]
+            .as_str()
+            .expect("system_prompt must be a string");
+        if let Some(preview) = recorded_system.strip_suffix("...") {
+            assert!(
+                system.starts_with(preview),
+                "system prompt preview drifted for {node_key}"
+            );
+        } else {
+            assert_eq!(system, recorded_system);
+        }
         assert_eq!(sha256_hex(system.as_bytes()), node["system_sha256"]);
         assert_eq!(user_template, node["user_prompt_template"]);
         assert_eq!(
@@ -251,7 +291,7 @@ fn baseline_fixtures_cover_golden_contract_and_zero_external_effects() {
         let snapshot = compiler
             .compile(
                 agent_key,
-                "1.0.0",
+                agent_version,
                 node_key,
                 PromptCompileInput {
                     schema_version: "1".into(),

@@ -20,8 +20,13 @@ pub struct SoundPlan {
 
 impl SoundPlan {
     pub fn validate(content: &Value) -> Result<(), String> {
-        let ms = content.get("music_style").and_then(|v| v.as_str()).unwrap_or("");
-        if ms.is_empty() { return Err("sound_plan 必须包含 music_style".into()); }
+        let ms = content
+            .get("music_style")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if ms.is_empty() {
+            return Err("sound_plan 必须包含 music_style".into());
+        }
         Ok(())
     }
 }

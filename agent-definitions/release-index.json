@@ -1,6 +1,6 @@
 {
   "schema_version": "2",
-  "registry_digest": "e72b2c9c532e77786492f505052751767bf9770a247d64b119b34a57fba4d0a8",
+  "registry_digest": "aaf11095314d8eb694d49b3cfc0a80c30fadc6a1b9f31b94d5ab1a8e95967157",
   "releases": [
     {
       "definition_kind": "agent",
@@ -447,7 +447,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -458,7 +458,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -469,7 +469,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -480,7 +480,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -491,7 +491,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -502,7 +502,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -513,7 +513,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -524,7 +524,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -535,7 +535,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -546,7 +546,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -557,7 +557,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -568,7 +568,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -579,7 +579,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -590,7 +590,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -601,7 +601,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -612,7 +612,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -623,7 +623,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -634,7 +634,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -645,7 +645,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -656,7 +656,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -667,7 +667,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -678,7 +678,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -689,7 +689,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -700,7 +700,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -711,7 +711,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -722,7 +722,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -733,7 +733,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -744,7 +744,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -755,7 +755,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -766,7 +766,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -777,7 +777,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -788,7 +788,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -799,7 +799,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -810,7 +810,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -821,7 +821,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -832,7 +832,7 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
       }
     },
     {
@@ -843,7 +843,205 @@
       "activation_evidence": {
         "type": "golden_baseline",
         "reference": "backend/tests/fixtures/versioned_prompt_baseline.json",
-        "sha256": "087844b39f98702a0ca71113d5f9ef37afa7ca34b36b6d5a3b5c398c32a3164e"
+        "sha256": "79c2d1a11251e718872f7157045e94f79c711dc8d4dff2baca4d4bc09a42c649"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.producer",
+      "definition_version": "3.0.0",
+      "definition_digest": "ddd98911e2ef18df08ef0b36c9f2d3dc3d1d693b5c1e589878fd5802af6db669",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.screenwriter",
+      "definition_version": "3.0.0",
+      "definition_digest": "0012921a9a0b7434889aa2466499d86ebc23dde873035693ac70522a24e35a22",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.character_critic",
+      "definition_version": "3.0.0",
+      "definition_digest": "eaf8adaa113b40989f94569eba8f42539adefeeac04f7a281ed0e247b6e6507b",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.director",
+      "definition_version": "3.0.0",
+      "definition_digest": "00709e9cc9631584af6ff5013ce3256348220b4de019ffb49fec544694bc7182",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.cinematographer",
+      "definition_version": "3.0.0",
+      "definition_digest": "9e4127ba4b4d95f90a5de3b03288afc4066bb49fcf32a28e9bba470661421c1e",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.performance_director",
+      "definition_version": "3.0.0",
+      "definition_digest": "5af75235d1b79366c39806763d955d825c5b34b6735f4bc5ae8081015593833c",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.sound_director",
+      "definition_version": "3.0.0",
+      "definition_digest": "1d8ef5352aaede8e8b5dcc730c42e8aec705ee6d8090750d211028a38163134f",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.editor",
+      "definition_version": "3.0.0",
+      "definition_digest": "9f344fba60dd13bb96aeda89a2849f35238d4ea93e54b98cb7660996ff084d20",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "agent",
+      "definition_key": "production.qc",
+      "definition_version": "3.0.0",
+      "definition_digest": "90d6f2cc1e5c47da8e031f37a9df5b9bc26c34666d3db2f87323381e6f0531df",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.producer.general",
+      "definition_version": "3.0.0",
+      "definition_digest": "5c8552aafca1ca10fef20fe99fc930b7e58bd63dd1eb987d2b9d8b727f576321",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.screenwriter.general",
+      "definition_version": "3.0.0",
+      "definition_digest": "a864c4221b469daa58c36b432da1235a62992595a6aa3421c35575b6edf33dd4",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.character_critic.general",
+      "definition_version": "3.0.0",
+      "definition_digest": "d35230546921203560cdc4b5433bdeee9982d0a33282fbb47ab679dc3a93f31f",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.director.general",
+      "definition_version": "3.0.0",
+      "definition_digest": "80a2f8cd1a930affd24f012eb53d9f6ccbc30e203b12ad418a97179acf2ebbb9",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.cinematographer.general",
+      "definition_version": "3.0.0",
+      "definition_digest": "db6f48712715910e95eda6360e735f66d95c02ab62d0b02b81fb94c4e9ff0f4c",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.performance_director.general",
+      "definition_version": "3.0.0",
+      "definition_digest": "3f34138330b3557cb2bbf7b60c0083aa813f199f553fa17bb6f78a869181931f",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.sound_director.general",
+      "definition_version": "3.0.0",
+      "definition_digest": "866dd6fc4f628ec8f231ebe964d5299ed453166c05738d8c2f3298c81774869e",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.editor.general",
+      "definition_version": "3.0.0",
+      "definition_digest": "536b91462f8d713ec145095da96ef4fb1aebaea6ecc30072b6bfb00702d7c619",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "prompt",
+      "definition_key": "production.qc.general",
+      "definition_version": "3.0.0",
+      "definition_digest": "73656b87c74f390eef9e76500e4a491fcf69d52c8f24889d54c6e8eb604d42b0",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
       }
     },
     {
@@ -903,6 +1101,28 @@
     },
     {
       "definition_kind": "context_policy",
+      "definition_key": "production.character_critic.execute.baseline",
+      "definition_version": "2.0.0",
+      "definition_digest": "3e86587ade451968e3a6cc667b940faaf04e00fc72717e67c562c37dd0bd951a",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.character_critic.execute.baseline",
+      "definition_version": "3.0.0",
+      "definition_digest": "1fdde6af3f51590437d6c49b19a90083482ad86d8d2a9713e682bb273903c874",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
       "definition_key": "production.cinematographer.execute.baseline",
       "definition_version": "1.0.0",
       "definition_digest": "2d5cb8e8b47b3f2f242d8adefe6bc14d5ee99c9589a0f5a53d9e94c0a139a448",
@@ -910,6 +1130,28 @@
         "type": "golden_baseline",
         "reference": "agent-definitions/fixtures/context-contract.json",
         "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.cinematographer.execute.baseline",
+      "definition_version": "2.0.0",
+      "definition_digest": "bce755bc28fa41f8e3925f77d53bdb1c20119b9ded0ca22b7cefba7274e3acaf",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.cinematographer.execute.baseline",
+      "definition_version": "3.0.0",
+      "definition_digest": "4fc6fa5fe224ba8700b6f0dc4c37f368e4fc967a87e285d98ed204fa86edaba6",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
       }
     },
     {
@@ -925,6 +1167,28 @@
     },
     {
       "definition_kind": "context_policy",
+      "definition_key": "production.director.execute.baseline",
+      "definition_version": "2.0.0",
+      "definition_digest": "7655bc5fde764503fc4f4d16d40d40b838223154c788898c6418867dc3afcdc3",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.director.execute.baseline",
+      "definition_version": "3.0.0",
+      "definition_digest": "63ebce2a4ed4f580b774618b74e34f6b64302dd2a690f94dd01f41b1412e864d",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
       "definition_key": "production.editor.execute.baseline",
       "definition_version": "1.0.0",
       "definition_digest": "be0b95cf0c0a6dc70f4bf265aa6e82579cbbb62ddb4fbad80b542f9f1f460896",
@@ -932,6 +1196,28 @@
         "type": "golden_baseline",
         "reference": "agent-definitions/fixtures/context-contract.json",
         "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.editor.execute.baseline",
+      "definition_version": "2.0.0",
+      "definition_digest": "75d88a6711839b152b9f295761fcce0b56b53c502035a5ee99a56bb2bcda88e8",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.editor.execute.baseline",
+      "definition_version": "3.0.0",
+      "definition_digest": "4be18c9a0a2aa6257ec89aecfb7feefa72507d790360d34544414e7318cee386",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
       }
     },
     {
@@ -947,6 +1233,28 @@
     },
     {
       "definition_kind": "context_policy",
+      "definition_key": "production.performance_director.execute.baseline",
+      "definition_version": "2.0.0",
+      "definition_digest": "1b4847c26b3a55ce4c7c1d51bf5851af90c463d117cf948ebd3f4a97cc1dd00c",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.performance_director.execute.baseline",
+      "definition_version": "3.0.0",
+      "definition_digest": "68b2425e76d835ba7ac5242a0fcc2c08ec53071c5fdbc8b962dd622faaf9c930",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
       "definition_key": "production.producer.execute.baseline",
       "definition_version": "1.0.0",
       "definition_digest": "cf3761e46edcc1394c05fb6dbbabb962fc0dcf8f3edc98cc7446f1a6ec046a5e",
@@ -954,6 +1262,28 @@
         "type": "golden_baseline",
         "reference": "agent-definitions/fixtures/context-contract.json",
         "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.producer.execute.baseline",
+      "definition_version": "2.0.0",
+      "definition_digest": "864b33de3c1661519a123da293b51a65c15d48d33f105d4ecc9721ee509f5d23",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.producer.execute.baseline",
+      "definition_version": "3.0.0",
+      "definition_digest": "3a090cbe9140f4688cc5df057967f5c6c6ebfeddaa5383e933e9a836fcc0c5ce",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
       }
     },
     {
@@ -969,6 +1299,28 @@
     },
     {
       "definition_kind": "context_policy",
+      "definition_key": "production.qc.execute.baseline",
+      "definition_version": "2.0.0",
+      "definition_digest": "bfdef3cd1d941c0289a78935b52d3c55390f3f18c04f4bf819ae63855850ef30",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.qc.execute.baseline",
+      "definition_version": "3.0.0",
+      "definition_digest": "544a36b669868233a9908b666a3c5772788bdac4b89d735742128ba702c471d4",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
       "definition_key": "production.screenwriter.execute.baseline",
       "definition_version": "1.0.0",
       "definition_digest": "e41dfcf0c6078667c99b911436633cf56d258730b40acdd58c893e3f7f2d5854",
@@ -980,6 +1332,28 @@
     },
     {
       "definition_kind": "context_policy",
+      "definition_key": "production.screenwriter.execute.baseline",
+      "definition_version": "2.0.0",
+      "definition_digest": "d8527d7df2ad6e3fc7de25c4053ac2e32f1fda939d49e46965fed8854fc0fa7b",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.screenwriter.execute.baseline",
+      "definition_version": "3.0.0",
+      "definition_digest": "466fa8d9ca4278126316702166533462e09ffd16ede0f8c6648c4d17a402ec63",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
       "definition_key": "production.sound_director.execute.baseline",
       "definition_version": "1.0.0",
       "definition_digest": "f73258f0d7fd7dfb37111950001e4f8b2a4757d691b9e9b8d633dee1ec946ded",
@@ -987,6 +1361,28 @@
         "type": "golden_baseline",
         "reference": "agent-definitions/fixtures/context-contract.json",
         "sha256": "f92d031d638f8a34db6d95739a2488967646694e719ac5c1653a12995c0c93b1"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.sound_director.execute.baseline",
+      "definition_version": "2.0.0",
+      "definition_digest": "a4f751e03a33c61a2ac2893cf8791544beb0057e2dcde12082c5e6bfd522da4b",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
+      }
+    },
+    {
+      "definition_kind": "context_policy",
+      "definition_key": "production.sound_director.execute.baseline",
+      "definition_version": "3.0.0",
+      "definition_digest": "59e236e7afbaa726cc0f63e42bd9d9c2d1d8d4d7f849fff8cf2956629c2e6dfa",
+      "activation_evidence": {
+        "type": "golden_baseline",
+        "reference": "agent-definitions/fixtures/production-crew-candidate-registry-contract-v3.json",
+        "sha256": "7fa02618b3bc7725bda4b0bf0e7ba37f1bdd6001e4134ed6e0990e35337f2c15"
       }
     },
     {

@@ -145,6 +145,10 @@ impl PostgresWorkLibraryRepository {
         Self { pool }
     }
 
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     pub async fn list_works(
         &self,
         project_id: Uuid,

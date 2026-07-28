@@ -22,15 +22,22 @@ pub struct CreativeBrief {
 impl CreativeBrief {
     /// 验证 content 包含必需字段
     pub fn validate(content: &Value) -> Result<(), String> {
-        let ta = content.get("target_audience").and_then(|v| v.as_str()).unwrap_or("");
-        if ta.is_empty() { return Err("creative_brief 必须包含 target_audience".into()); }
+        let ta = content
+            .get("target_audience")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if ta.is_empty() {
+            return Err("creative_brief 必须包含 target_audience".into());
+        }
         let km = content.get("key_messages").and_then(|v| v.as_array());
         if km.map(|a| a.is_empty()).unwrap_or(true) {
             return Err("creative_brief 的 key_messages 不能为空".into());
         }
         Ok(())
     }
-    pub fn is_approved(&self) -> bool { self.status == ArtifactStatus::Approved.as_str() }
+    pub fn is_approved(&self) -> bool {
+        self.status == ArtifactStatus::Approved.as_str()
+    }
 }
 
 #[cfg(test)]

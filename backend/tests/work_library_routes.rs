@@ -247,6 +247,23 @@ async fn version_derivation_diff_and_confirmation_are_immutable_stale_safe_and_i
             .unwrap(),
         "running"
     );
+    assert_eq!(
+        sqlx::query_as::<_, (i64, i64, String)>(
+            r#"
+            SELECT
+                (SELECT COUNT(*) FROM work_artifacts WHERE work_version_id=$1),
+                (SELECT COUNT(*) FROM work_generation_runs WHERE work_version_id=$2),
+                (SELECT status FROM work_plans WHERE work_version_id=$2 ORDER BY plan_version DESC LIMIT 1)
+            "#,
+        )
+        .bind(seeded.version_id)
+        .bind(Uuid::parse_str(draft_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        (seeded.artifact_ids.len() as i64, 0, "ready".into()),
+        "派生草稿不得覆盖原媒体或在人工确认前创建新运行"
+    );
 
     let (status, diff) = send_json(
         &app,
@@ -259,6 +276,9 @@ async fn version_derivation_diff_and_confirmation_are_immutable_stale_safe_and_i
     assert_eq!(status, StatusCode::CREATED);
     assert_no_amount_fields(&diff);
     assert_eq!(diff["resource_usage"]["video_task_count"], 1);
+    assert!(diff["reused_artifact_ids"]
+        .as_array()
+        .is_some_and(|ids| !ids.is_empty()));
     let diff_id = diff["id"].as_str().unwrap();
 
     send_json(
@@ -331,6 +351,38 @@ async fn version_derivation_diff_and_confirmation_are_immutable_stale_safe_and_i
     .await;
     assert_eq!(repeat_status, StatusCode::CREATED);
     assert_eq!(repeated_regeneration["id"], regenerated["id"]);
+    let regenerated_id = Uuid::parse_str(regenerated["id"].as_str().unwrap()).unwrap();
+    let (_, regeneration_diff) = send_json(
+        &app,
+        "POST",
+        &format!("/api/work-versions/{regenerated_id}/diff"),
+        json!({}),
+        None,
+    )
+    .await;
+    assert!(regeneration_diff["reused_artifact_ids"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
+    assert!(regeneration_diff["affected_nodes"]
+        .as_array()
+        .is_some_and(|nodes| nodes.iter().any(|node| node == "compose")));
+    assert_eq!(
+        sqlx::query_as::<_, (i64, String, String)>(
+            r#"
+            SELECT
+                (SELECT COUNT(*) FROM work_generation_runs WHERE work_version_id=$1),
+                (SELECT status FROM work_plans WHERE work_version_id=$1 ORDER BY plan_version DESC LIMIT 1),
+                (SELECT status FROM work_generation_runs WHERE id=$2)
+            "#,
+        )
+        .bind(regenerated_id)
+        .bind(source_run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        (0, "ready".into(), "running".into()),
+        "全量返工也必须等待新确认，且原运行技术状态保持不变"
+    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM work_versions WHERE source_version_id=$1 AND derivation_kind='full_regeneration' AND status='draft'",

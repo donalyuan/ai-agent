@@ -70,11 +70,11 @@ fn load_registry_document(
 #[test]
 fn rust_loader_validates_registry_references_templates_and_owner() {
     let registry = DefinitionRegistry::load(registry_root()).unwrap();
-    assert_eq!(registry.agents().len(), 21);
-    assert_eq!(registry.prompts().len(), 35);
-    assert_eq!(registry.context_policies().len(), 27);
+    assert_eq!(registry.agents().len(), 30);
+    assert_eq!(registry.prompts().len(), 44);
+    assert_eq!(registry.context_policies().len(), 45);
     assert_eq!(registry.tokenizer_profiles().len(), 3);
-    assert_eq!(registry.release_evidence().len(), 86);
+    assert_eq!(registry.release_evidence().len(), 122);
     assert!(registry
         .active_agent("personal.general")
         .unwrap()
@@ -131,6 +131,106 @@ fn registry_v2_requires_governed_references_and_rejects_invalid_policy_profile_c
     assert!(load_registry_document(&unknown, None)
         .unwrap_err()
         .contains("unknown field"));
+}
+
+#[test]
+fn production_crew_contract_changes_are_isolated_in_candidate_versions() {
+    let registry = DefinitionRegistry::load(registry_root()).unwrap();
+    let compiler = PromptCompiler::new(&registry);
+    let affected_roles = [
+        "producer",
+        "screenwriter",
+        "character_critic",
+        "director",
+        "cinematographer",
+        "performance_director",
+        "sound_director",
+        "editor",
+        "qc",
+    ];
+
+    for role in affected_roles {
+        let agent_key = format!("production.{role}");
+        let prompt_key = format!("production.{role}.general");
+        let node_key = format!("production.{role}.execute");
+        let policy_key = format!("production.{role}.execute.baseline");
+
+        let active = registry.active_agent(&agent_key).unwrap();
+        assert_eq!(active.version, "2.0.0");
+        assert_eq!(active.nodes[&node_key].version, "2.0.0");
+        assert_eq!(
+            active.nodes[&node_key]
+                .context_policy
+                .as_ref()
+                .unwrap()
+                .version,
+            "1.0.0"
+        );
+
+        let candidate = registry.agent(&agent_key, "3.0.0").unwrap();
+        assert_eq!(candidate.status, novex_ai_core::DefinitionStatus::Candidate);
+        assert_eq!(candidate.nodes[&node_key].key, prompt_key);
+        assert_eq!(candidate.nodes[&node_key].version, "3.0.0");
+        assert_eq!(
+            candidate.nodes[&node_key].context_policy.as_ref().unwrap(),
+            &novex_ai_core::DefinitionReference {
+                key: policy_key.clone(),
+                version: "3.0.0".into(),
+            }
+        );
+        assert_eq!(
+            registry
+                .context_policy(&policy_key, "3.0.0")
+                .unwrap()
+                .status,
+            novex_ai_core::DefinitionStatus::Candidate
+        );
+        assert_eq!(
+            registry
+                .context_policy(&policy_key, "3.0.0")
+                .unwrap()
+                .required_sources,
+            ["project", "user_instruction"]
+        );
+        assert_eq!(
+            registry
+                .context_policy(&policy_key, "2.0.0")
+                .unwrap()
+                .required_sources,
+            ["project", "script_revision_command", "user_instruction"]
+        );
+
+        let input = PromptCompileInput {
+            schema_version: "1".into(),
+            variables: BTreeMap::new(),
+            fragments: vec![DynamicFragment {
+                id: format!("candidate-contract:{role}"),
+                trust: TrustLevel::Reference,
+                source: "production_contract_fixture".into(),
+                content: Some("受控 Full Crew 输入快照".into()),
+                asset: None,
+            }],
+        };
+        assert!(compiler
+            .compile(&agent_key, "3.0.0", &node_key, input.clone(), "chat", None,)
+            .is_err());
+        let dry_run = compiler
+            .compile_for_replay(&agent_key, "3.0.0", &node_key, input, "chat", None)
+            .unwrap();
+        assert_eq!(dry_run.agent_version, "3.0.0");
+        assert_eq!(dry_run.prompt_version, "3.0.0");
+        assert_eq!(dry_run.prompt_key, prompt_key);
+        assert!(dry_run.system.contains("真实"));
+        assert_eq!(
+            dry_run.output_schema.as_ref().unwrap()["name"],
+            format!("production_{role}_output_v3")
+        );
+        assert_eq!(dry_run.output_schema.as_ref().unwrap()["strict"], true);
+        assert_eq!(
+            dry_run.output_schema.as_ref().unwrap()["schema"]["additionalProperties"],
+            false
+        );
+    }
 }
 
 #[test]

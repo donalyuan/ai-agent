@@ -1,10 +1,12 @@
 import os
+import uuid
 
 import pytest
 
 from video_worker.work_generation import (
     FakeWorkProvider,
     InMemoryWorkGenerationStore,
+    PostgresWorkGenerationStore,
     TemporaryWorkProviderError,
     UnknownSubmissionError,
     WorkStep,
@@ -15,6 +17,7 @@ from video_worker.work_generation import (
     _resolve_scene_images,
     RealWorkGenerationLimits,
     WorkGenerationConfigurationError,
+    _work_artifact_identity,
     validate_work_generation_mode,
 )
 
@@ -236,9 +239,63 @@ def test_real_cost_limits_reject_out_of_scope_run(overrides, message):
         limits.validate_step(WorkStep(**values))
 
 
+def test_worker_resource_limit_blocks_media_side_effect_before_submit():
+    class LimitCheckedProvider(FakeWorkProvider):
+        def __init__(self):
+            self.limits = RealWorkGenerationLimits({"approved-run"})
+            self.submit_calls = 0
+
+        def bind_step(self, step):
+            self.limits.validate_step(step)
+
+        def submit(self, step):
+            self.submit_calls += 1
+            return super().submit(step)
+
+    step = WorkStep(
+        "video",
+        "approved-run",
+        "video_segment",
+        run_resource_usage={
+            "video_task_count": 2,
+            "video_seconds": 15,
+            "tts_characters": 0,
+            "asr_seconds": 0,
+        },
+    )
+    store = InMemoryWorkGenerationStore([step])
+    provider = LimitCheckedProvider()
+
+    assert process_next_work_generation(store, provider)
+
+    assert provider.submit_calls == 0
+    assert step.status == "failed"
+    assert step.attempts[0].error_summary == "视频任务数超过真实生成上限"
+
+
 def test_fake_and_real_modes_are_mutually_exclusive():
     with pytest.raises(WorkGenerationConfigurationError, match="不能同时启用"):
         validate_work_generation_mode(fake_enabled=True, real_enabled=True, worker_enabled=True)
+
+
+@pytest.mark.parametrize(
+    ("artifact_role", "file_name", "expected"),
+    [
+        ("video_segment", "segment.mp4", ("reusable_intermediate", "video/mp4")),
+        ("tts_audio", "voice.mp3", ("audio_track", "audio/mpeg")),
+        ("subtitle", "subtitle.srt", ("subtitle", "application/x-subrip")),
+        ("final_video", "final.mp4", ("final_video", "video/mp4")),
+    ],
+)
+def test_generated_material_roles_have_formal_work_artifact_identity(
+    artifact_role, file_name, expected
+):
+    assert _work_artifact_identity(artifact_role, file_name) == expected
+
+
+def test_unknown_generated_role_cannot_bypass_work_artifact_registration():
+    with pytest.raises(WorkGenerationConfigurationError, match="不支持登记"):
+        _work_artifact_identity("thumbnail", "thumbnail.jpg")
 
 
 def test_running_cancellation_is_forwarded_only_to_capable_provider():
@@ -271,6 +328,92 @@ def test_postgres_claim_query_matches_migrated_schema():
     )
     with psycopg.connect(database_url) as connection:
         connection.execute(f"EXPLAIN {WORK_GENERATION_CLAIM_SQL}").fetchall()
+
+
+def test_generated_material_and_work_artifact_are_registered_atomically(tmp_path):
+    import psycopg
+
+    database_url = os.getenv(
+        "DATABASE_URL",
+        "postgres://postgres:postgres@biga-postgres:5432/video_agent",
+    )
+    key = uuid.uuid4().hex
+    with psycopg.connect(database_url) as connection:
+        project_id = connection.execute(
+            "INSERT INTO projects (name) VALUES (%s) RETURNING id",
+            (f"work-artifact-{key}",),
+        ).fetchone()[0]
+        script_id = connection.execute(
+            "INSERT INTO scripts (project_id,title,hook,content,status) VALUES (%s,%s,'hook','{}','approved') RETURNING id",
+            (project_id, f"script-{key}"),
+        ).fetchone()[0]
+        work_id = connection.execute(
+            "INSERT INTO works (project_id,script_id,title,status) VALUES (%s,%s,%s,'running') RETURNING id",
+            (project_id, script_id, f"work-{key}"),
+        ).fetchone()[0]
+        version_id = connection.execute(
+            "INSERT INTO work_versions (work_id,version_no,source_manifest_version,input_snapshot,model_snapshot,parameter_snapshot,status) VALUES (%s,1,%s,'{}','{}','{}','running') RETURNING id",
+            (work_id, key),
+        ).fetchone()[0]
+        plan_id = connection.execute(
+            "INSERT INTO work_plans (work_id,work_version_id,plan_version,status,input_fingerprint,capability_snapshot,output_snapshot,prompt_snapshot,timeline_snapshot) VALUES (%s,%s,1,'confirmed',%s,'{}','{}','{}','{}') RETURNING id",
+            (work_id, version_id, "a" * 64),
+        ).fetchone()[0]
+        run_id = connection.execute(
+            "INSERT INTO work_generation_runs (work_id,work_version_id,work_plan_id,idempotency_key,status,model_snapshot,capability_snapshot,prompt_snapshot,timeline_snapshot,parameter_snapshot) VALUES (%s,%s,%s,%s,'running','{}','{}','{}','{}','{}') RETURNING id",
+            (work_id, version_id, plan_id, key),
+        ).fetchone()[0]
+        step_id = connection.execute(
+            "INSERT INTO work_generation_steps (run_id,step_no,step_type,status) VALUES (%s,1,'video_segment','running') RETURNING id",
+            (run_id,),
+        ).fetchone()[0]
+        attempt_id = connection.execute(
+            "INSERT INTO work_generation_attempts (step_id,attempt_no,status,model_snapshot,resource_usage) VALUES (%s,1,'running','{}','{}') RETURNING id",
+            (step_id,),
+        ).fetchone()[0]
+        connection.commit()
+
+    output = tmp_path / f"{key}.mp4"
+    output.write_bytes(b"deterministic-video-fixture")
+    material_id = uuid.uuid4()
+    step = WorkStep(
+        str(step_id),
+        str(run_id),
+        "video_segment",
+        attempts=[WorkAttempt(str(attempt_id), str(step_id), 1, "running")],
+        work_id=str(work_id),
+        work_version_id=str(version_id),
+        project_id=str(project_id),
+    )
+    store = PostgresWorkGenerationStore(database_url)
+    try:
+        store.register_generated_material(
+            step,
+            material_id=material_id,
+            material_type="video",
+            artifact_role="video_segment",
+            file_url=f"/assets/{key}.mp4",
+            file_name="视频片段.mp4",
+            file_path=output,
+            media_metadata={"duration_ms": 4000},
+            tags=["测试"],
+        )
+        with psycopg.connect(database_url) as connection:
+            artifact = connection.execute(
+                "SELECT material_id,generation_step_id,role,sha256,metadata FROM work_artifacts WHERE work_version_id=%s",
+                (version_id,),
+            ).fetchone()
+            assert artifact[0] == material_id
+            assert artifact[1] == step_id
+            assert artifact[2] == "reusable_intermediate"
+            assert artifact[3] == step.output_snapshot["sha256"]
+            assert artifact[4]["generation_attempt_id"] == str(attempt_id)
+    finally:
+        with psycopg.connect(database_url) as connection:
+            connection.execute("DELETE FROM work_artifacts WHERE work_version_id=%s", (version_id,))
+            connection.execute("DELETE FROM materials WHERE id=%s", (material_id,))
+            connection.execute("DELETE FROM projects WHERE id=%s", (project_id,))
+            connection.commit()
 
 
 def test_fake_compose_prefers_locked_scene_images(tmp_path):

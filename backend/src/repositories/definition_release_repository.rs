@@ -324,10 +324,41 @@ async fn validate_activation_evidence(
                 "active {key}@{version} has no immutable activation evidence"
             ))
         })?;
+    let was_published_as_candidate = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM definition_releases
+            WHERE definition_kind = $1
+              AND definition_key = $2
+              AND definition_version = $3
+              AND definition_digest = $4
+              AND initial_status = 'candidate'
+        )
+        "#,
+    )
+    .bind(kind_name(kind))
+    .bind(key)
+    .bind(version)
+    .bind(definition_digest)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if was_published_as_candidate
+        && !matches!(
+            release.activation_evidence,
+            ActivationEvidence::EvalReport { .. }
+        )
+    {
+        return Err(DefinitionReleaseError::ActivationEvidence(format!(
+            "candidate {key}@{version} requires an immutable EvalReport before activation"
+        )));
+    }
+    let requires_real_model = was_published_as_candidate
+        && matches!(kind, DefinitionKind::Agent | DefinitionKind::Prompt);
     match &release.activation_evidence {
         ActivationEvidence::GoldenBaseline { .. } => Ok(()),
         ActivationEvidence::EvalReport { report_id } => {
-            validate_eval_report(transaction, release, report_id).await
+            validate_eval_report(transaction, release, report_id, requires_real_model).await
         }
     }
 }
@@ -336,6 +367,7 @@ async fn validate_eval_report(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     release: &DefinitionReleaseEvidence,
     report_id: &str,
+    requires_real_model: bool,
 ) -> Result<(), DefinitionReleaseError> {
     let report_id = Uuid::parse_str(report_id)
         .map_err(|_| DefinitionReleaseError::ActivationEvidence("invalid EvalReport id".into()))?;
@@ -352,6 +384,7 @@ async fn validate_eval_report(
               AND runs.candidate_version = $3
               AND runs.candidate_digest = $4
               AND runs.definition_kind = $5
+              AND (NOT $6 OR runs.validation_mode = 'real_model')
               AND (
                     (runs.definition_kind IN ('context_policy', 'tokenizer_profile')
                         AND runs.validation_mode IN ('golden_baseline', 'zero_cost', 'real_model')
@@ -367,12 +400,8 @@ async fn validate_eval_report(
     .bind(&release.definition_key)
     .bind(&release.definition_version)
     .bind(&release.definition_digest)
-    .bind(match release.definition_kind {
-        DefinitionKind::Agent => "agent",
-        DefinitionKind::Prompt => "prompt",
-        DefinitionKind::ContextPolicy => "context_policy",
-        DefinitionKind::TokenizerProfile => "tokenizer_profile",
-    })
+    .bind(kind_name(release.definition_kind))
+    .bind(requires_real_model)
     .fetch_one(&mut **transaction)
     .await?;
     if matches {
@@ -450,6 +479,15 @@ fn status_name(status: DefinitionStatus) -> &'static str {
         DefinitionStatus::Active => "active",
         DefinitionStatus::Supported => "supported",
         DefinitionStatus::Revoked => "revoked",
+    }
+}
+
+fn kind_name(kind: DefinitionKind) -> &'static str {
+    match kind {
+        DefinitionKind::Agent => "agent",
+        DefinitionKind::Prompt => "prompt",
+        DefinitionKind::ContextPolicy => "context_policy",
+        DefinitionKind::TokenizerProfile => "tokenizer_profile",
     }
 }
 

@@ -1742,7 +1742,7 @@ async fn sound_agent_recommends_only_catalog_voice_and_never_executes_speech_too
         .iter()
         .filter(|decision| decision["decision"] == "selected")
         .collect::<Vec<_>>();
-    for source_kind in ["conversation_entry", "current_work", "voice_catalog"] {
+    for source_kind in ["user_instruction", "current_work", "voice_catalog"] {
         assert!(selected
             .iter()
             .any(|decision| decision["source_kind"] == source_kind));

@@ -18,7 +18,9 @@ pub use audited_model::{
     text_context_candidate, AuditedCallOwner, AuditedModelError, AuditedModelExecutor,
     AuditedModelRequest, AuditedModelResponse, AuditedParsedModelResponse, AuditedTerminalStatus,
     BoundModelResolver, FinishAuditedCall, FixedDefinitionBinding, FixedModelBinding,
-    ModelCallAuditStore, PrepareAuditedCall, PrepareAuditedCallWithContext, ResolvedBoundModel,
+    ModelCallAuditStore, PrepareAuditedCall, PrepareAuditedCallWithContext,
+    PreparedAuditedModelCall, PreparedAuditedModelFailure, PreparedAuditedModelOutcome,
+    PreparedAuditedModelSuccess, ResolvedBindingEvidence, ResolvedBoundModel,
     TextContextCandidateInput,
 };
 pub use context_audit::{ContextAuditStore, PersistContextCompileAttempt, PersistContextSnapshot};

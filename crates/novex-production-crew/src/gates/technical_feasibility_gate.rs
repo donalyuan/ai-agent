@@ -61,25 +61,34 @@ mod tests {
             artifacts: HashMap::new(),
             project_metadata: json!({}),
         };
-        assert!(matches!(gate.check(&ctx).await.unwrap(), GateDecision::Pass));
+        assert!(matches!(
+            gate.check(&ctx).await.unwrap(),
+            GateDecision::Pass
+        ));
     }
 
     #[tokio::test]
     async fn test_wait_with_pending_high_priority() {
         let gate = TechnicalFeasibilityGate;
         let mut artifacts = HashMap::new();
-        artifacts.insert("collaboration_suggestions".to_string(), vec![json!({
-            "id": Uuid::new_v4().to_string(),
-            "from_role": "cinematographer",
-            "status": "pending",
-            "content": { "priority": "high", "reason": "技术问题", "specific_change": "调整" }
-        })]);
+        artifacts.insert(
+            "collaboration_suggestions".to_string(),
+            vec![json!({
+                "id": Uuid::new_v4().to_string(),
+                "from_role": "cinematographer",
+                "status": "pending",
+                "content": { "priority": "high", "reason": "技术问题", "specific_change": "调整" }
+            })],
+        );
         let ctx = GateContext {
             project_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             artifacts,
             project_metadata: json!({}),
         };
-        assert!(matches!(gate.check(&ctx).await.unwrap(), GateDecision::WaitApproval { .. }));
+        assert!(matches!(
+            gate.check(&ctx).await.unwrap(),
+            GateDecision::WaitApproval { .. }
+        ));
     }
 }

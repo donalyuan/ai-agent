@@ -65,7 +65,10 @@ mod tests {
             artifacts: HashMap::new(),
             project_metadata: json!({}),
         };
-        assert!(matches!(gate.check(&ctx).await.unwrap(), GateDecision::Pass));
+        assert!(matches!(
+            gate.check(&ctx).await.unwrap(),
+            GateDecision::Pass
+        ));
     }
 
     #[tokio::test]
@@ -73,15 +76,19 @@ mod tests {
         let gate = BudgetGate;
         let mut artifacts = HashMap::new();
         // 3个镜头 = 1.5元，但预算只有 1.0 元
-        artifacts.insert("shot_contract".to_string(), vec![
-            json!({}), json!({}), json!({}),
-        ]);
+        artifacts.insert(
+            "shot_contract".to_string(),
+            vec![json!({}), json!({}), json!({})],
+        );
         let ctx = GateContext {
             project_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             artifacts,
             project_metadata: json!({ "budget": 1.0 }),
         };
-        assert!(matches!(gate.check(&ctx).await.unwrap(), GateDecision::Reject { .. }));
+        assert!(matches!(
+            gate.check(&ctx).await.unwrap(),
+            GateDecision::Reject { .. }
+        ));
     }
 }

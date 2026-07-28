@@ -4,6 +4,6 @@ pub mod definition;
 pub mod loader;
 pub mod registry;
 
-pub use definition::{RoleDefinition, PromptRef, Lifecycle};
+pub use definition::{Lifecycle, PromptRef, RoleDefinition};
 pub use loader::RoleLoader;
 pub use registry::RoleRegistry;

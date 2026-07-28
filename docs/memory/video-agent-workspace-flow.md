@@ -91,6 +91,11 @@ metadata:
 - `projects.strategy_profile` 保存结构化账号策略；账号策略只在“内容策略 / 账号策略”维护，不在当前选题池重复展示编辑入口。
 - `content_topics` 承载独立选题生命周期 `idea -> approved -> scripted -> archived`；原始批次和补充批次按主题组聚合，批次只承担生成来源和审计。
 - 脚本生成必须绑定真实项目和选题，保存 `scripts.topic_id` 与 `scripts.content.topic_snapshot`；成功后把选题更新为 `scripted`，保证项目、选题和脚本链路可追踪。
+- Full Crew 是视频工作台的正式作品生产模式，必须绑定现有 `projects` 和 `content_topics`；经制作 Gate 批准的剧本、镜头和作品写入现有 `scripts`、`scenes`、作品及生成任务业务模型。虚拟制作团队的 `ProductionState` 只保存制作过程版本、协作建议和审计证据，不得成为与现有视频业务平行的第二套正式数据。
+- Full Crew 只允许从 `active` 当前账号下的 `approved` 选题启动；同一 Topic 同时只允许一个 active 制作意图，v1 每个制作意图只允许一个 Run，活跃期间禁止修改或软删除选题并阻止账号归档。编剧产出的 `StoryBible + CharacterBible[] + ScriptDraft` 必须作为同一 `ScriptPackage` 原子审批；批准后以确定性映射在同一事务内创建正式 `approved` 脚本与分镜并把选题更新为 `scripted`，不得二次审批或在 Gate 后调用 LLM 转换格式。
+- Full Crew 的 Brief、Script 和 Production Package reject 使用有界 revision epoch；旧产物和 GateDecision 保持不可变，只重开 owner 和确定性后继。导演若要改变已批准脚本语义，必须回流编剧并重新形成 ScriptPackage，晋升为带 `parent_id` 的新 Script，同时使旧下游 package/manifest/plan 失效。
+- Full Crew 后续制作必须复用既有画面生成、作品计划和作品级人工确认链路；操作者对 Prompt、主画面、模型、音色、声音模式、字幕、时间线或输出参数的修改必须作为 override diff 进入 WorkVersion/WorkPlan fingerprint，并重新规划确认，不得回写已批准 ProductionPackage。正式执行只展示并限制非金额资源用量，不得恢复金额估算。
+- ProductionRun 必须真实传播 WorkGeneration 的成功、失败、人工处理、取消和结果不确定状态；取消或重试只能通过既有正式端口，不能直接改技术终态或重复提交 provider。Editor/QC 必须读取当前 WorkVersion 的 required take inventory、真实成片和不可变媒体证据；每个 take 按实际 segment 关联有序 Scene 集合及各 Scene 的适用 ShotContract 集合，不虚构 take/Shot 一对一关系，质量产物按 Run/WorkVersion 追加版本化。缺少确定性映射或适用视觉/音频能力时明确阻断，不得用文本评审、空结果或跨版本记录冒充真实质量检查。
 - 当前范围不包含抖音、小红书等平台账号凭据、发布账号管理或 `accounts` 表改造；删除、归档、权限和多成员管理需要独立 OpenSpec change。
 
 ## 底层平台边界

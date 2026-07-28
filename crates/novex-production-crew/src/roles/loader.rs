@@ -1,8 +1,8 @@
 //! 角色定义加载器：从 YAML manifest 文件读取并验证角色定义
 
-use crate::error::{ProductionError};
-use crate::ProductionResult;
+use crate::error::ProductionError;
 use crate::roles::definition::RoleDefinition;
+use crate::ProductionResult;
 use std::path::Path;
 
 pub struct RoleLoader;
@@ -27,8 +27,7 @@ impl RoleLoader {
             ProductionError::YamlParse(format!("读取角色目录失败 {:?}: {}", dir, e))
         })?;
         for entry in entries {
-            let entry = entry
-                .map_err(|e| ProductionError::YamlParse(e.to_string()))?;
+            let entry = entry.map_err(|e| ProductionError::YamlParse(e.to_string()))?;
             let path = entry.path();
             let is_yaml = path.extension().and_then(|e| e.to_str()) == Some("yaml");
             let is_registry = path
@@ -47,9 +46,7 @@ impl RoleLoader {
     /// 确保 role_key 和 prompt_definition_ref.key 非空
     pub fn validate(def: &RoleDefinition) -> ProductionResult<()> {
         if def.role_key.is_empty() {
-            return Err(ProductionError::YamlParse(
-                "角色 role_key 不能为空".into(),
-            ));
+            return Err(ProductionError::YamlParse("角色 role_key 不能为空".into()));
         }
         if def.prompt_definition_ref.key.is_empty() {
             return Err(ProductionError::YamlParse(format!(

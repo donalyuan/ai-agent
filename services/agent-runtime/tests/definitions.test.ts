@@ -63,11 +63,17 @@ async function loadFixtureRegistry(
 describe("versioned definition contracts", () => {
   it("loads the same registry and canonical digest as Rust", async () => {
     const registry = await loadDefinitionRegistry(DEFINITIONS);
-    expect(registry.agents).toHaveLength(12);
-    expect(registry.prompts).toHaveLength(26);
-    expect(registry.context_policies).toHaveLength(18);
+    expect(registry.agents).toHaveLength(30);
+    expect(registry.prompts).toHaveLength(44);
+    expect(registry.context_policies).toHaveLength(45);
     expect(registry.tokenizer_profiles).toHaveLength(3);
-    expect(registry.releases).toHaveLength(59);
+    expect(registry.releases).toHaveLength(122);
+    expect(registry.releases).toHaveLength(
+      registry.agents.length
+        + registry.prompts.length
+        + registry.context_policies.length
+        + registry.tokenizer_profiles.length,
+    );
     expect(activeAgent(registry, "personal.general").executor_owner).toBe("pi");
     expect(Object.values(activeAgent(registry, "personal.general").nodes).every((node) => node.context_policy)).toBe(true);
     expect(() => assertProductionExecutionIntegrity(registry)).not.toThrow();
@@ -333,9 +339,13 @@ describe("versioned definition contracts", () => {
           schema_version: "2", owner: agent.executor_owner, owner_id: `golden-${nodeKey}`, node_key: nodeKey,
           compiled_at: "2026-07-25T00:00:00Z", model_context_window: 1_000_000, policy,
           tokenizer_profile: tokenizer, prepared_prompt: prepared.envelope,
-          candidates: [{ candidate_id: "golden", source_kind: policy.allowed_sources[0]!, source_id: "golden", source_version: "1",
-            trust, priority: "p0", required: true, render_order: 0, observed_at: "2026-07-25T00:00:00Z", supersedes: [],
-            content_hash: sha256Hex(canonicalJson(payload)), payload }], atomic_groups: [],
+          candidates: (policy.required_sources.length > 0 ? policy.required_sources : [policy.allowed_sources[0]!])
+            .map((sourceKind, index) => ({
+              candidate_id: `golden-${sourceKind}`, source_kind: sourceKind, source_id: `golden-${sourceKind}`, source_version: "1",
+              trust, priority: "p0" as const, required: true, render_order: index,
+              observed_at: "2026-07-25T00:00:00Z", supersedes: [],
+              content_hash: sha256Hex(canonicalJson(payload)), payload,
+            })), atomic_groups: [],
         });
         const finalized = finalizePrompt(prepared, `snapshot-${nodeKey}`, compiled, tokenizer);
         expect(finalized.promptSnapshot, nodeKey).toMatchObject({
@@ -348,6 +358,6 @@ describe("versioned definition contracts", () => {
         checked += 1;
       }
     }
-    expect(checked).toBe(18);
+    expect(checked).toBe(27);
   });
 });

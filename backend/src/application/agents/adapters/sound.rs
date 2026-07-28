@@ -82,7 +82,7 @@ impl SoundAgentAdapter {
                             context_candidates: vec![
                                 text_context_candidate(TextContextCandidateInput {
                                     candidate_id: candidate_ids[0].clone(),
-                                    source_kind: "conversation_entry".into(),
+                                    source_kind: "user_instruction".into(),
                                     source_id: user_message.id.to_string(),
                                     source_version: user_message.created_at.to_rfc3339_opts(
                                         chrono::SecondsFormat::Nanos,

@@ -14,7 +14,11 @@ impl Gate for ScriptApprovalGate {
     }
 
     async fn check(&self, context: &GateContext) -> ProductionResult<GateDecision> {
-        let drafts = context.artifacts.get("script_draft").cloned().unwrap_or_default();
+        let drafts = context
+            .artifacts
+            .get("script_draft")
+            .cloned()
+            .unwrap_or_default();
 
         if drafts.is_empty() {
             return Ok(GateDecision::Reject {
@@ -23,9 +27,9 @@ impl Gate for ScriptApprovalGate {
         }
 
         // 查找最新版本的剧本（version 最大的那个）
-        let latest = drafts.iter().max_by_key(|d| {
-            d.get("version").and_then(|v| v.as_i64()).unwrap_or(0)
-        });
+        let latest = drafts
+            .iter()
+            .max_by_key(|d| d.get("version").and_then(|v| v.as_i64()).unwrap_or(0));
 
         if let Some(draft) = latest {
             let status = draft.get("status").and_then(|s| s.as_str()).unwrap_or("");
@@ -59,11 +63,14 @@ mod tests {
         let gate = ScriptApprovalGate;
         let mut artifacts = HashMap::new();
         let script_id = Uuid::new_v4();
-        artifacts.insert("script_draft".to_string(), vec![json!({
-            "id": script_id.to_string(),
-            "status": "approved",
-            "version": 1
-        })]);
+        artifacts.insert(
+            "script_draft".to_string(),
+            vec![json!({
+                "id": script_id.to_string(),
+                "status": "approved",
+                "version": 1
+            })],
+        );
         let ctx = GateContext {
             project_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
@@ -79,11 +86,14 @@ mod tests {
         let gate = ScriptApprovalGate;
         let mut artifacts = HashMap::new();
         let script_id = Uuid::new_v4();
-        artifacts.insert("script_draft".to_string(), vec![json!({
-            "id": script_id.to_string(),
-            "status": "draft",
-            "version": 1
-        })]);
+        artifacts.insert(
+            "script_draft".to_string(),
+            vec![json!({
+                "id": script_id.to_string(),
+                "status": "draft",
+                "version": 1
+            })],
+        );
         let ctx = GateContext {
             project_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),

@@ -167,9 +167,11 @@ impl ProductionStateRepository {
             "sound_plan" => "sound_plans",
             "continuity_ledger" => "continuity_ledgers",
             "take_review" => "take_reviews",
-            _ => return Err(ProductionError::InvalidArtifactSchema {
-                details: format!("未知的产物类型: {}", artifact_type),
-            }),
+            _ => {
+                return Err(ProductionError::InvalidArtifactSchema {
+                    details: format!("未知的产物类型: {}", artifact_type),
+                })
+            }
         };
 
         // 使用动态 SQL，但表名来自白名单不存在注入风险
@@ -271,14 +273,31 @@ impl ProductionStateRepository {
         project_id: Uuid,
         data: Value,
     ) -> ProductionResult<Value> {
-        let from_role = data.get("from_role").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let to_role = data.get("to_role").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let artifact_type = data.get("artifact_type").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let artifact_id: Uuid = data.get("artifact_id")
+        let from_role = data
+            .get("from_role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let to_role = data
+            .get("to_role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let artifact_type = data
+            .get("artifact_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let artifact_id: Uuid = data
+            .get("artifact_id")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok())
             .unwrap_or_else(Uuid::new_v4);
-        let suggestion_type = data.get("suggestion_type").and_then(|v| v.as_str()).unwrap_or("revision").to_string();
+        let suggestion_type = data
+            .get("suggestion_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("revision")
+            .to_string();
         let content = data.get("content").cloned().unwrap_or(Value::Null);
 
         let row: Value = sqlx::query_scalar(
@@ -337,7 +356,10 @@ impl ProductionStateRepository {
             query = query.bind(s);
         }
 
-        let items: Vec<Value> = query.fetch_all(&self.pool).await.map_err(ProductionError::Database)?;
+        let items: Vec<Value> = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(ProductionError::Database)?;
         let total = items.len() as i64;
         Ok((items, total))
     }
@@ -381,39 +403,6 @@ impl ProductionStateRepository {
         Ok(vec![])
     }
 
-    /// 查询项目中指定产物类型的最新就绪版本（approved 优先，其次 draft）。
-    ///
-    /// 返回 `HashMap<ArtifactType, Value>` — 有内容才包含对应类型。
-    /// 用于角色执行前装配 ContextCandidate 列表。
-    pub async fn get_input_artifacts(
-        &self,
-        project_id: Uuid,
-        required: &[crate::state::artifacts::ArtifactType],
-    ) -> ProductionResult<std::collections::HashMap<crate::state::artifacts::ArtifactType, Value>> {
-        let mut result = std::collections::HashMap::new();
-
-        for &artifact_type in required {
-            let table = Self::artifact_type_to_table_key(artifact_type);
-            // 按状态优先级（approved=0 > draft=1）和版本降序取最新一条
-            let sql = format!(
-                "SELECT row_to_json(t) FROM {} t \
-                 WHERE production_project_id = $1 AND status IN ('approved','draft') \
-                 ORDER BY CASE status WHEN 'approved' THEN 0 ELSE 1 END, version DESC LIMIT 1",
-                table
-            );
-            let row: Option<Value> = sqlx::query_scalar(&sql)
-                .bind(project_id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(ProductionError::Database)?;
-
-            if let Some(row) = row {
-                result.insert(artifact_type, row);
-            }
-        }
-        Ok(result)
-    }
-
     /// 将 AI 输出的产物写入数据库（version 自增，status=draft）。
     ///
     /// `output` 是整个 AI 响应 JSON；方法按 `artifact_type` 提取对应键并插入。
@@ -438,12 +427,11 @@ impl ProductionStateRepository {
             | ArtifactType::DirectorialTreatment
             | ArtifactType::SoundPlan => {
                 let json_key = Self::artifact_type_to_output_key(artifact_type);
-                let content = output
-                    .get(json_key)
-                    .cloned()
-                    .ok_or_else(|| ProductionError::InvalidArtifactSchema {
+                let content = output.get(json_key).cloned().ok_or_else(|| {
+                    ProductionError::InvalidArtifactSchema {
                         details: format!("AI 输出缺少必需键: {}", json_key),
-                    })?;
+                    }
+                })?;
                 let table = Self::artifact_type_to_table_key(artifact_type);
                 let (id, version) = self
                     .insert_simple_artifact(project_id, table, &content, created_by)
@@ -475,7 +463,11 @@ impl ProductionStateRepository {
                         .to_string();
                     let (id, version) = self
                         .insert_character_artifact(
-                            project_id, table, &character_id, item, created_by,
+                            project_id,
+                            table,
+                            &character_id,
+                            item,
+                            created_by,
                         )
                         .await?;
                     summaries.push(ArtifactSummary {
@@ -646,7 +638,9 @@ impl ProductionStateRepository {
     }
 
     /// 产物类型 → DB 表名（用于动态 SQL，来自白名单，不存在注入风险）
-    fn artifact_type_to_table_key(artifact_type: crate::state::artifacts::ArtifactType) -> &'static str {
+    fn artifact_type_to_table_key(
+        artifact_type: crate::state::artifacts::ArtifactType,
+    ) -> &'static str {
         use crate::state::artifacts::ArtifactType;
         match artifact_type {
             ArtifactType::CreativeBrief => "creative_briefs",
@@ -663,7 +657,9 @@ impl ProductionStateRepository {
     }
 
     /// 产物类型 → AI 输出 JSON 顶层键名（与 validate_output 中的 key 保持一致）
-    fn artifact_type_to_output_key(artifact_type: crate::state::artifacts::ArtifactType) -> &'static str {
+    fn artifact_type_to_output_key(
+        artifact_type: crate::state::artifacts::ArtifactType,
+    ) -> &'static str {
         use crate::state::artifacts::ArtifactType;
         match artifact_type {
             ArtifactType::CreativeBrief => "creative_brief",

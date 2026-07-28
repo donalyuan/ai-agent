@@ -20,8 +20,13 @@ pub struct StoryBible {
 
 impl StoryBible {
     pub fn validate(content: &Value) -> Result<(), String> {
-        let premise = content.get("premise").and_then(|v| v.as_str()).unwrap_or("");
-        if premise.is_empty() { return Err("story_bible 必须包含非空 premise".into()); }
+        let premise = content
+            .get("premise")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if premise.is_empty() {
+            return Err("story_bible 必须包含非空 premise".into());
+        }
         Ok(())
     }
 }
@@ -32,6 +37,9 @@ mod tests {
     use serde_json::json;
     #[test]
     fn test_validate_ok() {
-        assert!(StoryBible::validate(&json!({"premise":"一个关于科技的故事","themes":[],"world_rules":[],"narrative_arc":{}})).is_ok());
+        assert!(StoryBible::validate(
+            &json!({"premise":"一个关于科技的故事","themes":[],"world_rules":[],"narrative_arc":{}})
+        )
+        .is_ok());
     }
 }

@@ -3,5 +3,5 @@
 pub mod flow_executor;
 pub mod role_executor;
 
-pub use role_executor::RoleExecutor;
 pub use flow_executor::FlowExecutor;
+pub use role_executor::RoleExecutor;

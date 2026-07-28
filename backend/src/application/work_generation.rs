@@ -1,7 +1,8 @@
 //! 作品生成用例：把主画面清单转成可确认计划，并以幂等键创建一次作品运行。
 
 use crate::application::asset_generation::{
-    AssetGenerationApplicationError, AssetGenerationService, SceneVisualManifestBlocker,
+    AssetGenerationApplicationError, AssetGenerationService, SceneVisualManifest,
+    SceneVisualManifestBlocker,
 };
 use crate::domain::work_generation::{
     self, AudioMode, DurationStrategy, OutputSpec, ReferenceImageMode, SceneInput, VideoCapability,
@@ -14,6 +15,13 @@ use crate::repositories::{
     WorkGenerationTaskRecord, WorkPlanRecord, WorkRecord, WorkRepositoryError,
 };
 use novex_model::{ApiProtocol, ModelType};
+use novex_production_crew::{
+    durable::canonical_digest,
+    orchestrator::application_port::{
+        ProductionWorkPlanRequest, WorkGenerationRunReference, WorkGenerationRunStatus,
+        WorkPlanReference,
+    },
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -97,6 +105,70 @@ impl WorkGenerationService {
         &self,
         input: CreateWorkPlanInput,
     ) -> Result<WorkPlanView, WorkGenerationApplicationError> {
+        self.plan_internal(input, None).await
+    }
+
+    /// 将已批准 Full Crew ProductionPackage 映射到既有作品计划聚合。
+    pub async fn plan_from_production(
+        &self,
+        request: ProductionWorkPlanRequest,
+    ) -> Result<WorkPlanReference, WorkGenerationApplicationError> {
+        request
+            .validate()
+            .map_err(|error| WorkGenerationApplicationError::Validation(error.to_string()))?;
+        let input = create_input_from_production(&request)?;
+        let view = self.plan_internal(input, Some(&request)).await?;
+        let version = sqlx::query(
+            r#"
+            SELECT version_no, source_manifest_version, input_snapshot, model_snapshot,
+                   parameter_snapshot, prompt_snapshot, timeline_snapshot
+            FROM work_versions WHERE id=$1
+            "#,
+        )
+        .bind(view.plan.work_version_id)
+        .fetch_one(self.repository_pool())
+        .await
+        .map_err(WorkRepositoryError::from)?;
+        let version_no = version.get::<i32, _>("version_no");
+        let version_snapshot = json!({
+            "work_id": view.work.id,
+            "work_version_id": view.plan.work_version_id,
+            "version_no": version_no,
+            "source_manifest_version": version.get::<String, _>("source_manifest_version"),
+            "input_snapshot": version.get::<Value, _>("input_snapshot"),
+            "model_snapshot": version.get::<Value, _>("model_snapshot"),
+            "parameter_snapshot": version.get::<Value, _>("parameter_snapshot"),
+            "prompt_snapshot": version.get::<Value, _>("prompt_snapshot"),
+            "timeline_snapshot": version.get::<Value, _>("timeline_snapshot"),
+        });
+        let version_digest = canonical_digest(&version_snapshot)
+            .map_err(|error| WorkGenerationApplicationError::Validation(error.to_string()))?;
+        WorkPlanReference::build(
+            view.work.id,
+            view.plan.work_version_id,
+            u32::try_from(version_no).map_err(|_| {
+                WorkGenerationApplicationError::Validation("作品版本号无法转换为正式引用".into())
+            })?,
+            version_digest,
+            view.plan.id,
+            u32::try_from(view.plan.plan_version).map_err(|_| {
+                WorkGenerationApplicationError::Validation(
+                    "作品计划版本号无法转换为正式引用".into(),
+                )
+            })?,
+            view.plan.input_fingerprint,
+        )
+        .map_err(|error| WorkGenerationApplicationError::Validation(error.to_string()))
+    }
+
+    async fn plan_internal(
+        &self,
+        input: CreateWorkPlanInput,
+        production_request: Option<&ProductionWorkPlanRequest>,
+    ) -> Result<WorkPlanView, WorkGenerationApplicationError> {
+        let production_override_diff = production_request
+            .map(|request| production_override_diff(request, &input))
+            .unwrap_or_else(|| json!([]));
         let narration_override = normalize_narration_override(input.narration_override.clone())
             .map_err(WorkGenerationApplicationError::Validation)?;
         if narration_override.is_some()
@@ -141,6 +213,9 @@ impl WorkGenerationService {
                 ))
             }
         };
+        if let Some(request) = production_request {
+            validate_production_manifest(&manifest, request)?;
+        }
         if !input.audio_material_ids.is_empty() {
             let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM materials WHERE project_id=$1 AND id = ANY($2) AND material_type='audio' AND status='active'")
                 .bind(manifest.project_id).bind(&input.audio_material_ids).fetch_one(self.repository_pool()).await.map_err(WorkRepositoryError::from)?;
@@ -242,7 +317,7 @@ impl WorkGenerationService {
         let subtitle_source =
             work_generation::validate_audio_mode(input.audio_mode, capability.audio_supported)?;
         let prompts = input.scene_prompts.unwrap_or_default();
-        let scenes = manifest
+        let mut scenes = manifest
             .scenes
             .into_iter()
             .enumerate()
@@ -259,6 +334,19 @@ impl WorkGenerationService {
                 duration_seconds: scene.duration_sec.max(1) as u32,
             })
             .collect::<Vec<_>>();
+        if let Some(request) = production_request {
+            for duration in &request.operator_settings.overrides.scene_durations {
+                let scene = scenes
+                    .iter_mut()
+                    .find(|scene| scene.scene_id == duration.scene_id)
+                    .ok_or_else(|| {
+                        WorkGenerationApplicationError::Validation(
+                            "时间线 override 引用了未知 Scene".into(),
+                        )
+                    })?;
+                scene.duration_seconds = duration.duration_sec;
+            }
+        }
         let mut segments = work_generation::build_segments(&scenes, target, &capability)?;
         work_generation::apply_segment_prompt_overrides(
             &mut segments,
@@ -292,7 +380,29 @@ impl WorkGenerationService {
                 ));
             }
         }
-        let input_snapshot = json!({"script_id": input.script_id, "scenes": scenes, "narration_override": narration_override, "output": output, "audio_mode": input.audio_mode, "voice_snapshot": voice_snapshot, "audio_material_ids": input.audio_material_ids, "burn_subtitles": input.burn_subtitles});
+        let mut input_snapshot = json!({
+            "script_id": input.script_id,
+            "source_manifest_version": manifest.input_version,
+            "scenes": scenes,
+            "segments": segments,
+            "narration_override": narration_override,
+            "output": output,
+            "audio_mode": input.audio_mode,
+            "voice_snapshot": voice_snapshot,
+            "models": {
+                "llm_model_id": input.llm_model_id,
+                "video_model_id": input.video_model_id,
+                "tts_model_id": input.tts_model_id,
+                "tts_voice_type": input.tts_voice_type,
+            },
+            "full_prompt": input.full_prompt,
+            "audio_material_ids": input.audio_material_ids,
+            "burn_subtitles": input.burn_subtitles
+        });
+        if let Some(request) = production_request {
+            input_snapshot["production_crew"] = production_input_snapshot(request);
+            input_snapshot["production_crew"]["override_diff"] = production_override_diff.clone();
+        }
         let fingerprint = fingerprint(&input_snapshot);
         let plan_id = Uuid::new_v4();
         let plan_version = self
@@ -302,6 +412,17 @@ impl WorkGenerationService {
             .map(|plan| plan.plan_version + 1)
             .unwrap_or(1);
         let usage = json!({"video_task_count": segments.len(), "video_seconds": target, "tts_characters": if audio_mode_requires_tts(input.audio_mode) { effective_tts_text.chars().count() } else { 0 }, "asr_seconds": if matches!(input.audio_mode, AudioMode::SeedanceOriginal) { target } else { 0 }});
+        let mut prompt_snapshot = json!({"full_prompt": input.full_prompt, "segments": segments});
+        let mut timeline_snapshot = json!({"duration_seconds": target, "subtitle_source": subtitle_source, "audio_mode": input.audio_mode, "audio_material_ids": input.audio_material_ids, "voice_snapshot": voice_snapshot, "burn_subtitles": input.burn_subtitles, "save_srt": true});
+        let mut output_snapshot = serde_json::to_value(&output).unwrap_or_else(|_| json!({}));
+        if let Some(request) = production_request {
+            prompt_snapshot["production_crew"] = production_prompt_snapshot(request);
+            timeline_snapshot["production_crew"] = production_timeline_snapshot(request);
+            prompt_snapshot["production_crew"]["override_diff"] = production_override_diff.clone();
+            timeline_snapshot["production_crew"]["override_diff"] =
+                production_override_diff.clone();
+            output_snapshot["production_override_diff"] = production_override_diff;
+        }
         let plan = WorkPlanRecord {
             id: plan_id,
             work_id: work.id,
@@ -313,9 +434,9 @@ impl WorkGenerationService {
             video_model_id: Some(input.video_model_id),
             tts_model_id: input.tts_model_id,
             capability_snapshot: serde_json::to_value(&capability).unwrap_or_else(|_| json!({})),
-            output_snapshot: serde_json::to_value(&output).unwrap_or_else(|_| json!({})),
-            prompt_snapshot: json!({"full_prompt": input.full_prompt, "segments": segments}),
-            timeline_snapshot: json!({"duration_seconds": target, "subtitle_source": subtitle_source, "audio_mode": input.audio_mode, "audio_material_ids": input.audio_material_ids, "voice_snapshot": voice_snapshot, "burn_subtitles": input.burn_subtitles, "save_srt": true}),
+            output_snapshot,
+            prompt_snapshot,
+            timeline_snapshot,
             resource_usage: usage.clone(),
             warnings: if matches!(input.audio_mode, AudioMode::SeedanceOriginalAndTts) {
                 json!(["原声不可分轨，TTS 区间将降低整体原声；可能出现双重人声"])
@@ -381,6 +502,73 @@ impl WorkGenerationService {
             )
             .await?;
         Ok(WorkRunView { run, created })
+    }
+
+    /// 查询既有人工确认接口创建的正式运行；该方法不创建任务。
+    pub async fn confirmed_run_reference(
+        &self,
+        plan: &WorkPlanReference,
+    ) -> Result<WorkGenerationRunReference, WorkGenerationApplicationError> {
+        plan.validate()
+            .map_err(|error| WorkGenerationApplicationError::Validation(error.to_string()))?;
+        let row = sqlx::query(
+            r#"
+            SELECT run.id,run.work_id,run.work_version_id,run.work_plan_id,run.status,
+                   run.error_category,run.error_code,run.error_summary,
+                   EXISTS(
+                       SELECT 1 FROM work_artifacts artifact
+                       WHERE artifact.work_version_id=run.work_version_id
+                         AND artifact.role='final_video'
+                   ) AS final_media_ready,
+                   EXISTS(
+                       SELECT 1 FROM required_take_inventories inventory
+                       WHERE inventory.work_version_id=run.work_version_id
+                         AND inventory.work_generation_run_id=run.id
+                   ) AS take_inventory_ready
+            FROM work_generation_runs run WHERE run.work_plan_id=$1
+            ORDER BY run.created_at DESC LIMIT 1
+            "#,
+        )
+        .bind(plan.work_plan_id)
+        .fetch_optional(self.repository_pool())
+        .await
+        .map_err(WorkRepositoryError::from)?
+        .ok_or_else(|| {
+            WorkGenerationApplicationError::Validation(
+                "作品计划尚未通过既有人工确认接口创建运行".into(),
+            )
+        })?;
+        run_reference_from_row(&row, Some(plan))
+    }
+
+    /// 读取作品运行真实技术状态；不得在观察过程中发起 retry/provider 调用。
+    pub async fn observe_run_reference(
+        &self,
+        run_id: Uuid,
+    ) -> Result<WorkGenerationRunReference, WorkGenerationApplicationError> {
+        let row = sqlx::query(
+            r#"
+            SELECT run.id,run.work_id,run.work_version_id,run.work_plan_id,run.status,
+                   run.error_category,run.error_code,run.error_summary,
+                   EXISTS(
+                       SELECT 1 FROM work_artifacts artifact
+                       WHERE artifact.work_version_id=run.work_version_id
+                         AND artifact.role='final_video'
+                   ) AS final_media_ready,
+                   EXISTS(
+                       SELECT 1 FROM required_take_inventories inventory
+                       WHERE inventory.work_version_id=run.work_version_id
+                         AND inventory.work_generation_run_id=run.id
+                   ) AS take_inventory_ready
+            FROM work_generation_runs run WHERE run.id=$1
+            "#,
+        )
+        .bind(run_id)
+        .fetch_optional(self.repository_pool())
+        .await
+        .map_err(WorkRepositoryError::from)?
+        .ok_or_else(|| WorkRepositoryError::NotFound(run_id.to_string()))?;
+        run_reference_from_row(&row, None)
     }
 
     pub async fn list_tasks(
@@ -505,6 +693,382 @@ impl WorkGenerationService {
     fn repository_pool(&self) -> &sqlx::PgPool {
         self.repository.pool()
     }
+}
+
+fn run_reference_from_row(
+    row: &sqlx::postgres::PgRow,
+    plan: Option<&WorkPlanReference>,
+) -> Result<WorkGenerationRunReference, WorkGenerationApplicationError> {
+    let status = match row.get::<String, _>("status").as_str() {
+        "queued" => WorkGenerationRunStatus::Queued,
+        "running" => WorkGenerationRunStatus::Running,
+        "succeeded" => WorkGenerationRunStatus::Succeeded,
+        "failed" => WorkGenerationRunStatus::Failed,
+        "waiting_manual" => WorkGenerationRunStatus::WaitingManual,
+        "cancelling" => WorkGenerationRunStatus::Cancelling,
+        "cancelled" => WorkGenerationRunStatus::Cancelled,
+        value => {
+            return Err(WorkGenerationApplicationError::Validation(format!(
+                "未知作品运行状态: {value}"
+            )))
+        }
+    };
+    let reference = WorkGenerationRunReference::build(
+        row.get("id"),
+        row.get("work_id"),
+        row.get("work_version_id"),
+        row.get("work_plan_id"),
+        status,
+        row.get("error_category"),
+        row.get("error_code"),
+        row.get("error_summary"),
+        matches!(status, WorkGenerationRunStatus::Failed)
+            && row.get::<Option<String>, _>("error_code").as_deref() != Some("unknown_submission"),
+        row.get("final_media_ready"),
+        row.get("take_inventory_ready"),
+    )
+    .map_err(|error| WorkGenerationApplicationError::Validation(error.to_string()))?;
+    if let Some(plan) = plan {
+        reference
+            .validate_for(plan)
+            .map_err(|error| WorkGenerationApplicationError::Validation(error.to_string()))?;
+    }
+    Ok(reference)
+}
+
+fn create_input_from_production(
+    request: &ProductionWorkPlanRequest,
+) -> Result<CreateWorkPlanInput, WorkGenerationApplicationError> {
+    let settings = &request.operator_settings;
+    let duration_strategy = match settings.duration_strategy.as_str() {
+        "preset15" => DurationStrategy::Preset15,
+        "preset30" => DurationStrategy::Preset30,
+        "preset45" => DurationStrategy::Preset45,
+        "preset60" => DurationStrategy::Preset60,
+        "custom" => DurationStrategy::Custom,
+        "follow_narration" | "script_total" => DurationStrategy::FollowNarration,
+        value => {
+            return Err(WorkGenerationApplicationError::Validation(format!(
+                "不支持的作品时长策略: {value}"
+            )))
+        }
+    };
+    let audio_mode = match settings.audio_mode.as_str() {
+        "independent_tts" => AudioMode::IndependentTts,
+        "seedance_original" => AudioMode::SeedanceOriginal,
+        "seedance_original_and_tts" => AudioMode::SeedanceOriginalAndTts,
+        "silent" => AudioMode::Silent,
+        value => {
+            return Err(WorkGenerationApplicationError::Validation(format!(
+                "不支持的作品声音模式: {value}"
+            )))
+        }
+    };
+    let production = &request.production;
+    let (derived_full_prompt, derived_scene_prompts) = derived_production_prompts(request);
+    let full_prompt = settings
+        .overrides
+        .full_prompt
+        .clone()
+        .unwrap_or(derived_full_prompt);
+    let scene_prompts = production
+        .scenes
+        .iter()
+        .zip(derived_scene_prompts)
+        .map(|(scene, derived)| {
+            settings
+                .overrides
+                .scene_prompts
+                .iter()
+                .find(|item| item.scene_id == scene.scene_id)
+                .map(|item| item.prompt.clone())
+                .unwrap_or(derived)
+        })
+        .collect();
+    let narration_seconds = production
+        .scenes
+        .iter()
+        .try_fold(0_u32, |total, scene| {
+            let duration = settings
+                .overrides
+                .scene_durations
+                .iter()
+                .find(|item| item.scene_id == scene.scene_id)
+                .map(|item| item.duration_sec)
+                .unwrap_or(scene.duration_sec);
+            total.checked_add(duration)
+        })
+        .ok_or_else(|| {
+            WorkGenerationApplicationError::Validation("正式 Scene 总时长溢出".into())
+        })?;
+    Ok(CreateWorkPlanInput {
+        script_id: production.script.script_id,
+        llm_model_id: settings.llm_model_id,
+        video_model_id: settings.video_model_id,
+        tts_model_id: settings.tts_model_id,
+        tts_voice_type: settings.tts_voice_type.clone(),
+        narration_override: settings.narration_override.clone(),
+        duration_strategy,
+        duration_seconds: settings.duration_seconds,
+        aspect_ratio: settings.aspect_ratio.clone(),
+        resolution: settings.resolution.clone(),
+        audio_mode,
+        full_prompt,
+        scene_prompts: Some(scene_prompts),
+        segment_prompts: settings.overrides.segment_prompts.clone(),
+        narration_seconds: Some(narration_seconds),
+        audio_material_ids: settings.audio_material_ids.clone(),
+        burn_subtitles: settings.burn_subtitles,
+    })
+}
+
+fn derived_production_prompts(request: &ProductionWorkPlanRequest) -> (String, Vec<String>) {
+    let production = &request.production;
+    let treatment = &production.directorial_treatment.content;
+    let full_prompt = format!(
+        "{}。视觉风格：{}。节奏：{}。情绪弧：{}。色彩：{}。",
+        production.script.hook,
+        treatment.visual_style,
+        treatment.pacing,
+        treatment.emotional_arc,
+        treatment.color_palette.join("、")
+    );
+    let scene_prompts = production
+        .scenes
+        .iter()
+        .map(|scene| {
+            let shots = production
+                .shot_contracts
+                .iter()
+                .filter(|shot| shot.content.scene_id == scene.scene_id)
+                .map(|shot| {
+                    format!(
+                        "{}，{}，{}",
+                        shot.content.description,
+                        shot.content.shot_type,
+                        shot.content.camera_movement
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("；");
+            let performances = production
+                .performance_briefs
+                .iter()
+                .flat_map(|brief| {
+                    brief
+                        .content
+                        .emotional_arc
+                        .iter()
+                        .filter(move |item| item.scene_id == scene.scene_id)
+                        .map(|item| {
+                            format!(
+                                "{}：{}（强度 {}，{}）",
+                                brief.content.character_id,
+                                item.emotion,
+                                item.intensity,
+                                item.notes
+                            )
+                        })
+                })
+                .collect::<Vec<_>>()
+                .join("；");
+            format!(
+                "{}。镜头：{}。表演：{}。",
+                scene.visual_description, shots, performances
+            )
+        })
+        .collect();
+    (full_prompt, scene_prompts)
+}
+
+fn production_override_diff(
+    request: &ProductionWorkPlanRequest,
+    effective: &CreateWorkPlanInput,
+) -> Value {
+    let settings = &request.operator_settings;
+    let (derived_full_prompt, derived_scene_prompts) = derived_production_prompts(request);
+    let mut changes = vec![
+        override_change(
+            "models.llm_model_id",
+            Value::Null,
+            json!(settings.llm_model_id),
+        ),
+        override_change(
+            "models.video_model_id",
+            Value::Null,
+            json!(settings.video_model_id),
+        ),
+        override_change(
+            "models.tts_model_id",
+            Value::Null,
+            json!(settings.tts_model_id),
+        ),
+        override_change(
+            "voice.tts_voice_type",
+            Value::Null,
+            json!(settings.tts_voice_type),
+        ),
+        override_change("sound.audio_mode", Value::Null, json!(settings.audio_mode)),
+        override_change(
+            "subtitles.burn_subtitles",
+            Value::Null,
+            json!(settings.burn_subtitles),
+        ),
+        override_change(
+            "output.duration_strategy",
+            Value::Null,
+            json!(settings.duration_strategy),
+        ),
+        override_change(
+            "output.duration_seconds",
+            Value::Null,
+            json!(settings.duration_seconds),
+        ),
+        override_change(
+            "output.aspect_ratio",
+            Value::Null,
+            json!(settings.aspect_ratio),
+        ),
+        override_change("output.resolution", Value::Null, json!(settings.resolution)),
+    ];
+    for scene in &request.manifest.scenes {
+        changes.push(override_change(
+            &format!("main_images.{}", scene.scene_id),
+            Value::Null,
+            json!({
+                "candidate_id": scene.candidate_id,
+                "material_id": scene.material_id,
+            }),
+        ));
+    }
+    if effective.full_prompt != derived_full_prompt {
+        changes.push(override_change(
+            "prompts.full_prompt",
+            json!(derived_full_prompt),
+            json!(effective.full_prompt),
+        ));
+    }
+    if let Some(prompts) = &effective.scene_prompts {
+        for ((scene, approved), operator) in request
+            .production
+            .scenes
+            .iter()
+            .zip(derived_scene_prompts)
+            .zip(prompts)
+        {
+            if approved != *operator {
+                changes.push(override_change(
+                    &format!("prompts.scenes.{}", scene.scene_id),
+                    json!(approved),
+                    json!(operator),
+                ));
+            }
+        }
+    }
+    if let Some(prompts) = &effective.segment_prompts {
+        changes.push(override_change(
+            "prompts.segments",
+            Value::Null,
+            json!(prompts),
+        ));
+    }
+    if let Some(narration) = &settings.narration_override {
+        changes.push(override_change(
+            "sound.narration",
+            Value::Null,
+            json!(narration),
+        ));
+    }
+    for duration in &settings.overrides.scene_durations {
+        let approved = request
+            .production
+            .scenes
+            .iter()
+            .find(|scene| scene.scene_id == duration.scene_id)
+            .map(|scene| scene.duration_sec)
+            .unwrap_or_default();
+        if approved != duration.duration_sec {
+            changes.push(override_change(
+                &format!("timeline.scenes.{}.duration_sec", duration.scene_id),
+                json!(approved),
+                json!(duration.duration_sec),
+            ));
+        }
+    }
+    json!(changes)
+}
+
+fn override_change(field: &str, production_package_value: Value, operator_value: Value) -> Value {
+    json!({
+        "field": field,
+        "production_package_value": production_package_value,
+        "operator_value": operator_value,
+    })
+}
+
+fn validate_production_manifest(
+    actual: &SceneVisualManifest,
+    request: &ProductionWorkPlanRequest,
+) -> Result<(), WorkGenerationApplicationError> {
+    let expected = &request.manifest;
+    if actual.script_id != expected.script_id
+        || actual.input_version != expected.manifest_version
+        || actual.scenes.len() != expected.scenes.len()
+        || actual
+            .scenes
+            .iter()
+            .zip(&expected.scenes)
+            .any(|(actual, expected)| {
+                actual.scene_id != expected.scene_id
+                    || actual.candidate_id != expected.candidate_id
+                    || actual.material_id != expected.material_id
+            })
+    {
+        return Err(WorkGenerationApplicationError::Validation(
+            "SceneVisualManifest 已陈旧或主画面引用不一致".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn production_input_snapshot(request: &ProductionWorkPlanRequest) -> Value {
+    let production = &request.production;
+    json!({
+        "production_run_id": production.run_id,
+        "revision_epoch": production.revision_epoch,
+        "production_package": {
+            "id": production.package_id,
+            "version": production.package_version,
+            "digest": production.package_digest,
+            "input_digest": production.input_digest,
+            "source_step_id": production.package_source_step_id,
+            "source_attempt": production.package_source_attempt
+        },
+        "script": production.script,
+        "scenes": production.scenes,
+        "scene_visual_manifest": request.manifest,
+    })
+}
+
+fn production_prompt_snapshot(request: &ProductionWorkPlanRequest) -> Value {
+    let production = &request.production;
+    json!({
+        "directorial_treatment": production.directorial_treatment,
+        "shot_contracts": production.shot_contracts,
+        "performance_briefs": production.performance_briefs,
+        "applied_suggestions": production.applied_suggestions,
+    })
+}
+
+fn production_timeline_snapshot(request: &ProductionWorkPlanRequest) -> Value {
+    json!({
+        "sound_plan": request.production.sound_plan,
+        "scene_order": request.production.scenes.iter().map(|scene| json!({
+            "scene_id": scene.scene_id,
+            "sequence": scene.sequence,
+            "duration_sec": scene.duration_sec
+        })).collect::<Vec<_>>(),
+    })
 }
 
 fn default_seedance_capability() -> VideoCapability {

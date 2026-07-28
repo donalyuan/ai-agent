@@ -143,7 +143,9 @@ mod tests {
         let plan = make_plan(vec!["screenwriter"]);
         let decisions = vec![(
             "script_approval_gate".to_string(),
-            GateDecision::Reject { reason: "未批准剧本".to_string() },
+            GateDecision::Reject {
+                reason: "未批准剧本".to_string(),
+            },
         )];
         let result = FlowExecutor::advance_flow(flow, &plan, decisions).unwrap();
         assert_eq!(result.status, FlowStatus::Failed);

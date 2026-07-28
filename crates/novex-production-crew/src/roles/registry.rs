@@ -1,9 +1,9 @@
 //! 角色注册表：运行时内存索引，提供角色查找和执行序列验证
 
 use crate::error::ProductionError;
+use crate::roles::definition::RoleDefinition;
 use crate::roles::loader::RoleLoader;
 use crate::ProductionResult;
-use crate::roles::definition::RoleDefinition;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -38,9 +38,11 @@ impl RoleRegistry {
 
     /// 按 role_key 查找角色，不存在时返回 RoleNotFound 错误
     pub fn get(&self, role_key: &str) -> ProductionResult<&RoleDefinition> {
-        self.roles.get(role_key).ok_or_else(|| ProductionError::RoleNotFound {
-            role_key: role_key.to_string(),
-        })
+        self.roles
+            .get(role_key)
+            .ok_or_else(|| ProductionError::RoleNotFound {
+                role_key: role_key.to_string(),
+            })
     }
 
     pub fn list_all(&self) -> Vec<&RoleDefinition> {

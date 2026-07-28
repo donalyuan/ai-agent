@@ -55,6 +55,13 @@ metadata:
 > **角色执行已接通 AI 基础设施**：`wire-production-crew-role-execution` change 已完成（2026-07-27）。`POST /api/v1/production/productions/:id/roles/:role_key/execute` 现已真实调用 AI 模型并产出结构化产物。
 
 - Video Agent 的长期目标是受控的 `Virtual Production Crew Agent`，采用一个 `ProductionOrchestrator`、多个版本化 `RoleDefinition`、共享 `ProductionState`、结构化阶段产物、固定 Gate 和 `PromptCompiler`，而不是多个独立 Agent 自由讨论。
+- Full Crew 是视频工作台的正式作品生产模式，必须绑定现有账号（`projects`）和选题（`content_topics`）；经 Gate 批准的剧本、镜头和作品进入现有 `scripts`、`scenes`、作品及生成任务业务模型。`ProductionState` 只保存制作过程中的结构化版本、协作建议和审计证据，不得建设与现有视频业务表平行且互不连通的第二套正式业务数据。
+- Full Crew 只允许从 `active` 账号下归属当前账号的 `approved` 选题启动；同一 Topic 同时只允许一个 active Full Crew 制作意图，v1 每个制作意图只允许一个 ProductionRun。活跃期间锁定 Topic 内容、归属、状态和软删除，并阻止账号归档；创建制作流程本身不得提前修改选题状态，安全失败或取消且没有成功/不确定晋升时才释放选题锁。竞案不通过并行普通制作意图隐式实现，未来必须显式建模 variant。
+- 编剧阶段必须将 `StoryBible + CharacterBible[] + ScriptDraft` 作为带精确产物版本和 digest 的 `ScriptPackage` 原子审批。批准后通过确定性类型映射在同一事务内创建正式 `approved` 脚本与分镜并把选题更新为 `scripted`，不得再要求第二次脚本审批，也不得在 Gate 后追加一次 LLM 调用完成格式转换。编剧输出契约必须先补齐正式 `Script/Scene` 所需字段。
+- Brief、Script 和 Production Package reject 必须保留旧决策并创建有界 revision epoch，只重开 owner 及确定性后继；导演提出脚本语义变化时必须回流 screenwriter 生成并重新审批 ScriptPackage，再晋升为带 `parent_id` 的新 Script，不能由下游角色直接修改正式 Script/Scene。
+- 导演阐述、镜头合约、表演简报、声音计划和已处理协作建议组成版本化 `ProductionPackage`；所有 Scene/Character/Shot 引用必须指向当前正式领域实体并满足集合完整性。批准后只作为现有画面生成与 `WorkPlan` 的不可变来源快照，不得静默覆盖已批准脚本。作品生成必须复用现有“计划 -> 展示模型、参数与非金额资源用量 -> 人工确认 -> `work_generation_run`”链路，禁止通过任意角色序列、`auto_approve`、任意 context 或请求级模型覆盖绕过。
+- 正式制作流程不得使用金额估算型 `BudgetGate`；必须改为只约束模型调用次数、token、视频任务数、总时长、TTS 字符数、ASR 数量、并发和重试的 `ResourceSafetyGate`。ProductionRun 必须支持取消及外部作品全部终态的真实传播，结果不确定时保持 `attention_required`，不得虚假取消或自动重试。普通 ProductionRun 只能固定已 `active` 的角色 Definition/model binding，candidate 只用于 Eval/dry-run。
+- Editor/QC 必须基于当前 WorkVersion 的确定性 required take inventory、真实成片和不可变媒体证据执行；`ContinuityLedger` 与 `TakeReview` 按 Run/WorkVersion/inventory/evidence 追加版本化，禁止跨版本或按自由字符串拼接 QualityPackage。缺少唯一媒体映射或适用视觉/音频能力时明确阻断，禁止仅凭文本、空评审或缺失媒体自动通过。
 - 专业角色已实现：制片人（producer）、编剧（screenwriter）、导演（director）、摄影指导（cinematographer）、表演指导（performance_director）、声音指导（sound_director）、剪辑师（editor）、质量控制（qc）、角色校验器（character_critic，可选）。
 - 简单短视频走 Fast Lane（`project_type = fast_lane`），不强制启动完整制作团队；复杂场景走 Full Crew（`project_type = full_crew`）。
 - 共享制作状态覆盖10种产物：`CreativeBrief`、`StoryBible`、`CharacterBible`、`ScriptDraft`、`DirectorialTreatment`、`ShotContract`、`PerformanceBrief`、`SoundPlan`、`ContinuityLedger`、`TakeReview`，对应12张 PostgreSQL 表（含 `collaboration_suggestions`）。

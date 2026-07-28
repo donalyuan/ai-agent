@@ -484,6 +484,40 @@ async fn persists_prepared_before_provider_and_finishes_success_or_failure_once(
 }
 
 #[tokio::test]
+async fn prepare_persists_context_and_model_call_without_invoking_provider() {
+    let model_id = Uuid::new_v4();
+    let fingerprint = "b".repeat(64);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let audit = Arc::new(FakeAudit::default());
+    let executor = AuditedModelExecutor::new(
+        registry(),
+        Arc::new(FakeResolver {
+            resolved: resolved(
+                Arc::new(FakeClient {
+                    calls: calls.clone(),
+                    result: Ok("must remain uncalled".into()),
+                }),
+                model_id,
+                &fingerprint,
+            ),
+        }),
+        audit.clone(),
+        audit.clone(),
+    );
+
+    let prepared = executor
+        .prepare(request(model_id, &fingerprint))
+        .await
+        .unwrap();
+
+    assert_ne!(prepared.model_call_id(), Uuid::nil());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(audit.contexts.lock().unwrap().len(), 1);
+    assert_eq!(audit.prepared.lock().unwrap().len(), 1);
+    assert!(audit.finished.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn provider_context_overflow_finishes_once_and_blocks_the_fixed_binding() {
     let model_id = Uuid::new_v4();
     let fingerprint = "b".repeat(64);

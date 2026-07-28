@@ -11,7 +11,7 @@
 //! ```
 
 use novex_production_crew::{
-    executor::role_executor::{ArtifactSummary, RoleExecutionStatus, RoleExecutor},
+    executor::role_executor::RoleExecutor,
     roles::definition::{Lifecycle, PromptRef, RoleDefinition},
     state::artifacts::ArtifactType,
 };

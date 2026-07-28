@@ -70,13 +70,14 @@ impl ArtifactStatus {
 }
 
 // 导出各产物模块
-pub mod creative_brief;
-pub mod story_bible;
 pub mod character_bible;
-pub mod script_draft;
-pub mod directorial_treatment;
-pub mod shot_contract;
-pub mod performance_brief;
-pub mod sound_plan;
 pub mod continuity_ledger;
+pub mod creative_brief;
+pub mod directorial_treatment;
+pub mod output_contract;
+pub mod performance_brief;
+pub mod script_draft;
+pub mod shot_contract;
+pub mod sound_plan;
+pub mod story_bible;
 pub mod take_review;

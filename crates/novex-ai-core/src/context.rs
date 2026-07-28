@@ -454,6 +454,7 @@ pub struct ContextCompiler;
 impl ContextCompiler {
     pub fn compile(request: ContextCompileRequest) -> Result<CompiledContext, ContextCompileError> {
         validate_request(&request)?;
+        validate_required_sources(&request)?;
         let tokenizer = ProfileTokenizer::from_profile(request.tokenizer_profile.clone())?;
         let mut ledger = fixed_budget(&request, &tokenizer)?;
         let mut candidates = request.candidates.clone();
@@ -528,7 +529,10 @@ impl ContextCompiler {
             } else {
                 vec![(candidate, *token_count)]
             };
-            let group_tokens = group.iter().map(|(_, tokens)| *tokens).fold(0u64, u64::saturating_add);
+            let group_tokens = group
+                .iter()
+                .map(|(_, tokens)| *tokens)
+                .fold(0u64, u64::saturating_add);
             let group_required = group
                 .iter()
                 .any(|(item, _)| item.required || item.priority == ContextPriority::P0);
@@ -655,6 +659,26 @@ impl ContextCompiler {
         snapshot.digest = digest_without_digest(&snapshot);
         Ok(snapshot)
     }
+}
+
+fn validate_required_sources(request: &ContextCompileRequest) -> Result<(), ContextCompileError> {
+    let present_sources = request
+        .candidates
+        .iter()
+        .map(|candidate| candidate.source_kind.as_str())
+        .collect::<BTreeSet<_>>();
+    if request
+        .policy
+        .required_sources
+        .iter()
+        .any(|source| !present_sources.contains(source.as_str()))
+    {
+        return Err(ContextCompileError::new(
+            CompileFailureStage::Eligibility,
+            "required_context_unavailable",
+        ));
+    }
+    Ok(())
 }
 
 fn count_final_logical_input(

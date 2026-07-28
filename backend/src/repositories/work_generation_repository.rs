@@ -1,5 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use novex_production_crew::durable::{
+    canonical_digest, repository::DurableProductionRepository, resource::ResourceRequest,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
@@ -265,6 +268,10 @@ impl WorkGenerationRepository for PostgresWorkGenerationRepository {
         plan: &WorkPlanRecord,
     ) -> Result<WorkPlanRecord, WorkRepositoryError> {
         let mut tx = self.pool.begin().await?;
+        let production_run_id = input_snapshot
+            .pointer("/production_crew/production_run_id")
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok());
         // 作品行锁同时保护草稿选择、版本号和计划修订号，保证同一生产意图串行保存。
         let work = sqlx::query("SELECT current_version_id FROM works WHERE id=$1 FOR UPDATE")
             .bind(work_id)
@@ -374,6 +381,24 @@ impl WorkGenerationRepository for PostgresWorkGenerationRepository {
         let row = sqlx::query("INSERT INTO work_plans (work_id, work_version_id, plan_version, status, input_fingerprint, llm_model_id, video_model_id, tts_model_id, capability_snapshot, output_snapshot, prompt_snapshot, timeline_snapshot, resource_usage, warnings) VALUES ($1,$2,$3,'ready',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id, work_id, work_version_id, plan_version, status, input_fingerprint, llm_model_id, video_model_id, tts_model_id, capability_snapshot, output_snapshot, prompt_snapshot, timeline_snapshot, resource_usage, warnings")
             .bind(work_id).bind(work_version_id).bind(plan_version).bind(&plan.input_fingerprint).bind(plan.llm_model_id).bind(plan.video_model_id).bind(plan.tts_model_id).bind(plan.capability_snapshot.clone()).bind(plan.output_snapshot.clone()).bind(plan.prompt_snapshot.clone()).bind(plan.timeline_snapshot.clone()).bind(plan.resource_usage.clone()).bind(plan.warnings.clone()).fetch_one(&mut *tx).await?;
         sqlx::query("UPDATE work_plans SET status='invalidated', invalidated_at=NOW() WHERE work_id=$1 AND id<>$2 AND status IN ('draft','ready')").bind(work_id).bind(row.get::<Uuid,_>("id")).execute(&mut *tx).await?;
+        if let Some(production_run_id) = production_run_id {
+            // Script 切换会创建新的 Work；同一 Full Crew Run 的旧可确认计划仍必须一起失效。
+            sqlx::query(
+                r#"
+                UPDATE work_plans plan
+                SET status='invalidated', invalidated_at=NOW()
+                FROM work_versions version
+                WHERE plan.work_version_id=version.id
+                  AND plan.id<>$1
+                  AND plan.status IN ('draft','ready')
+                  AND version.input_snapshot #>> '{production_crew,production_run_id}'=$2
+                "#,
+            )
+            .bind(row.get::<Uuid, _>("id"))
+            .bind(production_run_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        }
         sqlx::query(
             "UPDATE works SET status='planned',current_version_id=$2,updated_at=NOW() WHERE id=$1",
         )
@@ -454,14 +479,36 @@ impl WorkGenerationRepository for PostgresWorkGenerationRepository {
             json!(tos.get::<i64, _>("version")),
         );
         let row = sqlx::query("INSERT INTO work_generation_runs (work_id, work_version_id, work_plan_id, idempotency_key, model_snapshot, capability_snapshot, voice_snapshot, prompt_snapshot, timeline_snapshot, parameter_snapshot, resource_usage) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (work_id, idempotency_key) DO NOTHING RETURNING id, work_id, work_version_id, work_plan_id, idempotency_key, status, model_snapshot, capability_snapshot, voice_snapshot, prompt_snapshot, timeline_snapshot, parameter_snapshot, resource_usage")
-            .bind(plan.get::<Uuid,_>("work_id")).bind(plan.get::<Uuid,_>("work_version_id")).bind(plan_id).bind(idempotency_key.trim()).bind(locked_model_snapshot).bind(snapshot.capability_snapshot.clone()).bind(snapshot.voice_snapshot.clone()).bind(snapshot.prompt_snapshot.clone()).bind(snapshot.timeline_snapshot.clone()).bind(snapshot.parameter_snapshot.clone()).bind(usage).fetch_optional(&mut *tx).await?;
+            .bind(plan.get::<Uuid,_>("work_id")).bind(plan.get::<Uuid,_>("work_version_id")).bind(plan_id).bind(idempotency_key.trim()).bind(locked_model_snapshot).bind(snapshot.capability_snapshot.clone()).bind(snapshot.voice_snapshot.clone()).bind(snapshot.prompt_snapshot.clone()).bind(snapshot.timeline_snapshot.clone()).bind(snapshot.parameter_snapshot.clone()).bind(&usage).fetch_optional(&mut *tx).await?;
         let Some(row) = row else {
             tx.rollback().await?;
             let existing = sqlx::query("SELECT id, work_id, work_version_id, work_plan_id, idempotency_key, status, model_snapshot, capability_snapshot, voice_snapshot, prompt_snapshot, timeline_snapshot, parameter_snapshot, resource_usage FROM work_generation_runs WHERE work_id=$1 AND idempotency_key=$2")
                 .bind(plan.get::<Uuid,_>("work_id")).bind(idempotency_key).fetch_one(&self.pool).await?;
             return Ok((run_from_row(existing), false));
         };
-        seed_generation_steps(&mut tx, row.get("id"), snapshot).await?;
+        if let Some((production_run_id, confirmation_step_id)) =
+            production_scope_for_plan(&mut tx, plan_id).await?
+        {
+            let resource_request = production_resource_request(&usage)?;
+            let request_digest = canonical_digest(&json!({
+                "kind": "work_generation_initial",
+                "work_generation_run_id": row.get::<Uuid, _>("id"),
+                "work_plan_id": plan_id,
+                "resource_request": resource_request,
+            }))
+            .map_err(|error| WorkRepositoryError::Conflict(error.to_string()))?;
+            DurableProductionRepository::reserve_integrated_resources(
+                &mut tx,
+                production_run_id,
+                confirmation_step_id,
+                1,
+                resource_request,
+                &request_digest,
+            )
+            .await
+            .map_err(|error| WorkRepositoryError::Conflict(error.to_string()))?;
+        }
+        seed_generation_steps(&mut tx, row.get("id"), snapshot, &usage).await?;
         sqlx::query("UPDATE work_plans SET status='confirmed' WHERE id=$1")
             .bind(plan_id)
             .execute(&mut *tx)
@@ -735,7 +782,7 @@ impl WorkGenerationRepository for PostgresWorkGenerationRepository {
             tx.rollback().await?;
             return Ok(attempt_from_row(existing));
         }
-        let step = sqlx::query("SELECT id, run_id, status, model_snapshot, resource_usage FROM work_generation_steps WHERE id=$1 FOR UPDATE")
+        let step = sqlx::query("SELECT id, run_id, step_type, status, model_snapshot, resource_usage FROM work_generation_steps WHERE id=$1 FOR UPDATE")
             .bind(step_id).fetch_optional(&mut *tx).await?.ok_or_else(|| WorkRepositoryError::NotFound(step_id.to_string()))?;
         // 首次预查与节点锁之间可能有并发请求提交，锁定后必须再次确认幂等映射。
         if let Some(existing) = sqlx::query(IDEMPOTENCY_QUERY)
@@ -767,6 +814,38 @@ impl WorkGenerationRepository for PostgresWorkGenerationRepository {
         .await?;
         let attempt = sqlx::query("INSERT INTO work_generation_attempts (step_id, attempt_no, status, model_snapshot, resource_usage) VALUES ($1,$2,'queued',$3,$4) RETURNING id, attempt_no, status, model_snapshot, resource_usage, error_category, error_code, error_summary, request_trace_id, upstream_task_id, provider_cancel_supported, cancel_requested_at, cancel_response, created_at, updated_at")
             .bind(step_id).bind(attempt_no).bind(step.get::<Value,_>("model_snapshot")).bind(step.get::<Value,_>("resource_usage")).fetch_one(&mut *tx).await?;
+        if let Some((production_run_id, wait_step_id)) =
+            production_scope_for_external_run(&mut tx, step.get("run_id")).await?
+        {
+            if let Some(resource_request) =
+                provider_retry_resource_request(step.get("step_type"), step.get("resource_usage"))?
+            {
+                let attempt_id = attempt.get::<Uuid, _>("id");
+                let request_digest = canonical_digest(&json!({
+                    "kind": "work_generation_provider_retry",
+                    "work_generation_attempt_id": attempt_id,
+                    "work_generation_step_id": step_id,
+                    "resource_request": resource_request,
+                }))
+                .map_err(|error| WorkRepositoryError::Conflict(error.to_string()))?;
+                let reservation_attempt = sqlx::query_scalar::<_, i32>(
+                    "SELECT COALESCE(MAX(attempt_no),0)+1 FROM production_resource_reservations WHERE step_id=$1",
+                )
+                .bind(wait_step_id)
+                .fetch_one(&mut *tx)
+                .await?;
+                DurableProductionRepository::reserve_integrated_resources(
+                    &mut tx,
+                    production_run_id,
+                    wait_step_id,
+                    reservation_attempt,
+                    resource_request,
+                    &request_digest,
+                )
+                .await
+                .map_err(|error| WorkRepositoryError::Conflict(error.to_string()))?;
+            }
+        }
         sqlx::query("INSERT INTO work_generation_retry_idempotency (idempotency_key, attempt_id) VALUES ($1,$2)")
             .bind(idempotency_key.trim()).bind(attempt.get::<Uuid,_>("id")).execute(&mut *tx).await?;
         sqlx::query(
@@ -798,6 +877,7 @@ async fn seed_generation_steps(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,
     snapshot: &crate::domain::work_generation::WorkGenerationSnapshot,
+    usage: &Value,
 ) -> Result<(), sqlx::Error> {
     let mode = snapshot
         .timeline_snapshot
@@ -833,7 +913,7 @@ async fn seed_generation_steps(
             .timeline_snapshot
             .get("tts_usage")
             .cloned()
-            .unwrap_or_else(|| json!({})),
+            .unwrap_or_else(|| json!({"tts_characters": usage_u64(usage, "tts_characters")})),
         snapshot.model_snapshot.clone(),
     )
     .await?;
@@ -847,7 +927,10 @@ async fn seed_generation_steps(
     for segment in segments {
         step_no += 1;
         let input = segment.clone();
-        let usage = json!({"video_seconds": segment.get("duration_seconds").and_then(Value::as_u64).unwrap_or(0)});
+        let usage = json!({
+            "video_tasks": 1,
+            "video_seconds": segment.get("duration_seconds").and_then(Value::as_u64).unwrap_or(0)
+        });
         video_step_nos.push(
             insert_generation_step(
                 tx,
@@ -878,7 +961,12 @@ async fn seed_generation_steps(
             .timeline_snapshot
             .get("asr_usage")
             .cloned()
-            .unwrap_or_else(|| json!({})),
+            .unwrap_or_else(|| {
+                json!({
+                    "asr_tasks": if asr_required { 1 } else { 0 },
+                    "asr_seconds": usage_u64(usage, "asr_seconds")
+                })
+            }),
         snapshot.model_snapshot.clone(),
     )
     .await?;
@@ -938,6 +1026,97 @@ async fn seed_generation_steps(
     )
     .await?;
     Ok(())
+}
+
+fn usage_u64(usage: &Value, key: &str) -> u64 {
+    usage.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn production_resource_request(usage: &Value) -> Result<ResourceRequest, WorkRepositoryError> {
+    let video_tasks = usage_u64(usage, "video_task_count");
+    let video_duration = usage_u64(usage, "video_seconds");
+    let tts_characters = usage_u64(usage, "tts_characters");
+    let asr_tasks = (usage_u64(usage, "asr_seconds") > 0) as u64;
+    let concurrency = (video_tasks > 0 || tts_characters > 0 || asr_tasks > 0) as u64;
+    Ok(ResourceRequest::work_generation(
+        video_tasks,
+        video_duration,
+        tts_characters,
+        asr_tasks,
+        concurrency,
+    ))
+}
+
+fn provider_retry_resource_request(
+    step_type: String,
+    usage: Value,
+) -> Result<Option<ResourceRequest>, WorkRepositoryError> {
+    let mut values = std::collections::BTreeMap::new();
+    match step_type.as_str() {
+        "video_segment" => {
+            values.insert("video_tasks".into(), 1);
+            values.insert(
+                "video_duration_sec".into(),
+                usage_u64(&usage, "video_seconds"),
+            );
+        }
+        "tts" => {
+            values.insert("tts_characters".into(), usage_u64(&usage, "tts_characters"));
+        }
+        "asr" => {
+            values.insert("asr_tasks".into(), 1);
+        }
+        _ => return Ok(None),
+    }
+    Ok(Some(ResourceRequest::provider_retry(values)))
+}
+
+async fn production_scope_for_plan(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    plan_id: Uuid,
+) -> Result<Option<(Uuid, Uuid)>, sqlx::Error> {
+    sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT run.id,step.id
+        FROM production_domain_links link
+        JOIN production_runs run
+          ON run.id=link.run_id AND link.revision_epoch=run.current_revision_epoch
+        JOIN production_steps step
+          ON step.run_id=run.id AND step.revision_epoch=run.current_revision_epoch
+         AND step.step_key='work_plan_confirmation'
+        WHERE link.link_type='work_plan' AND link.work_plan_id=$1
+        ORDER BY link.created_at DESC,link.id DESC
+        LIMIT 1
+        FOR UPDATE OF run,step
+        "#,
+    )
+    .bind(plan_id)
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+async fn production_scope_for_external_run(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    external_run_id: Uuid,
+) -> Result<Option<(Uuid, Uuid)>, sqlx::Error> {
+    sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT run.id,wait_step.id
+        FROM production_domain_links link
+        JOIN production_runs run
+          ON run.id=link.run_id AND link.revision_epoch=run.current_revision_epoch
+        JOIN production_steps wait_step
+          ON wait_step.run_id=run.id AND wait_step.revision_epoch=run.current_revision_epoch
+         AND wait_step.step_key='wait_work_generation'
+        WHERE link.link_type='work_generation_run' AND link.work_generation_run_id=$1
+        ORDER BY link.created_at DESC,link.id DESC
+        LIMIT 1
+        FOR UPDATE OF run,wait_step
+        "#,
+    )
+    .bind(external_run_id)
+    .fetch_optional(&mut **tx)
+    .await
 }
 
 fn generation_requirements(mode: &str) -> (bool, bool, bool) {

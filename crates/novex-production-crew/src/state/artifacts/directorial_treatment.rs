@@ -20,8 +20,13 @@ pub struct DirectorialTreatment {
 
 impl DirectorialTreatment {
     pub fn validate(content: &Value) -> Result<(), String> {
-        let vs = content.get("visual_style").and_then(|v| v.as_str()).unwrap_or("");
-        if vs.is_empty() { return Err("directorial_treatment 必须包含 visual_style".into()); }
+        let vs = content
+            .get("visual_style")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if vs.is_empty() {
+            return Err("directorial_treatment 必须包含 visual_style".into());
+        }
         Ok(())
     }
 }
