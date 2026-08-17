@@ -1,4 +1,0 @@
-标题：{{title}}
-标签：{{tags}}
-元数据：{{metadata}}
-片段：{{fragments}}

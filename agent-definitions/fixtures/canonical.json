@@ -1,5 +1,0 @@
-{
-  "input": { "z": null, "a": { "beta": 2, "alpha": 1 }, "items": [3, 2, 1], "defaulted": false },
-  "canonical": "{\"a\":{\"alpha\":1,\"beta\":2},\"defaulted\":false,\"items\":[3,2,1],\"z\":null}",
-  "sha256": "fb2ca78da9b0724b7551536ef6b667daa3aa1cbf2aea3096617e59d5a4f51c31"
-}

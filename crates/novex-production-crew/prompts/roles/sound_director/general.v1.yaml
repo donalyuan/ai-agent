@@ -1,7 +1,0 @@
-prompt_key: "sound_director.general"
-version: "1"
-lifecycle: "active"
-model_requirements:
-  tier: "standard"
-  context_window: 16384
-description: "sound_director 角色 Prompt 定义"

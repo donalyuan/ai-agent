@@ -1,4 +1,0 @@
-interface:
-  display_name: "升级 Pi Runtime"
-  short_description: "安全检查并升级 Novex 的 Pi Runtime 依赖"
-  default_prompt: "使用 $upgrade-pi-runtime 检查并安全升级当前项目的 Pi Runtime。"
