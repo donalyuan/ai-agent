@@ -1,0 +1,26 @@
+{
+  "name": "@video-agent/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts"
+    },
+    "./schemas/*.schema.json": "./schemas/*.schema.json"
+  },
+  "scripts": {
+    "test": "node --test",
+    "generate:types": "node scripts/generate-types.mjs",
+    "check:types": "tsc --noEmit",
+    "format:check": "prettier --check \"{schemas,examples,scripts,src,tests}/**/*.{json,js,mjs,ts}\""
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "json-schema-to-typescript": "^15.0.4",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.2"
+  }
+}

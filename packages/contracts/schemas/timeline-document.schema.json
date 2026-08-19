@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/timeline-document.schema.json",
+  "title": "TimelineDocument",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "revision",
+    "status",
+    "projectId",
+    "episodeId",
+    "cutId",
+    "fps",
+    "width",
+    "height",
+    "tracks",
+    "clips",
+    "captions"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "revision": { "$ref": "#/$defs/revision" },
+    "status": { "$ref": "#/$defs/status" },
+    "projectId": {
+      "$ref": "https://video-agent.local/schemas/project.schema.json#/$defs/uuid"
+    },
+    "episodeId": {
+      "$ref": "https://video-agent.local/schemas/episode.schema.json#/$defs/uuid"
+    },
+    "cutId": { "$ref": "#/$defs/uuid" },
+    "fps": { "type": "integer", "minimum": 1 },
+    "width": { "type": "integer", "minimum": 1 },
+    "height": { "type": "integer", "minimum": 1 },
+    "tracks": { "type": "array", "items": { "$ref": "#/$defs/track" } },
+    "clips": { "type": "array", "items": { "$ref": "#/$defs/clip" } },
+    "captions": { "type": "array", "items": { "$ref": "#/$defs/caption" } }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "revision": { "type": "integer", "minimum": 0 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "generated",
+        "pending_review",
+        "approved",
+        "rejected",
+        "superseded",
+        "archived"
+      ]
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "kind": {
+          "type": "string",
+          "enum": ["video", "audio", "caption", "text"]
+        },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "clip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "trackId",
+        "assetVersionId",
+        "timelineStartFrame",
+        "sourceInFrame",
+        "durationFrames"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "trackId": { "$ref": "#/$defs/uuid" },
+        "assetVersionId": {
+          "$ref": "https://video-agent.local/schemas/asset-version.schema.json#/$defs/uuid"
+        },
+        "timelineStartFrame": { "type": "integer", "minimum": 0 },
+        "sourceInFrame": { "type": "integer", "minimum": 0 },
+        "durationFrames": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "caption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "startFrame", "endFrame", "text"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "startFrame": { "type": "integer", "minimum": 0 },
+        "endFrame": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

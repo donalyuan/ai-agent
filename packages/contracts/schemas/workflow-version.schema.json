@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/workflow-version.schema.json",
+  "title": "WorkflowVersion",
+  "$comment": "WorkflowVersion records are immutable. Persistence must create a new version rather than overwrite this document.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "revision",
+    "status",
+    "projectId",
+    "workflowDraftId",
+    "versionNumber",
+    "contentHash",
+    "definition"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "revision": { "$ref": "#/$defs/revision" },
+    "status": { "$ref": "#/$defs/status" },
+    "projectId": {
+      "$ref": "https://video-agent.local/schemas/project.schema.json#/$defs/uuid"
+    },
+    "workflowDraftId": {
+      "$ref": "https://video-agent.local/schemas/workflow-draft.schema.json#/$defs/uuid"
+    },
+    "versionNumber": { "type": "integer", "minimum": 1 },
+    "contentHash": { "$ref": "#/$defs/hash" },
+    "definition": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "revision": { "type": "integer", "minimum": 0 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "generated",
+        "pending_review",
+        "approved",
+        "rejected",
+        "superseded",
+        "archived"
+      ]
+    },
+    "hash": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+  }
+}

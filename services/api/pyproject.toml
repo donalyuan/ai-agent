@@ -1,0 +1,53 @@
+[project]
+name = "video-agent-api"
+version = "0.1.0"
+description = "Phase 0 local API foundation for the video agent workbench"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "alembic>=1.16,<2",
+  "asyncpg>=0.30,<1",
+  "fastapi>=0.116,<1",
+  "pydantic>=2.11,<3",
+  "psycopg[binary]>=3.2,<4",
+  "PyYAML>=6,<7",
+  "sqlalchemy>=2.0,<3",
+  "temporalio>=1.16,<2",
+  "uvicorn>=0.35,<1",
+]
+
+[dependency-groups]
+dev = [
+  "aiosqlite>=0.21,<1",
+  "httpx>=0.28,<1",
+  "mypy>=1.17,<2",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+  "ruff>=0.12,<1",
+  "types-PyYAML>=6.0,<7",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["video_agent_api"]
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/video_agent_api"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"

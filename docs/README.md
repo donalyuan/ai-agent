@@ -2,5 +2,10 @@
 
 - [代理持久记忆](agent/README.md)：项目事实、决策、交接与已证实排障信息。
 - [架构决策记录](adr/README.md)：影响后续维护的已接受决策。
+- [产品需求文档](video-agent-product-requirements.docx)：个人本地剧情短剧创作工作台的范围、用户流程与验收需求。
+- [技术架构](video-agent-technical-architecture.md)：前后端、工作流、数据、对象存储和目标后端工程架构。
+- [技术实施方案](video-agent-technical-implementation.docx)：可按阶段实施的详细技术方案。
+- [供应商与 Skill 接入说明](video-agent-integration-notes.md)：模型、对象存储与 Skill 的接入边界。
+- [阶段 0 追溯](phase-zero-traceability.md)：R1-R8 到规格、实现和验证的追溯。
 
-当前产品需求、实现和运行配置尚待建立；新增后应在对应目录维护其权威文档。
+后续变更先以 OpenSpec 定义范围和验收，再同步更新受影响的权威文档与项目记忆。

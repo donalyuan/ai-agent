@@ -1,0 +1,12 @@
+{
+  "id": "00000000-0000-4000-8000-000000000007",
+  "schema_version": "1.0.0",
+  "revision": 0,
+  "status": "draft",
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "scopeType": "scene",
+  "scopeIds": [],
+  "definition": {
+    "nodes": []
+  }
+}

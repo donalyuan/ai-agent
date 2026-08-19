@@ -1,0 +1,4 @@
+CREATE USER phase0 WITH PASSWORD 'phase0';
+CREATE DATABASE phase0 OWNER phase0;
+CREATE USER temporal WITH PASSWORD 'temporal' CREATEDB;
+CREATE DATABASE temporal OWNER temporal;

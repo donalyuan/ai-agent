@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/project.schema.json",
+  "title": "Project",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "schema_version", "revision", "status", "name"],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "revision": { "$ref": "#/$defs/revision" },
+    "status": { "$ref": "#/$defs/status" },
+    "name": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "revision": { "type": "integer", "minimum": 0 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "generated",
+        "pending_review",
+        "approved",
+        "rejected",
+        "superseded",
+        "archived"
+      ]
+    }
+  }
+}

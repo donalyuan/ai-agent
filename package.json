@@ -1,0 +1,20 @@
+{
+  "name": "video-agent-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.19.0",
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
+  "scripts": {
+    "setup": "pnpm install --frozen-lockfile && uv sync --project services/api --frozen --all-groups",
+    "test": "pnpm --filter @video-agent/contracts test && pnpm --filter @video-agent/web test && uv run --project services/api pytest -c services/api/pyproject.toml -q",
+    "lint": "pnpm --filter @video-agent/web lint && uv run --project services/api ruff check services/api workers",
+    "typecheck": "pnpm --filter @video-agent/contracts check:types && pnpm --filter @video-agent/web typecheck && uv run --project services/api mypy services/api/src",
+    "format:check": "pnpm --filter @video-agent/contracts format:check && pnpm --filter @video-agent/web format:check && uv run --project services/api ruff format --check services/api workers",
+    "format": "pnpm --filter @video-agent/web format && uv run --project services/api ruff format services/api workers",
+    "check": "pnpm run test && pnpm run lint && pnpm run typecheck && pnpm run format:check",
+    "compose:up": "docker compose --env-file .env.example -f infra/compose/compose.yaml up --build -d",
+    "compose:down": "docker compose --env-file .env.example -f infra/compose/compose.yaml down --remove-orphans"
+  }
+}

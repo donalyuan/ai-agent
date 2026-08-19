@@ -1,0 +1,45 @@
+{
+  "canonicalObjectKeys": [
+    "projects/a/v1.mp4",
+    "assets/voice/v1.wav",
+    "projects/a/my video.mp4"
+  ],
+  "invalidObjectKeys": [
+    "",
+    "   ",
+    "\n",
+    "\u0085",
+    "/tmp/video.mp4",
+    "assets/a/../secret.mp4",
+    "assets\\secret.mp4",
+    "./asset.mp4",
+    "assets//v1.mp4",
+    "assets/a/",
+    "assets/ /v1.mp4",
+    "assets/\t/v1.mp4",
+    "assets/\n/v1.mp4",
+    "assets/\u0085/v1.mp4",
+    " assets/v1.mp4",
+    "C:/asset.mp4",
+    "C:relative.mp4",
+    "\\\\server\\share\\asset.mp4",
+    "workspace:projects/a/v1.mp4",
+    "workspace:/projects/a/v1.mp4",
+    "s3:bucket/a.mp4",
+    "projects/a?",
+    "projects/a#"
+  ],
+  "validWorkspaceReferences": ["workspace://projects/a/v1.mp4"],
+  "invalidLegacyReferences": [
+    "workspace://../escape.mp4",
+    "workspace://projects/a/",
+    "workspace://projects",
+    "workspace://   ",
+    "workspace://projects/a?",
+    "workspace://projects/a#",
+    "workspace:projects/a/v1.mp4",
+    "workspace:/projects/a/v1.mp4",
+    "s3:bucket/a.mp4",
+    "s3://bucket/a.mp4"
+  ]
+}

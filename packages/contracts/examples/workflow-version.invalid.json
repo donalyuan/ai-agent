@@ -1,0 +1,12 @@
+{
+  "id": "00000000-0000-4000-8000-000000000008",
+  "schema_version": "1.0.0",
+  "revision": 0,
+  "status": "approved",
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "workflowDraftId": "00000000-0000-4000-8000-000000000007",
+  "versionNumber": 1,
+  "definition": {
+    "nodes": []
+  }
+}
