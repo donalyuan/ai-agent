@@ -1,0 +1,18 @@
+{
+  "stage": "S11 resilience",
+  "owner": "implement-operations-resilience",
+  "profile": "Mock Provider + explicit Local test/offline (local_workspace)",
+  "prerequisites": ["S01-S10 owner facts", "versioned manual runbook", "explicit drill fixture"],
+  "successEvidence": "/tmp/phase-one-resilience-evidence.json",
+  "focusedFailures": [
+    "F11 resilience_capacity_or_restore_failed",
+    "resource_probe_unavailable",
+    "resource_capability_unsupported",
+    "resource_capacity_hard_limit",
+    "restore_object_identity_mismatch"
+  ],
+  "noSideEffectInvariant": "拒绝和恢复失败不创建 intent、ProviderCall、UploadSession、ExportJob、AssetVersion、Outbox，不修改 current reference，不自动清理或切换 adapter",
+  "liveProvider": "unconfigured",
+  "liveTos": "unconfigured",
+  "liveRenderer": "unconfigured"
+}

@@ -1,0 +1,24 @@
+{
+  "stage": "S11a observability",
+  "owner": "implement-local-observability",
+  "profile": "Mock Provider + explicit Local test/offline (local_workspace)",
+  "lineage": {
+    "root": "canonical W3C trace_id from browser/API request",
+    "children": ["http", "workflow", "provider", "storage", "ffmpeg"]
+  },
+  "successEvidence": [
+    "services/api/tests/test_resilience_observability.py",
+    "/v1/operations/telemetry",
+    "bounded logs/spans/metric labels"
+  ],
+  "focusedFailures": [
+    "F11a trace_metric_or_redaction_failed",
+    "invalid_traceparent",
+    "telemetry_export_unavailable",
+    "high-cardinality-label-rejected"
+  ],
+  "noSideEffectInvariant": "telemetry/exporter/viewer failure 不改变 readiness、UoW、Run/Export/Provider/Storage/FFmpeg 结果，不产生重复业务事件或费用",
+  "liveProvider": "unconfigured",
+  "liveTos": "unconfigured",
+  "liveRenderer": "unconfigured"
+}

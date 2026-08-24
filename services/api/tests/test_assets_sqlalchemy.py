@@ -10,7 +10,10 @@ from video_agent_api.adapters.sqlalchemy_models import Base
 from video_agent_api.application.assets import (
     AppendAssetVersionCommand,
     AssetsService,
+    CancelReservationCommand,
     CreateAssetCommand,
+    CreateReservationCommand,
+    UpdateAssetMetadataCommand,
 )
 from video_agent_api.application.projects_episodes import ProjectsEpisodesService
 from video_agent_api.domain.assets import StorageObject
@@ -94,5 +97,86 @@ async def test_asset_version_number_unique_constraint_is_final_guard() -> None:
             )
             with pytest.raises(IntegrityError):
                 await session.commit()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_asset_metadata_and_reservation_survive_fresh_uow() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        projects = ProjectsEpisodesService(lambda: SQLAlchemyUnitOfWork(factory))
+        assets = AssetsService(lambda: SQLAlchemyUnitOfWork(factory))
+        project = await projects.create_project("Asset center")
+        asset = await assets.create_asset(
+            CreateAssetCommand(
+                project.id,
+                "Dialogue",
+                "audio",
+                source_type="user_upload",
+                catalog_role="dialogue",
+                authorization_status="verified",
+                license_label="Owned",
+            )
+        )
+
+        updated = await assets.update_metadata(
+            UpdateAssetMetadataCommand(
+                asset.id,
+                asset.revision,
+                tags=("lead", "episode-1"),
+                copyright_owner="Studio",
+            )
+        )
+        reloaded = await assets.get_asset(asset.id)
+        assert reloaded.revision == updated.revision == 2
+        assert reloaded.tags == ("lead", "episode-1")
+        assert reloaded.catalog_role == "dialogue"
+        assert reloaded.authorization_status == "verified"
+        assert reloaded.copyright_owner == "Studio"
+        assert reloaded.license_label == "Owned"
+
+        reservation = await assets.create_reservation(
+            CreateReservationCommand(
+                project.id,
+                asset.id,
+                "b" * 64,
+                reloaded.revision,
+                "audio",
+                "audio/wav",
+                4,
+                HASH,
+                "local-test-offline",
+                1,
+                "c" * 64,
+            )
+        )
+        after_restart = await assets.get_reservation(project.id, reservation.id)
+        assert after_restart.operation_key == reservation.operation_key
+        assert after_restart.upload_key.endswith("/original.wav")
+        same = await assets.create_reservation(
+            CreateReservationCommand(
+                project.id,
+                asset.id,
+                "b" * 64,
+                reloaded.revision,
+                "audio",
+                "audio/wav",
+                4,
+                HASH,
+                "local-test-offline",
+                1,
+                "c" * 64,
+            )
+        )
+        assert same.id == reservation.id
+        cancelled = await assets.cancel_reservation(
+            project.id, CancelReservationCommand(reservation.id, reservation.revision)
+        )
+        assert cancelled.status == "cancelled"
+        assert (await assets.get_reservation(project.id, reservation.id)).status == "cancelled"
     finally:
         await engine.dispose()

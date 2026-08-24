@@ -1,0 +1,33 @@
+{
+  "id": "00000000-0000-4000-8000-000000000103",
+  "schema_version": "1.0.0",
+  "manifestVersion": "1.0.0",
+  "exportProfile": "portable",
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "episode": {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "revision": 1,
+    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "timelineVersion": {
+    "id": "00000000-0000-4000-8000-000000000102",
+    "revision": 1,
+    "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "assetVersionRefs": [],
+  "soundCues": [],
+  "authorization": { "status": "", "source": "", "recordId": "" },
+  "license": { "status": "", "source": "", "recordId": "" },
+  "loudness": {},
+  "models": [],
+  "skillRevisions": [],
+  "parameters": {},
+  "usage": {},
+  "cost": {
+    "value": "unknown",
+    "currency": "CNY",
+    "status": "unknown",
+    "source": ""
+  },
+  "references": []
+}

@@ -14,6 +14,14 @@ class ValidationDomainError(DomainError):
     code = "validation"
 
 
+class ProjectAccessForbiddenError(DomainError):
+    code = "project_access_forbidden"
+
+    def __init__(self, project_id: str) -> None:
+        super().__init__(f"project access forbidden: {project_id}")
+        self.project_id = project_id
+
+
 class ProjectNotFoundError(DomainError):
     code = "project_not_found"
 
@@ -56,6 +64,68 @@ class DatabaseUnavailableError(DomainError):
     code = "database_unavailable"
 
 
+class WorkflowUnconfiguredError(DomainError):
+    code = "workflow_unconfigured"
+
+
+class WorkflowVersionUnavailableError(DomainError):
+    code = "workflow_version_unavailable"
+
+
+class WorkflowSourceConflictError(DomainError):
+    code = "workflow_source_conflict"
+
+
+class WorkflowRunNotFoundError(DomainError):
+    code = "workflow_run_not_found"
+
+
+class WorkflowRunConflictError(DomainError):
+    code = "workflow_run_conflict"
+
+
+class UnsupportedFeatureError(DomainError):
+    code = "unsupported"
+
+
+class AssetEditNotFoundError(DomainError):
+    code = "asset_edit_not_found"
+
+
+class AssetEditConflictError(DomainError):
+    code = "base_version_conflict"
+
+
+class AssetEditContinuityStaleError(DomainError):
+    code = "continuity_stale"
+
+
+class AssetEditReadOnlyError(DomainError):
+    code = "forbidden_read_only"
+
+
+class AssetEditUnconfiguredError(DomainError):
+    code = "asset_edit_unconfigured"
+
+
+class StorageProfileRevisionConflictError(DomainError):
+    code = "storage_profile_revision_conflict"
+
+    def __init__(self, profile_id: str, expected: int, current: int) -> None:
+        super().__init__(f"storage profile revision conflict: {profile_id}")
+        self.profile_id = profile_id
+        self.expected_revision = expected
+        self.current_revision = current
+
+
+class StorageProfileNotFoundError(DomainError):
+    code = "storage_profile_not_found"
+
+
+class CredentialMasterKeyUnavailableError(DomainError):
+    code = "credential_master_key_unavailable"
+
+
 class AssetNotFoundError(DomainError):
     code = "asset_not_found"
 
@@ -83,3 +153,11 @@ class AssetVersionConflictError(DomainError):
 
 class ImmutableAssetVersionError(DomainError):
     code = "asset_version_immutable"
+
+
+class RendererUnconfiguredError(DomainError):
+    code = "renderer_unconfigured"
+
+
+class RendererCapabilityUnsupportedError(DomainError):
+    code = "renderer_capability_unsupported"

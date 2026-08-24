@@ -15,6 +15,8 @@ from video_agent_api.adapters.sqlalchemy_models import (
     Scene,
     Shot,
     TimelineDocument,
+    VideoOperationModel,
+    VideoTakeCandidateModel,
     WorkflowDraft,
     WorkflowVersion,
 )
@@ -37,6 +39,8 @@ def test_phase_zero_models_expose_all_persistent_contracts() -> None:
         CredentialMetadata,
     }
     assert len(expected) == 13
+    assert VideoOperationModel.__tablename__ == "video_operations"
+    assert VideoTakeCandidateModel.__tablename__ == "video_take_candidates"
     assert Project.__tablename__ == "projects"
     assert "ciphertext" in CredentialMetadata.__table__.columns
     assert "nonce" in CredentialMetadata.__table__.columns
@@ -80,8 +84,21 @@ async def test_minimal_project_hierarchy_persists_with_stable_relationships() ->
             episode = Episode(
                 id="episode-1", project_id=project.id, display_number=1, status="draft"
             )
-            scene = Scene(id="scene-1", episode_id=episode.id, display_number=1, status="draft")
-            shot = Shot(id="shot-1", scene_id=scene.id, display_number=1, status="draft")
+            scene = Scene(
+                id="scene-1",
+                project_id=project.id,
+                episode_id=episode.id,
+                display_number=1,
+                status="draft",
+            )
+            shot = Shot(
+                id="shot-1",
+                project_id=project.id,
+                episode_id=episode.id,
+                scene_id=scene.id,
+                display_number=1,
+                status="draft",
+            )
             session.add_all([project, episode, scene, shot])
             await session.commit()
             assert await session.get(Shot, shot.id) is not None

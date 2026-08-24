@@ -1,0 +1,95 @@
+{
+  "id": "00000000-0000-4000-8000-000000000103",
+  "schema_version": "1.0.0",
+  "manifestVersion": "1.0.0",
+  "exportProfile": "light",
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "episode": {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "revision": 1,
+    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "timelineVersion": {
+    "id": "00000000-0000-4000-8000-000000000102",
+    "revision": 1,
+    "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "assetVersionRefs": [
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "revision": 0,
+      "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "authorization": {
+        "status": "authorized",
+        "source": "asset-owner",
+        "recordId": "authorization-1"
+      },
+      "license": {
+        "status": "approved",
+        "source": "asset-owner",
+        "recordId": "license-1"
+      }
+    }
+  ],
+  "soundCues": [],
+  "authorization": {
+    "status": "authorized",
+    "source": "asset-owner",
+    "recordId": "authorization-summary"
+  },
+  "license": {
+    "status": "approved",
+    "source": "asset-owner",
+    "recordId": "license-summary"
+  },
+  "loudness": {
+    "integratedLufs": -14,
+    "truePeakDbtp": -1,
+    "measuredBy": "ffmpeg-ebur128",
+    "measurementVersion": "1"
+  },
+  "models": [
+    {
+      "providerId": "provider",
+      "profileId": "profile",
+      "modelId": "model",
+      "capabilitySnapshotId": "capability"
+    }
+  ],
+  "skillRevisions": [
+    {
+      "id": "skill",
+      "revision": 1,
+      "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ],
+  "parameters": {
+    "fps": 30,
+    "codec": "h264",
+    "pixelFormat": "yuv420p",
+    "audioCodec": "aac",
+    "sampleRate": 48000
+  },
+  "usage": {
+    "value": 120,
+    "unit": "frames",
+    "status": "measured",
+    "source": "render-plan"
+  },
+  "cost": {
+    "value": "unknown",
+    "currency": "CNY",
+    "status": "unknown",
+    "source": "local-renderer-no-price"
+  },
+  "references": [
+    {
+      "artifactType": "mp4",
+      "artifactId": "00000000-0000-4000-8000-000000000104"
+    },
+    {
+      "artifactType": "srt",
+      "artifactId": "00000000-0000-4000-8000-000000000105"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "id": "00000000-0000-4000-8000-000000000202",
+  "schema_version": "1.0.0",
+  "derivativeSchemaVersion": "1.0.0",
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "inspectionId": "00000000-0000-4000-8000-000000000201",
+  "assetVersionId": "00000000-0000-4000-8000-000000000101",
+  "assetVersionRevision": 0,
+  "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "sourceFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "kind": "proxy",
+  "status": "ready",
+  "parameters": { "maxWidth": 540, "maxFrames": 60 },
+  "tool": "ffmpeg",
+  "toolVersion": "7.1",
+  "operationKey": "derive:proxy:1",
+  "objectRef": {
+    "profileId": "local",
+    "objectKey": "projects/p/media/proxy.mp4",
+    "operationKey": "derive:proxy:1"
+  },
+  "checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "sizeBytes": 512,
+  "retention": { "policy": "phase-one", "version": "1" },
+  "license": { "status": "approved" },
+  "hold": false,
+  "rawDiagnostic": null
+}

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1.0.0",
+  "stage": "S04-S07 context agent candidate review",
+  "change": "implement-context-agent-candidate-review-ui",
+  "profile": "Mock Provider + explicit Local test/offline",
+  "adapter": "local_workspace",
+  "navigation": {
+    "entry": "/projects",
+    "route": "/projects/{projectId}/review",
+    "artifact": "output/playwright/context-agent-review-desktop.png",
+    "scope": "projectId + episodeId"
+  },
+  "successEvidence": [
+    "apps/web/src/pages/AssetEditReviewPage.test.tsx",
+    "apps/web/src/asset-edit-review/api.test.ts",
+    "services/api/tests/test_agent_edit_review_http.py",
+    "services/api/tests/test_agent_edit_review_http.py::test_review_projection_lists_by_episode_and_rejects_foreign_scope",
+    "services/api/tests/test_agent_edit_review_http.py::test_review_projection_episode_filter_never_falls_back"
+  ],
+  "verifiedBehaviors": [
+    "session 恢复前重新校验 project/episode scope、revision、message sequence 与 selection hash",
+    "candidate accept/reject/retake 使用显式确认和 exact AssetVersion CAS",
+    "continuity snapshot/task gate 阻断未完成媒体计划",
+    "页面读取、筛选和 route 切换不创建 ProviderCall、AssetVersion 或 Timeline mutation"
+  ],
+  "focusedFailures": [
+    "F06 asset_edit_plan_conflict_or_submission_unknown",
+    "foreign_episode_session",
+    "stale_asset_version_cas",
+    "continuity_snapshot_or_task_pending"
+  ],
+  "noSideEffectInvariant": "foreign/stale/partial/unknown candidate 不创建执行 intent、ProviderCall、AssetVersion、current 引用或 Timeline handoff；旧 session 与 owner current 保持不变。",
+  "liveProvider": "unconfigured",
+  "liveTos": "unconfigured",
+  "liveRenderer": "unconfigured"
+}

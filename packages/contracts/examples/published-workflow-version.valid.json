@@ -1,0 +1,77 @@
+{
+  "id": "00000000-0000-4000-8000-000000000021",
+  "schema_version": "1.0.0",
+  "revision": 1,
+  "status": "published",
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "templateKey": "drama-mvp-a-default",
+  "versionNumber": 1,
+  "scopeType": "project",
+  "scopeIds": ["00000000-0000-4000-8000-000000000001"],
+  "contentHash": "ecda8cab95fd6870d3f3729757f1d30a8c16823f0a9091275fb062e2cbff207e",
+  "definition": {
+    "nodes": [
+      {
+        "key": "text.generate",
+        "ports": {
+          "input": "text.generate.input.v1",
+          "output": "text.generate.output.v1"
+        }
+      },
+      {
+        "key": "text.review",
+        "ports": {
+          "input": "text.review.input.v1",
+          "output": "text.review.output.v1"
+        }
+      },
+      {
+        "key": "media.generate.image",
+        "ports": {
+          "input": "media.generate.image.input.v1",
+          "output": "media.generate.image.output.v1"
+        }
+      },
+      {
+        "key": "media.review.image",
+        "ports": {
+          "input": "media.review.image.input.v1",
+          "output": "media.review.image.output.v1"
+        }
+      },
+      {
+        "key": "media.generate.video",
+        "ports": {
+          "input": "media.generate.video.input.v1",
+          "output": "media.generate.video.output.v1"
+        }
+      },
+      {
+        "key": "media.review.video",
+        "ports": {
+          "input": "media.review.video.input.v1",
+          "output": "media.review.video.output.v1"
+        }
+      },
+      {
+        "key": "media.inspect",
+        "ports": {
+          "input": "media.inspect.input.v1",
+          "output": "media.inspect.output.v1"
+        }
+      },
+      {
+        "key": "timeline.handoff",
+        "ports": {
+          "input": "timeline.handoff.input.v1",
+          "output": "timeline.handoff.output.v1"
+        }
+      }
+    ],
+    "compatibilityLogicalOperations": {
+      "media.generate": ["media.generate.image", "media.generate.video"]
+    },
+    "skills": ["novel-writing", "drama-skills"],
+    "schemaVersion": "1.0.0"
+  }
+}

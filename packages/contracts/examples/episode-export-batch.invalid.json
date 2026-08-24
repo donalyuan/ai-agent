@@ -1,0 +1,22 @@
+{
+  "id": "00000000-0000-4000-8000-000000000109",
+  "schema_version": "1.0.0",
+  "revision": 1,
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "exportProfile": "portable",
+  "settings": {
+    "aspectRatio": "4:3",
+    "width": 720,
+    "height": 480,
+    "fps": 24,
+    "container": "mkv",
+    "videoCodec": "vp9",
+    "pixelFormat": "yuv444p",
+    "audioCodec": "opus",
+    "sampleRate": 44100,
+    "subtitleEncoding": "UTF-16"
+  },
+  "status": "done",
+  "jobs": [],
+  "members": []
+}

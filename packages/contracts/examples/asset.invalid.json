@@ -1,9 +1,13 @@
 {
   "id": "00000000-0000-4000-8000-000000000005",
   "schema_version": "1.0.0",
-  "revision": 0,
+  "revision": 1,
   "status": "not-a-status",
   "projectId": "00000000-0000-4000-8000-000000000001",
   "kind": "video",
-  "name": "Opening take"
+  "name": "Opening take",
+  "sourceType": "user_upload",
+  "tags": ["duplicate", "duplicate"],
+  "authorizationStatus": "authorized",
+  "updatedAt": "not-a-date"
 }

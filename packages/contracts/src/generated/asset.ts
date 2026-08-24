@@ -36,4 +36,36 @@ export interface Asset {
   projectId: string;
   kind: "image" | "video" | "audio" | "text" | "document";
   name: string;
+  sourceType:
+    | "user_upload"
+    | "provider_generated"
+    | "source_material"
+    | "imported";
+  catalogRole?:
+    | "character"
+    | "location"
+    | "prop"
+    | "storyboard"
+    | "video_take"
+    | "dialogue"
+    | "music"
+    | "ambience"
+    | "effects"
+    | "other"
+    | null;
+  /**
+   * @maxItems 32
+   */
+  tags: string[];
+  authorizationStatus:
+    | "unknown"
+    | "declared"
+    | "verified"
+    | "restricted"
+    | "expired";
+  copyrightOwner?: string | null;
+  licenseLabel?: string | null;
+  licenseReference?: string | null;
+  updatedAt: string;
+  [k: string]: unknown;
 }

@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/creative-configuration.schema.json",
+  "title": "CreativeConfiguration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "projectId",
+    "schema_version",
+    "projectRevision",
+    "creationMode"
+  ],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "projectId": { "type": "string", "format": "uuid" },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "projectRevision": { "type": "integer", "minimum": 1 },
+    "creationMode": { "enum": ["original", "adaptation"] },
+    "creativeBrief": { "$ref": "#/$defs/brief" },
+    "settings": { "$ref": "#/$defs/settings" },
+    "sourceBinding": { "$ref": "#/$defs/binding" },
+    "storySpecRef": { "$ref": "#/$defs/ref" }
+  },
+  "$defs": {
+    "brief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "creative_brief_id",
+        "project_id",
+        "subject",
+        "genre",
+        "audience",
+        "character_premise",
+        "style",
+        "episode_duration_seconds",
+        "episode_count",
+        "scenes_per_episode",
+        "shots_per_scene",
+        "revision",
+        "schema_version",
+        "id",
+        "payload_hash"
+      ],
+      "properties": {
+        "creative_brief_id": { "type": "string", "format": "uuid" },
+        "project_id": { "type": "string", "format": "uuid" },
+        "subject": { "type": "string", "minLength": 1 },
+        "genre": { "type": "string", "minLength": 1 },
+        "audience": { "type": "string", "minLength": 1 },
+        "character_premise": { "type": "string", "minLength": 1 },
+        "style": { "type": "string", "minLength": 1 },
+        "episode_duration_seconds": { "type": "integer", "minimum": 1 },
+        "episode_count": { "type": "integer", "minimum": 1 },
+        "scenes_per_episode": { "type": "integer", "minimum": 1 },
+        "shots_per_scene": { "type": "integer", "minimum": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "schema_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "id": { "type": "string", "format": "uuid" },
+        "payload_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project_id",
+        "text_cost_confirmation_threshold",
+        "revision",
+        "schema_version",
+        "id",
+        "payload_hash"
+      ],
+      "properties": {
+        "project_id": { "type": "string", "format": "uuid" },
+        "text_cost_confirmation_threshold": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["amount", "currency"],
+              "properties": {
+                "amount": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$"
+                },
+                "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+              }
+            }
+          ]
+        },
+        "revision": { "type": "integer", "minimum": 1 },
+        "schema_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "id": { "type": "string", "format": "uuid" },
+        "payload_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project_id",
+        "source_material_id",
+        "source_material_revision",
+        "source_content_hash",
+        "creative_brief_id",
+        "creative_brief_revision",
+        "creative_brief_payload_hash",
+        "parse_status",
+        "validation_status",
+        "binding_status",
+        "binding_version",
+        "schema_version",
+        "id"
+      ],
+      "properties": {
+        "project_id": { "type": "string", "format": "uuid" },
+        "source_material_id": { "type": "string", "format": "uuid" },
+        "source_material_revision": { "type": "integer", "minimum": 1 },
+        "source_content_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "creative_brief_id": { "type": "string", "format": "uuid" },
+        "creative_brief_revision": { "type": "integer", "minimum": 1 },
+        "creative_brief_payload_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "parse_status": { "type": "string", "minLength": 1 },
+        "validation_status": { "type": "string", "minLength": 1 },
+        "binding_status": { "type": "string", "minLength": 1 },
+        "binding_version": { "type": "string", "minLength": 1 },
+        "schema_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "id": { "type": "string", "format": "uuid" }
+      }
+    },
+    "ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "hash", "projectId"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "projectId": { "type": "string", "format": "uuid" }
+      }
+    }
+  }
+}

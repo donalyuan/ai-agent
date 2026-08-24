@@ -105,15 +105,15 @@ flowchart TB
 
 - 输入：创意简报、主题、题材、人物设想、小说、剧本、图片、视频、模板、人工文本
 - 创作：原创故事/小说生成、改编分析、短剧开发、短剧剧本生成、角色资产、分镜、视觉风格
-- 生成：生图、视频模型、Fish Audio TTS、Groq ASR、音乐、字幕
+- 生成：MVP-A 的文本、生图、一个 Agnes image-to-video 模式、媒体检查与导出；Fish Audio TTS、Groq ASR、音乐生成、自动字幕和其余视频模式为 MVP-B 候选
 - 控制：条件、并行、合并、重试、人工审核
 - 媒体：抽帧、转码、拼接、混音、封面
 - 审查：剧本审查、连续性审查、画面审查、合规审查
-- 输出：剪辑时间线、MP4、SRT、轻量工程包和完整工程包导出
+- 输出：剪辑时间线、MP4、SRT、工程包导出；MVP-A 只交付 `exportProfile=light` manifest/reference-only，portable/完整媒体包属于 MVP-B
 
 ### React Flow 的职责边界
 
-React Flow 只保存和编辑：
+以下 React Flow 的保存、编辑和发布能力只属于 MVP-B：
 
 - 节点位置、尺寸、分组和视口；
 - 节点配置及输入输出端口；
@@ -122,15 +122,17 @@ React Flow 只保存和编辑：
 
 React Flow **不是工作流执行器**。后端负责图校验、版本发布和执行。画布中的运行颜色、进度和错误来自 `node_runs`，不能写回节点定义。
 
+MVP-A 的工作流来源固定为版本化、已发布的 `templateKey=drama-mvp-a-default` WorkflowVersion。后端负责 ensure/bootstrap、binding 和 Run source snapshot；MVP-A 工作台只读显示 source、节点状态和诊断，不提供节点/边编辑、连线、草稿保存或发布 UI。React Flow graph authoring 与发布在 MVP-B 实现。
+
 ### 多集短剧领域模型
 
-首版数据模型支持“短剧项目 -> 集 -> 场次 -> 镜头”。`Episode`、`Scene`、`Shot` 是稳定实体，内容通过不可变 `SpecVersion` 保存，统一状态为 `draft -> generated -> pending_review -> approved/rejected -> superseded/archived`；Schema 变更必须有版本迁移器。`WorkflowDraft` 必须声明 `scopeType` 和 `scopeIds`，项目级工作流批量作用于显式选择的集，不能从当前 UI 选择隐式扩大范围。项目级 `AssetBible` 作为跨集连续性基线，覆盖优先级为项目 -> 集 -> 场次 -> 镜头显式引用；覆盖关系写入 `ShotSpec`、Agent 上下文和运行事件。
+首版数据模型支持“短剧项目 -> 集 -> 场次 -> 镜头”。`Episode`、`Scene`、`Shot` 是稳定实体；`StorySpec` 属于项目，`ScriptSpec` 属于单集，`ShotSpec` 是版本化事实。候选使用 `generated -> pending_review -> approved|rejected|stale|superseded`，接受后的不可变事实以 current/superseded/archived 引用管理，二者不能混为一个状态机。MVP-A 不创建可编辑 `WorkflowDraft`；其 `scopeType`、`scopeIds`、图编辑与发布仅属于 MVP-B。项目级 `AssetBible` 作为跨集连续性基线，覆盖优先级为项目 -> 集 -> 场次 -> 镜头显式引用；覆盖关系写入 `ShotSpec`、Agent 上下文和运行事件。
 
-故事板与工作流是同一份领域事实的两个投影：工作流只拥有节点依赖、执行配置和发布命令，故事板拥有集/场次/镜头结构与排序命令，不复制 `ShotSpec`。排序使用版本化关系命令；删除、拆分、合并和跨场移动由 Storyboard domain service 事务提交。每集拥有多个命名 `TimelineCut/TimelineVersion` 但只有一个 current cut；项目级批量导出必须显式记录 `episode_id` 列表和各自时间线版本，默认分别输出文件。
+故事板与工作流是同一份领域事实的两个投影：MVP-A 工作流只读显示固定 source 的节点依赖、运行状态和诊断，故事板拥有集/场/镜头的受限排序和审核命令，不复制 `ShotSpec`。删除、拆分、合并、跨场移动和通用 Workflow 图编辑属于 MVP-B。每集有一个 current cut；MVP-A 可命名和只读比较不可变 TimelineVersion，但不支持复制 Timeline、通用撤销/重做或恢复旧版本。项目级批量导出必须显式记录 `episode_id` 列表和各自时间线版本，默认分别输出文件。
 
-故事板排序通过带 `revision` 的领域命令保存。跨场移动、批量生成、批量重拍和集级设定变更均写入审计记录；项目级角色、场景或风格变更只生成影响分析和修订任务，不静默改写已确认镜头。
+故事板排序通过带 `revision` 的领域命令保存。MVP-A 不提供跨场移动、批量生成、批量重拍或批量审核；项目级角色、场景或风格变更只生成影响分析和修订任务，不静默改写已确认镜头。
 
-### 图模型规则
+### MVP-B 图模型规则
 
 - 端口必须带类型，例如 `StorySpec -> ShotSpec`，不允许任意连线。
 - 使用 React Flow `isValidConnection` 做即时提示，后端再次做权威校验。
@@ -138,7 +140,7 @@ React Flow **不是工作流执行器**。后端负责图校验、版本发布�
 - 支持子流程，但子流程发布后按版本引用，不能隐式跟随最新草稿。
 - 草稿、已发布版本和运行实例完全分离。
 
-### 画布性能
+### MVP-B 画布性能
 
 - 使用受控 `nodes` 和 `edges`，节点类型在模块外稳定声明。
 - 大画布启用 `onlyRenderVisibleElements`，节点内容分层加载。
@@ -148,27 +150,24 @@ React Flow **不是工作流执行器**。后端负责图校验、版本发布�
 
 ### 素材上下文 Agent 对话
 
-用户选中画布或故事板中的故事、剧本、图片、视频、音频或时间线素材后，右侧属性区切换到 Agent 标签页。会话绑定 `projectId`、`workflowDraftId`、`episodeId`、`sceneId`、`shotId`、`nodeId`、`assetId`、当前 `assetVersionId` 和素材类型；图片可附选区/遮罩，视频和音频可附帧范围，文本可附段落范围。切换集/场/镜头时不得沿用旧素材上下文。
+用户选中画布或故事板中的故事、剧本、图片、视频、音频或时间线素材后，右侧属性区可显示相应上下文。会话绑定 `projectId`、`workflowVersionId`、`episodeId`、`sceneId`、`shotId`、`nodeId`、`assetId`、当前 `assetVersionId`、素材类型和显式 refs；MVP-A 不绑定可编辑 `workflowDraftId`。切换集/场/镜头时不得沿用旧素材上下文。
 
-AgentScope 先输出通过 JSON Schema 校验的 `AssetEditPlan`，其中包含基础版本、修改意图、操作列表、工具策略、预计费用、确认要求和预期输出类型。Agent 不直接写数据库或覆盖文件；文本生成新 StorySpec/ScriptSpec，图片调用 `ImageGenerationPort.edit`，视频优先调用模型编辑/参考能力、不支持时重生成候选镜头，音频重生成片段，时间线只产生受控领域命令。
+只有图片和视频可以由 AgentScope 输出通过 JSON Schema 校验的 `AssetEditPlan`，其中包含基础版本、修改意图、操作列表、工具策略、预计费用、确认要求和预期输出类型。Agent 不直接写数据库或覆盖文件；故事/剧本修改进入 `TextReview` successor/stale closure，音频和时间线只跳转到其 owner 的 typed command，MVP-A 不定义 `AudioEditPlan` 或 `MixPlan`。
 
-执行由 `AssetEditWorkflow` 承担，所有结果先登记为候选 `AssetVersion`。服务端先生成 `impactAnalysis` 和 `staleTargets`；用户可以继续追问、接受或拒绝。接受时必须明确替换当前镜头、当前场次、当前集或用户勾选的引用集合，不能使用隐含的“当前节点/全部草稿”范围。已发布工作流、历史运行和工程包保持只读；基础版本变化时返回 `409`，要求刷新或重新生成计划，已在时间线中的旧片段不被静默替换。
+image/video 执行由 `AssetEditWorkflow` 承担，所有结果先登记为候选 `AssetVersion`。服务端先生成 `impactAnalysis` 和 `staleTargets`；用户可以继续追问、接受或拒绝。接受时必须明确替换当前镜头、当前场次、当前集或用户勾选的引用集合，不能使用隐含的“当前节点/全部草稿”范围。已发布工作流、历史运行和工程包保持只读；基础版本变化时返回 `409`，要求刷新或重新生成计划，已在时间线中的旧片段不被静默替换。
 
 ## 剪辑工作台设计
 
-### 首版功能范围
+### MVP-A 功能范围
 
-- 视频、图片、音频、字幕和文字轨道；
-- 拖动、裁剪、拆分、删除、复制、排序和吸附；
-- 播放头、缩放、帧步进和区间循环；
-- 音量、淡入淡出、基础转场、位置、缩放和透明度；
-- 字幕文本、时间和样式编辑；
-- 自动保存、撤销/重做和版本恢复；
-- 代理预览和后台导出；
-- 从画布生成的镜头一键装入时间线。
-- 每集独立时间线；每集允许多个命名 cut 但只有一个 current cut；项目可显式选择一个或多个集和各自 TimelineVersion 进行批量预览和导出，默认分别生成按集号命名的 MP4。
+- 视频、图片、dialogue、music、ambience、effects 和手工字幕轨道；
+- 拖动、裁剪、拆分、删除、排序、播放头、缩放和帧步进；
+- 静态音量、mute/solo、线性淡入淡出、cut/crossfade、静态位置/缩放/透明度；
+- 字幕文本和时间编辑、dialogue ducking、代理预览和后台导出；
+- 从已审核、派生文件 ready 的镜头装入当前集时间线。
+- 每集独立时间线；每集只有一个 current cut，用户可命名并只读比较不可变版本。项目可显式选择一个或多个集和各自 TimelineVersion 导出，默认分别生成按集号命名的 MP4。
 
-首版不做多机位、专业调色、蒙版跟踪、复杂关键帧曲线、插件市场和浏览器内 4K 实时合成。
+MVP-B 再考虑复制/吸附、独立自动保存、Undo/Redo、版本恢复、字幕样式、Narration/TTS、loop、speed、track lock、多机位、专业调色、蒙版跟踪、复杂关键帧曲线、插件市场和浏览器内 4K 实时合成。
 
 ### 时间模型
 
@@ -192,7 +191,7 @@ TimelineDocument
   revision
 ```
 
-音频处理层可以保存采样位置，但 UI 和视频合成契约统一使用帧。时间线文档使用 JSONB 版本快照，运行中的导出永远引用不可变版本。首版只支持导入背景音乐/音频资产，不接入音乐生成模型；对白、旁白、音乐分轨，并保留字幕重对齐和自动压低参数。
+音频处理层可以保存采样位置，但 UI 和视频合成契约统一使用帧。时间线文档使用 JSONB 版本快照，运行中的导出永远引用不可变版本。MVP-A 只支持导入 dialogue、music、ambience、effects 音频资产，不接入 TTS、ASR、音乐生成或自动字幕对齐。MVP-A ducking 以 `enabled`、合并后的 30fps 整数 dialogue 区间、`attenuationDb`、`attackFrames`、`releaseFrames` 和 `targetTracks=music|ambience|effects` 保存；canonical RenderPlan 将其映射到 FFmpeg filter graph，dialogue 不被压低，proxy 与最终渲染共享同一参数。
 
 ### 预览和最终渲染
 
@@ -262,7 +261,7 @@ workers/
 | `assets` | Asset、AssetVersion、对象引用、lineage、上传会话 | 登记不可覆盖版本，创建上传/下载与媒体入库任务 |
 | `audio` | AudioAsset、SoundCue、授权、混音相关引用 | 管理配乐、环境音、音效、对白和其时间线引用 |
 | `asset_edits` | 对话会话、EditPlan、候选版本、影响分析和接受决定 | 将素材对话转换为受控候选和显式引用替换命令 |
-| `workflows` | WorkflowDraft、WorkflowVersion、图校验和发布 | 保存草稿、校验、发布不可变执行图 |
+| `workflows` | WorkflowDraft、WorkflowVersion、图校验和发布 | 保存/发布后端不可变执行图与默认 Workflow bootstrap；graph editor UI MVP-B |
 | `runs` | WorkflowRun、NodeRun、持久化运行事件和取消/Signal 记录 | 启动、查询、取消和补发运行状态 |
 | `timelines` | TimelineDraft、TimelineCut、TimelineVersion、Clip 和混音预检 | 保存版本化剪辑，创建预览和渲染命令 |
 | `reviews` | 审核任务、评论、通过/驳回/重拍决定 | 提交人工审核决策并唤醒等待流程 |
@@ -321,7 +320,7 @@ FastAPI 路由负责鉴权、HTTP/Pydantic 边界校验、调用 command/query h
 每次画布运行、素材编辑、媒体入库、音频混音和导出均可对应可恢复的 Temporal Workflow。Workflow 只执行确定性分支、等待、重试、Child Workflow 和 Activity 调度，禁止直接访问网络、数据库、当前时间、随机数、本地文件或 SDK。Activity 执行所有副作用，并携带 `run_id + logical_operation` 等业务幂等键。
 
 - **Agent Worker**：装配 AgentScope、SkillRegistry/Router、文本创作和 EditPlan Activity；只通过 application service 和已授权 Tool/Port 访问业务能力。
-- **Generation Worker**：装配 Text/Image/Video/TTS/ASR Adapter，提交、轮询、回调归一化和候选资产登记；不在 Worker 内复制素材、预算或版本规则。
+- **Generation Worker**：MVP-A 装配 Text/Image/Video Adapter，提交、轮询和候选资产登记；TTS/ASR、callback/webhook 与其他视频模式为 MVP-B 目标扩展，不在 Worker 内复制素材、预算或版本规则。
 - **Media Worker**：装配受控 FFmpeg/ffprobe、StoragePort 和媒体 application service，生成代理、缩略图、波形、字幕、混音和最终输出；不能执行模型产生的 shell 或滤镜字符串。
 
 不同 Worker 采用独立 task queue、资源限制和凭据访问边界。个人版可同机运行，但媒体任务不能与 API 共用执行线程池；Temporal database 与业务 PostgreSQL 使用独立数据库/用户，业务代码不查询 Temporal 内表。
@@ -355,20 +354,20 @@ services/api/tests/
 
 业务层只依赖六个 Port：
 
-- `TextModelPort`：Codex 中转站（默认）、DeepSeek；
+- `TextModelPort`：Codex 中转站（推荐默认 live Profile）、DeepSeek；首次运行、CI 和默认本地测试仍为 Mock/Local；
 - `ImageGenerationPort`：GPT Image 2 中转站，首版模型标识为 `gpt-image-2`；
 - `VideoGenerationPort`：Agnes AI（首接）、MiniMax H3、Seedance 2.5；
-- `TtsPort`：Fish Audio；
-- `AsrPort`：Groq；
+- `TtsPort`：Fish Audio（MVP-B）；
+- `AsrPort`：Groq（MVP-B）；
 - `StoragePort`：火山引擎 TOS 为主存储，LocalWorkspaceAdapter 负责临时工作区和缓存。
 
-Agnes AI 是首个视频 Provider。使用 `https://apihub.agnes-ai.com/v1`，通过 `POST /v1/videos` 创建异步任务，通过 `GET /v1/videos/{video_id}` 查询。适配器发布时冻结 capability snapshot，快照记录模型、文档/目录来源、探测时间、账号可用性、参数 Schema 和降级行为；`agnes-video-2.5` 等预览能力通过 capability probe 与功能开关启用，不把全部公开能力作为永恒验收承诺。
+Agnes AI 是首个视频 Provider。使用 `https://apihub.agnes-ai.com/v1`，通过 `POST /v1/videos` 创建异步任务，通过 `GET /v1/videos/{video_id}` 查询。MVP-A 仅冻结账号 probe 通过的一个稳定 image-to-video mode、当前 storyboard AssetVersion、ShotSpec、显式时长和画幅，并只实现 submit/poll/cancel/result；预览、`agnes-video-2.5`、text-to-video、关键帧、多模态参考与 callback/webhook 均不在阶段一验收。
 
 GPT Image 2 中转站是首个图片 Provider，首版模型标识为 `gpt-image-2`。`base_url`、模型标识和默认参数从数据库读取，不写死在业务代码中。`ImageGenerationPort` 统一文生图和编辑调用；参考图、多图输入、局部/遮罩编辑、透明背景、尺寸、质量、批量数量和输出格式按 capability probe 与参数 Schema 开放。返回的 URL 或 base64 内容先进入隔离临时目录，完成 MIME、尺寸、checksum 和安全校验后上传到 TOS，再登记为不可覆盖的 `AssetVersion`，并记录提示词版本、输入图片版本、模型、参数和 request ID。
 
-文本生成同样是首版主链路，而不是外部前置工作。用户可只提交主题、题材、人物设想和时长等 `CreativeBrief`；AgentScope 为原创故事/小说节点加载 `novel-writing`，为短剧开发与剧本节点加载 `drama-skills`，再通过 `TextModelPort` 调用 Codex 中转站或 DeepSeek。Skill 负责流程、上下文、Schema 与检查规则，文本模型负责实际生成。经人工确认的 `StorySpec`、`ScriptSpec` 才能进入资产、分镜与视频生成。
+文本生成同样是首版主链路，而不是外部前置工作。用户可只提交 `CreativeBrief`，或以 `creationMode=adaptation` 提交 novel/synopsis/existing_script 的 inline_text/uploaded_file SourceMaterial；Run 冻结 source revision/contentHash。默认 Workflow 的文本角色只允许 `novel-writing` 与 `drama-skills`，再通过 `TextModelPort` 调用显式启用的 Codex live Profile 或 DeepSeek；默认测试始终使用 Mock/Local。Skill 负责流程、上下文、Schema 与检查规则，文本模型负责实际生成。经一次 TextReviewBatch 确认的项目级 `StorySpec`、每集 `ScriptSpec` 才能进入资产、分镜与视频生成。
 
-MiniMax H3 与 Seedance 2.5 作为后续视频 Provider，通过同一 `VideoGenerationPort`、能力声明和参数 Schema 接入。所有 Provider、模型、能力与参数均从数据库读取，界面支持新增、编辑、启停、连通性测试和模型同步；业务代码不写死模型名。
+MiniMax H3 与 Seedance 2.5 作为后续视频 Provider，通过同一 `VideoGenerationPort`、能力声明和参数 Schema 接入。所有 Provider、模型、能力与参数均可作为 catalog candidate 从数据库读取；只有 installed adapter、approved capability snapshot、`runnable=true` 且 `featureGate=MVP-A` 的 operation 能连接测试、启用或作为默认，业务代码不写死模型名。
 
 Provider 管理保存 `provider`、`base_url`、协议/adapterKey、认证方式、超时、轮询/回调模式、限流并发、价格单位、默认参数和密钥状态；模型管理保存模型标识、能力声明、能力快照和参数 Schema。已有 Adapter 内新增模型可手工或 `/v1/models` 同步，新增协议/认证/回调语义必须新增 Adapter。每次调用记录 request ID、输入输出资产、参数摘要、状态、错误码、耗时、重试、能力快照及可获得的费用或估算；unknown cost 必须保留未知状态。供应商原始响应必须转换成统一结果，不能把 SDK 对象写进业务表或工作流历史。
 
@@ -385,11 +384,11 @@ PostgreSQL 是唯一业务事实源。建议的核心表：
 - `workflow_runs`、`node_runs`
 - `assets`、`asset_versions`、`asset_relations`
 - `storage_providers`、`storage_buckets`、`stored_objects`、`upload_sessions`
-- `asset_edit_sessions`、`asset_edit_messages`、`asset_edit_plans`、`asset_edit_candidates`
+- `asset_edit_sessions`、`asset_edit_messages`、`asset_edit_plans`、`asset_edit_candidates`（MVP-A 仅 image/video）
 - `creative_briefs`、`story_spec_versions`、`script_spec_versions`、`episode_spec_versions`、`scene_spec_versions`、`shot_spec_versions`、`asset_bibles`
-- `timeline_drafts`、`timeline_cuts`、`timeline_versions`、`timeline_clips`
+- `timeline_drafts`、`timeline_cuts`、`timeline_versions`、`timeline_clips`（MVP-A 不含复制、Undo/Redo 或 restore）
 - `generation_jobs`、`render_jobs`
-- `approvals`、`comments`
+- `approvals`（评论/时间码属于 MVP-B）
 - `skill_revisions`、`models`、`model_capabilities`、`model_parameter_schemas`、`project_model_bindings`
 - `export_jobs`、`export_manifests`
 - `provider_calls`、`audit_logs`、`usage_reservations`、`usage_ledger`
@@ -405,17 +404,17 @@ PostgreSQL 是唯一业务事实源。建议的核心表：
 - 视频、图片和音频二进制文件不得写入 PostgreSQL。
 - `asset_versions.storage_object_id`、`render_jobs.output_object_id` 和 `export_manifests.object_refs` 指向 `stored_objects`；对象记录保存 provider、bucket、region、object key、ETag/checksum、MIME、大小、媒体信息和 storage class。
 - `asset_versions` 不覆盖原文件；重新生成、转码和人工替换都产生新版本。
-- 素材编辑会话绑定基础资产版本；EditPlan 和候选结果不可变，只有用户接受后才能更新工作流草稿引用。
+- 素材编辑会话绑定基础资产版本；MVP-A 的 AssetEditPlan 和候选结果仅针对 image/video 且不可变，只有用户接受后才能更新明确的镜头/场/集引用。故事/剧本通过 TextReview，音频/Timeline 通过 typed command；MVP-A 不更新 WorkflowDraft 引用。
 - JSONB 用于节点配置和版本文档，供应商调用、成本估算和运行状态仍使用关系字段。
 - pgvector 只保存检索向量和引用，不取代项目状态或完整文本。
-- 已被历史运行引用的 Provider 或模型不能物理删除，只能停用，以保证工程包回导和运行复现。
+- 已被历史运行引用的 Provider 或模型不能物理删除，只能停用，以保证导出 manifest 可追溯和运行复现。
 
 ## 文件导出与工程包
 
 - MP4 导出引用不可变时间线版本，由 FFmpeg Worker 后台渲染。
 - SRT 可独立导出，并与时间线字幕版本和成片帧率绑定。
-- 轻量工程包包含项目设置、工作流、StorySpec、AssetBible、ShotSpec、时间线、模型/Skill 版本、参数、字幕和资产 manifest，不复制大型媒体。
-- 完整工程包在轻量包基础上包含全部源素材、代理、生成结果、音频和 checksum，可迁移并重新导入。
+- MVP-A 轻量工程包包含项目设置、固定 WorkflowVersion source、StorySpec、AssetBible、ShotSpec、时间线、模型/Skill 版本、参数、字幕和资产 manifest，不复制大型媒体。
+- MVP-B portable/完整工程包才在同一公共 manifest 上包含全部源素材、代理、生成结果、音频和 checksum，可迁移并重新导入；不得改变 MVP-A 的引用与审计字段。
 - 首版不包含发布平台、账号授权或渠道上传入口。
 
 不选 MongoDB 作为主库，因为项目、版本、运行、资产和供应商调用之间存在强关系，并且需要可靠事务。PostgreSQL 的关系模型加 JSONB 已覆盖当前需求。
@@ -431,8 +430,8 @@ PostgreSQL 是唯一业务事实源。建议的核心表：
 - 所有读写经 `StoragePort`。实现 `TOSAdapter` 与 `LocalWorkspaceAdapter`；Local Adapter 只用于开发、缓存和离线测试，业务契约不得保存本地绝对路径。
 - `StoragePort` 至少提供创建/恢复/完成分片会话、`presignRead`、`presignWrite`、`stat`、下载到工作区、从工作区上传和删除对象的能力。
 - TOS 暂时不可用时任务进入 retryable 状态并保留幂等键；对象删除失败时不能先删数据库引用。媒体 GC 只能回收没有 AssetVersion、运行、时间线或工程包引用的对象。
-- PostgreSQL、TOS 对象 manifest/版本信息、Compose 配置、Docker Secret 主密钥和对象存储凭据分别备份；恢复后按 manifest 校验 checksum/ETag，并完成工程包回导演练。
-- 轻量工程包保存 object refs、版本、checksum 和 storage metadata；完整工程包固定对象版本并下载实际媒体。没有 TOS 凭据时仍可导入轻量包结构，但媒体显示为待恢复。
+- PostgreSQL、TOS 对象 manifest/版本信息、Compose 配置、Docker Secret 主密钥和对象存储凭据分别备份；恢复后按 manifest 校验 checksum/ETag，并完成手工恢复 runbook 演练，不使用工程包回导。
+- MVP-A 轻量工程包保存 object refs、版本、checksum 和 storage metadata，但仅作为导出 artifact；portable/完整工程包固定对象版本、下载实际媒体并支持回导，均属于 MVP-B。没有 TOS 凭据时，MVP-A 返回明确的恢复诊断而不导入 light 包。
 
 ## 实时状态与协作
 
@@ -440,7 +439,7 @@ PostgreSQL 是唯一业务事实源。建议的核心表：
 
 - 使用 SSE 推送 Agent 文本、素材修改计划、候选生成进度、节点进度、工具调用、生成状态和渲染日志。
 - 使用数据库 revision 做乐观锁，避免同一用户的两个窗口静默覆盖画布或时间线。
-- 使用 Zustand 命令历史完成本地撤销/重做，服务器保存关键版本。
+- MVP-A 不提供本地撤销/重做；客户端只在 409 时回滚并重新读取 owner state。命令历史属于 MVP-B。
 
 未来确有多人实时协作需求时，再引入 Yjs + Hocuspocus：
 
@@ -452,11 +451,14 @@ PostgreSQL 是唯一业务事实源。建议的核心表：
 ## Agent 与 Skill 接入
 
 - 顶层 Agent 根据项目类型和阶段路由 Skill，不把全部 Skill 拼进系统提示词。
-- `SkillRegistry` 扫描本地 Git Skill 包，读取 `manifest.yaml`，固定 commit、内容哈希、许可证、允许工具和触发阶段；PostgreSQL 保存索引与路由审计，Skill 正文按需读取。
-- `SkillRouter` 先按项目类型、阶段、目标模型、能力、许可证和启用状态做确定性过滤，再用关键词/标签排序；候选规模增大后，可选用 [`semantic-router`](https://github.com/aurelio-labs/semantic-router) 对候选做语义排序。语义库不可用时自动回退，不阻断工作流。
+- 阶段一登记八项 registry candidate：`drama-skills`、`novel-writing`、`zy-cinematic-realism`、`seedance-2.0`、`storyboard-tiktok-video-skill`，以及 Hell Grind 的 `hell-grind/cinedance-higgsfield`、`hell-grind/acting`、`hell-grind/lira`。Worker 启动只读取 Registry 索引和 approved metadata，不把候选集合当作启动 lock。默认 Workflow 只绑定 approved 的 `novel-writing` 与 `drama-skills`；其他六项可保持 `pending_provenance` 或 `disabled`，只有节点 `allowedSkills` 允许、显式启用且路由条件满足时才影响新运行。
+- `SkillRegistry` 只读取固定本地快照、`SKILL.md` 和必要 references，不跟随远端 `main`、不自动更新、不执行第三方脚本；PostgreSQL 保存 immutable `SkillRevision`、来源状态、准入结果和路由审计。Git 来源记录 commit/digest；公开网页 Markdown 记录 archive URL、获取时间、digest 与 license status。未完成审计的 candidate 不可路由，失败只阻断请求该 revision 的节点。
+- `SkillRouter` 是通用路由边界，不写死某两个 Skill：先按项目类型、阶段、目标模型、能力、许可证、启用状态、节点 `allowedSkills` 和输入/输出 Schema 做确定性过滤，再用关键词/标签排序；候选规模增大后，可选用 [`semantic-router`](https://github.com/aurelio-labs/semantic-router) 对候选做语义排序。语义库不可用时自动回退，不阻断工作流。新增 Skill 注册后默认不改变阶段一流程，只有被显式启用且满足路由条件时才进入新运行候选。
 - `semantic-router` 仅负责语义路由评分，不负责 Skill 安装、版本管理、许可证、MCP 工具或审计；首版不单独部署服务，也不把向量模型作为启动前置条件。
+- `WorkflowVersion` 固定拓扑、operation、`allowedSkills` 和 requiredCapabilities；每个选择显式声明 `selectionMode=fixed|inherit`。默认模板的文本角色限制为 `novel-writing`/`drama-skills`，Provider/Profile/Model 通常使用 `inherit`，按 `workflow node > project default > enabled system default` 解析。若存在多个同分候选必须人工选择；选定的 `SkillRevision`、模型、参数和 capability snapshot 写入 `WorkflowRun`/`NodeRun`，历史运行只读，刷新、重试和 Worker 重启不得重新路由或加载漂移版本。
+- 加载采用渐进方式：先读取摘要和 manifest，路由确认后才读取 `SKILL.md` 与必要 references；Skill 只能提供流程、上下文、Schema 和检查规则，不能直接访问 Provider、数据库、文件系统、网络、子进程或密钥，所有副作用必须通过受控 Tool/Port。
 - Agent 输入和输出都转换成 `CreativeBrief`、`StorySpec`、`ScriptSpec`、`ShotSpec`、`GenerationSpec` 等结构化对象。
-- 每个 Agent 节点保存 Skill commit、模型、参数、输入资产版本和输出版本。
+- 每个 Agent 节点保存 Skill source identity（Git commit/digest 或公开 Markdown archive URL/获取时间/digest/license status）、模型、参数、输入资产版本和输出版本。
 - Skill 只产生建议或规格；上传、生成、文件写入和导出必须通过受控 Tool。
 - AgentScope 的事件流转换成统一 `node_run_event` 后通过 SSE 发给画布。
 - 人工修改后的剧本、分镜或时间线成为新的事实版本，后续 Agent 不得恢复旧结果。
@@ -466,12 +468,12 @@ PostgreSQL 是唯一业务事实源。建议的核心表：
 ## 安全要求
 
 - API 默认只监听 `127.0.0.1`；局域网访问必须显式开启并增加简单认证或受控反向代理。
-- URL 导入需要 SSRF 防护、域名策略、大小和超时限制。
+- MVP-A 的 SourceMaterial 只接受 inline text 或 uploaded file；GPT Image 不接受用户提供的任意远程 URL。任何未来 URL 导入、或 Provider 返回的 URL，均需 HTTPS allowlist、禁止重定向与内网地址，并执行 SSRF、大小和超时限制。
 - 上传文件验证真实类型，并对公开协作场景增加恶意文件扫描。
 - FFmpeg 接口只接受结构化参数，不接受模型生成的任意命令字符串。
 - Agent 和第三方 Skill 在隔离 Workspace 中运行。
 - 付费生成、批量生成、覆盖和删除操作需要预算预检与二次确认。
-- 供应商回调验证签名，并以幂等方式处理。
+- MVP-A Agnes 不接入 callback/webhook；后续 Provider callback 必须验证签名并以幂等方式处理。
 - Provider 密钥加密写入 PostgreSQL，主密钥由 Docker Secret 挂载；解密仅发生在对应 Worker 的调用边界。
 - TOS 使用私有 Bucket 和最小权限凭据；签名 URL 短期有效并校验对象所属项目。AK/SK、签名 URL、完整认证头不得进入 Agent 上下文、Skill、SSE 或普通日志。
 - 所有资产来源、生成模型、Skill 版本、关键操作和导出记录进入本地运行日志。
@@ -520,12 +522,12 @@ data/workspaces/       上传分片、FFmpeg 工作目录和可清理缓存（gi
 
 1. 定义工作流、节点端口、资产、镜头和时间线 JSON Schema。
 2. 建立 React 工作台壳层和设计系统。
-3. 完成 React Flow 画布、节点库、连线校验、素材 Agent 面板、保存和版本发布。
+3. MVP-A 只完成固定 published WorkflowVersion 的只读 source/run 投影和素材 Agent 面板；React Flow 画布、节点库、连线校验、草稿保存和版本发布 UI 延后到 MVP-B。
 4. 完成 FastAPI、PostgreSQL、TOS 分片/断点上传、短期签名读取、本地工作区和 Provider Profile。
-5. 跑通默认 Codex 中转站的模型同步，以及“创意 -> 故事/小说 -> 短剧剧本”的文本生成节点；接入 GPT Image 2 中转站，跑通角色/场景/分镜图生成与参考图编辑；实现 AssetEditWorkflow、EditPlan、impactAnalysis、候选版本和按镜头/场次/集/勾选引用替换；再使用 Temporal 跑通 Agnes 一个稳定视频模式和一个人工审核节点。
-6. 完成 MVP-A 剪辑台：每集命名 cut、代理预览、视频/音频/字幕轨、裁剪、拆分和保存，背景音乐先使用导入资产。
+5. 在显式 opt-in 的 Codex live Profile 上完成模型 candidate diff 与文本 probe，默认测试保持 Mock/Local；接入 GPT Image 2 中转站，跑通角色/场景/分镜图生成与参考图编辑；实现 image/video AssetEditWorkflow、AssetEditPlan、impactAnalysis、候选版本和按镜头/场次/集/勾选引用替换；再使用 Temporal 跑通 Agnes 一个探测通过的稳定 image-to-video 模式和一个人工审核节点。
+6. 完成 MVP-A 剪辑台：每集 current cut、代理预览、video/dialogue/music/ambience/effects/字幕轨、裁剪、拆分、删除、排序、静态 transform、dialogue ducking 和立即持久化 command，背景音乐先使用导入资产。
 7. 完成 FFmpeg 1080p 导出，并校验预览与成片的一致性；多集默认分别输出文件。
 8. 接入短剧、审查 Skills；MVP-B 再接入 Fish Audio、Groq ASR、Agnes 其余已验证能力、Seedance 和更广的视频编辑能力。
-9. 加入 MP4、SRT、轻量/完整工程包导出、用量预占/结算、关键操作记录、PostgreSQL + TOS manifest 备份恢复、本地工作区配额和运行诊断。
+9. MVP-A 加入 MP4、SRT、light manifest/reference-only 导出、用量预占/结算、关键操作记录、本地工作区配额和运行诊断；MVP-B 再加入 portable/完整工程包媒体载荷与回导。
 
 第一阶段验收目标是一条可恢复、可人工修改、可导出的视频链路，而不是一次性堆齐所有节点和剪辑功能。

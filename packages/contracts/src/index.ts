@@ -1,10 +1,24 @@
 // Re-exported names are derived from JSON Schema titles.
+export type { AssetBible } from "./generated/asset-bible.js";
+export type { AssetCenter } from "./generated/asset-center.js";
+export type { AssetEditPlan } from "./generated/asset-edit.js";
 export type { AssetVersion } from "./generated/asset-version.js";
 export type { Asset } from "./generated/asset.js";
+export type { CreativeConfiguration } from "./generated/creative-configuration.js";
+export type { EpisodeExportBatch } from "./generated/episode-export-batch.js";
 export type { Episode } from "./generated/episode.js";
+export type { ExportArtifact } from "./generated/export-artifact.js";
+export type { ExportDiagnosticTarget } from "./generated/export-diagnostic-target.js";
+export type { MediaDerivative } from "./generated/media-derivative.js";
+export type { MediaInspection } from "./generated/media-inspection.js";
+export type { PreviewArtifact } from "./generated/preview-artifact.js";
+export type { ProjectPackage } from "./generated/project-package.js";
 export type { Project } from "./generated/project.js";
+export type { PublishedWorkflowVersion } from "./generated/published-workflow-version.js";
 export type { Scene } from "./generated/scene.js";
 export type { Shot } from "./generated/shot.js";
+export type { TimelineCurrent } from "./generated/timeline-current.js";
 export type { TimelineDocument } from "./generated/timeline-document.js";
+export type { TimelineVersion } from "./generated/timeline-version.js";
 export type { WorkflowDraft } from "./generated/workflow-draft.js";
 export type { WorkflowVersion } from "./generated/workflow-version.js";

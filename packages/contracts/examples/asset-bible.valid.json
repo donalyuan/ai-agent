@@ -1,0 +1,162 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "schema_version": "1.0.0",
+  "assetBible": {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "projectId": "00000000-0000-4000-8000-000000000003",
+    "revision": 2,
+    "schema_version": "1.0.0",
+    "currentVersionMap": {
+      "00000000-0000-4000-8000-000000000004": "00000000-0000-4000-8000-000000000005"
+    }
+  },
+  "entries": [
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "assetBibleId": "00000000-0000-4000-8000-000000000002",
+      "projectId": "00000000-0000-4000-8000-000000000003",
+      "entryType": "character",
+      "revision": 2,
+      "schema_version": "1.0.0",
+      "currentVersionId": "00000000-0000-4000-8000-000000000005",
+      "disabled": false
+    }
+  ],
+  "versions": [
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "entryId": "00000000-0000-4000-8000-000000000004",
+      "projectId": "00000000-0000-4000-8000-000000000003",
+      "entryType": "character",
+      "version": 1,
+      "revision": 1,
+      "schema_version": "1.0.0",
+      "attributes": { "name": "Lin" },
+      "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "actorUuid": "00000000-0000-4000-8000-000000000006",
+      "referenceAssetVersionRefs": [
+        {
+          "ownerId": "00000000-0000-4000-8000-000000000007",
+          "revision": 0,
+          "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "purpose": "portrait"
+        }
+      ],
+      "generationSpecRefs": [
+        {
+          "ownerId": "00000000-0000-4000-8000-000000000008",
+          "revision": 1,
+          "contentHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "purpose": "image-generation"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "00000000-0000-4000-8000-000000000009",
+      "projectId": "00000000-0000-4000-8000-000000000003",
+      "sourceEntryId": "00000000-0000-4000-8000-000000000004",
+      "targetEntryId": "00000000-0000-4000-8000-00000000000a",
+      "kind": "related",
+      "schema_version": "1.0.0"
+    }
+  ],
+  "assignments": [
+    {
+      "id": "00000000-0000-4000-8000-00000000000b",
+      "projectId": "00000000-0000-4000-8000-000000000003",
+      "scopeType": "shot",
+      "scopeId": "00000000-0000-4000-8000-00000000000c",
+      "entryId": "00000000-0000-4000-8000-000000000004",
+      "entryVersionId": "00000000-0000-4000-8000-000000000005",
+      "entryVersionRevision": 1,
+      "entryVersionHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "scopeRevision": 1,
+      "revision": 1,
+      "schema_version": "1.0.0"
+    }
+  ],
+  "snapshots": [
+    {
+      "id": "00000000-0000-4000-8000-00000000000d",
+      "projectId": "00000000-0000-4000-8000-000000000003",
+      "targetType": "shot",
+      "targetId": "00000000-0000-4000-8000-00000000000c",
+      "targetRevision": 1,
+      "revision": 1,
+      "schema_version": "1.0.0",
+      "status": "accepted",
+      "overrideChain": [],
+      "resolvedRefs": [
+        {
+          "ownerId": "00000000-0000-4000-8000-000000000005",
+          "revision": 1,
+          "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "purpose": "character"
+        }
+      ],
+      "sourceRevisions": [1],
+      "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ],
+  "impactAnalyses": [
+    {
+      "id": "00000000-0000-4000-8000-00000000000e",
+      "projectId": "00000000-0000-4000-8000-000000000003",
+      "entryId": "00000000-0000-4000-8000-000000000004",
+      "baseVersionId": "00000000-0000-4000-8000-000000000005",
+      "candidatePayloadHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "status": "complete",
+      "diagnostic": null,
+      "revision": 1,
+      "schema_version": "1.0.0",
+      "targets": [
+        {
+          "targetType": "shot",
+          "targetId": "00000000-0000-4000-8000-00000000000c",
+          "targetRevision": 1,
+          "reason": "resolved-version-reference",
+          "snapshotId": "00000000-0000-4000-8000-00000000000d",
+          "snapshotHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "suggestedAction": "review"
+        }
+      ],
+      "targetSetHash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ],
+  "acceptDecisions": [
+    {
+      "id": "00000000-0000-4000-8000-00000000000f",
+      "projectId": "00000000-0000-4000-8000-000000000003",
+      "entryId": "00000000-0000-4000-8000-000000000004",
+      "analysisId": "00000000-0000-4000-8000-00000000000e",
+      "oldVersionId": "00000000-0000-4000-8000-000000000005",
+      "newVersionId": "00000000-0000-4000-8000-000000000010",
+      "targetSetHash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "actorUuid": "00000000-0000-4000-8000-000000000006",
+      "correlationId": "corr-1",
+      "fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+      "schema_version": "1.0.0"
+    }
+  ],
+  "revisionTasks": [
+    {
+      "id": "00000000-0000-4000-8000-000000000011",
+      "projectId": "00000000-0000-4000-8000-000000000003",
+      "targetType": "shot",
+      "targetId": "00000000-0000-4000-8000-00000000000c",
+      "targetRevision": 1,
+      "entryId": "00000000-0000-4000-8000-000000000004",
+      "oldVersionId": "00000000-0000-4000-8000-000000000005",
+      "newVersionId": "00000000-0000-4000-8000-000000000010",
+      "oldSnapshotId": "00000000-0000-4000-8000-00000000000d",
+      "oldSnapshotHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "reason": "entry-successor",
+      "status": "pending",
+      "revision": 1,
+      "correlationId": "corr-1",
+      "schema_version": "1.0.0"
+    }
+  ]
+}

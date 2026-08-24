@@ -75,6 +75,11 @@ def test_compose_passes_runtime_modes_to_api_and_all_workers() -> None:
         assert environment["PROVIDER_MODE"] == "${PROVIDER_MODE}"
         assert environment["STORAGE_MODE"] == "${STORAGE_MODE}"
         assert environment["WORKSPACE_ROOT"] == "${WORKSPACE_ROOT}"
+    assert compose["services"]["agent"]["environment"]["DATABASE_URL"] == "${DATABASE_URL}"
+    assert compose["services"]["media"]["environment"]["DATABASE_URL"] == "${DATABASE_URL}"
+    assert compose["services"]["api"]["volumes"] == ["local-workspace:${WORKSPACE_ROOT}"]
+    assert compose["services"]["media"]["volumes"] == ["local-workspace:${WORKSPACE_ROOT}"]
+    assert "local-workspace" in compose["volumes"]
 
 
 def test_mock_provider_and_storage_emit_structured_boundary_events(

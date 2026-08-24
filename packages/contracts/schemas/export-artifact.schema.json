@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/export-artifact.schema.json",
+  "title": "ExportArtifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "projectId",
+    "episodeId",
+    "timelineVersionId",
+    "exportJobId",
+    "artifactType",
+    "status",
+    "objectRef",
+    "sizeBytes",
+    "checksum",
+    "mimeType",
+    "retention",
+    "license",
+    "hold"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "projectId": { "$ref": "#/$defs/uuid" },
+    "episodeId": { "$ref": "#/$defs/uuid" },
+    "timelineVersionId": { "$ref": "#/$defs/uuid" },
+    "exportJobId": { "$ref": "#/$defs/uuid" },
+    "artifactType": { "enum": ["mp4", "srt", "light_manifest"] },
+    "status": { "enum": ["pending", "verified", "failed", "held"] },
+    "objectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileId", "objectKey", "operationKey"],
+      "properties": {
+        "profileId": { "type": "string", "minLength": 1 },
+        "objectKey": {
+          "type": "string",
+          "pattern": "^(?![/\\\\])(?!.*(?:^|/)\\.\\.(?:/|$))[^?#]+$"
+        },
+        "operationKey": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sizeBytes": { "type": "integer", "minimum": 0 },
+    "checksum": { "$ref": "#/$defs/hash" },
+    "mimeType": {
+      "enum": ["video/mp4", "application/x-subrip", "application/json"]
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "version", "expiresAt"],
+      "properties": {
+        "policy": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "source"],
+      "properties": {
+        "status": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 }
+      }
+    },
+    "hold": { "type": "boolean" }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

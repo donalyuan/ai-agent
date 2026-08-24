@@ -20,8 +20,8 @@ const schemaFiles = (await readdir(schemaDirectory))
   .filter((file) => file.endsWith(".schema.json"))
   .sort();
 
-if (schemaFiles.length !== 9) {
-  throw new Error(`Expected 9 schema files, found ${schemaFiles.length}.`);
+if (schemaFiles.length !== 23) {
+  throw new Error(`Expected 23 schema files, found ${schemaFiles.length}.`);
 }
 
 const schemaBaseId = "https://video-agent.local/schemas/";

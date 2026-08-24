@@ -1,0 +1,13 @@
+{
+  "id": "00000000-0000-4000-8000-000000000107",
+  "schema_version": "1.0.0",
+  "targetType": "clip",
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "episodeId": "00000000-0000-4000-8000-000000000002",
+  "timelineVersionId": "00000000-0000-4000-8000-000000000102",
+  "ownerId": "00000000-0000-4000-8000-000000000108",
+  "ownerRevision": 2,
+  "fieldPath": "clips.sourceInFrame",
+  "routeToken": "safe_route_token_1234",
+  "code": "frame_out_of_bounds"
+}

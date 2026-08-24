@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/preview-artifact.schema.json",
+  "title": "PreviewArtifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "projectId",
+    "episodeId",
+    "cutId",
+    "cutRevision",
+    "timelineFingerprint",
+    "renderPlanHash",
+    "status",
+    "proxyDerivativeIds",
+    "rawDiagnostic"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "projectId": { "$ref": "#/$defs/uuid" },
+    "episodeId": { "$ref": "#/$defs/uuid" },
+    "cutId": { "$ref": "#/$defs/uuid" },
+    "cutRevision": { "type": "integer", "minimum": 1 },
+    "timelineFingerprint": { "$ref": "#/$defs/hash" },
+    "renderPlanHash": { "$ref": "#/$defs/hash" },
+    "status": { "enum": ["pending", "ready", "failed", "stale"] },
+    "proxyDerivativeIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/uuid" }
+    },
+    "rawDiagnostic": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/timeline-version.schema.json",
+  "title": "TimelineVersion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "revision",
+    "projectId",
+    "episodeId",
+    "sourceCutId",
+    "sourceCutRevision",
+    "name",
+    "timelineFingerprint",
+    "snapshot"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "revision": { "const": 1 },
+    "projectId": { "$ref": "#/$defs/uuid" },
+    "episodeId": { "$ref": "#/$defs/uuid" },
+    "sourceCutId": { "$ref": "#/$defs/uuid" },
+    "sourceCutRevision": { "type": "integer", "minimum": 1 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "timelineFingerprint": { "$ref": "#/$defs/hash" },
+    "snapshot": { "$ref": "timeline-current.schema.json" }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

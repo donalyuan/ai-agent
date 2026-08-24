@@ -11,3 +11,6 @@ data/
 .env
 .codex-workflow-controller-authority.json
 .codex/workflow-controller/
+
+# Playwright CLI runtime artifacts (logs, snapshots, and screenshots)
+.playwright-cli/

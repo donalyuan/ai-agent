@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/project-package.schema.json",
+  "title": "ProjectPackage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "manifestVersion",
+    "exportProfile",
+    "projectId",
+    "episode",
+    "timelineVersion",
+    "assetVersionRefs",
+    "soundCues",
+    "authorization",
+    "license",
+    "loudness",
+    "models",
+    "skillRevisions",
+    "parameters",
+    "usage",
+    "cost",
+    "references"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "manifestVersion": { "$ref": "#/$defs/schemaVersion" },
+    "exportProfile": { "const": "light" },
+    "projectId": { "$ref": "#/$defs/uuid" },
+    "episode": { "$ref": "#/$defs/ownerRef" },
+    "timelineVersion": { "$ref": "#/$defs/ownerRef" },
+    "assetVersionRefs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/assetRef" }
+    },
+    "soundCues": { "type": "array", "items": { "$ref": "#/$defs/audioRef" } },
+    "authorization": { "$ref": "#/$defs/provenance" },
+    "license": { "$ref": "#/$defs/provenance" },
+    "loudness": { "$ref": "#/$defs/loudness" },
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/model" }
+    },
+    "skillRevisions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/skill" }
+    },
+    "parameters": { "type": "object", "minProperties": 1 },
+    "usage": { "$ref": "#/$defs/usage" },
+    "cost": { "$ref": "#/$defs/cost" },
+    "references": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "$ref": "#/$defs/reference" }
+    }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "ownerRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "hash"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "hash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "source", "recordId"],
+      "properties": {
+        "status": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 },
+        "recordId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "assetRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "hash", "authorization", "license"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "hash": { "$ref": "#/$defs/hash" },
+        "authorization": { "$ref": "#/$defs/provenance" },
+        "license": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "audioRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cueId",
+        "track",
+        "assetVersionId",
+        "startFrame",
+        "durationFrames"
+      ],
+      "properties": {
+        "cueId": { "$ref": "#/$defs/uuid" },
+        "track": { "enum": ["dialogue", "music", "ambience", "effects"] },
+        "assetVersionId": { "$ref": "#/$defs/uuid" },
+        "startFrame": { "type": "integer", "minimum": 0 },
+        "durationFrames": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "loudness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "integratedLufs",
+        "truePeakDbtp",
+        "measuredBy",
+        "measurementVersion"
+      ],
+      "properties": {
+        "integratedLufs": { "type": "number" },
+        "truePeakDbtp": { "type": "number" },
+        "measuredBy": { "type": "string", "minLength": 1 },
+        "measurementVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "providerId",
+        "profileId",
+        "modelId",
+        "capabilitySnapshotId"
+      ],
+      "properties": {
+        "providerId": { "type": "string", "minLength": 1 },
+        "profileId": { "type": "string", "minLength": 1 },
+        "modelId": { "type": "string", "minLength": 1 },
+        "capabilitySnapshotId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "digest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "digest": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "unit", "status", "source"],
+      "properties": {
+        "value": { "type": "number", "minimum": 0 },
+        "unit": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["measured", "estimated", "unknown"] },
+        "source": { "type": "string", "minLength": 1 }
+      }
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "currency", "status", "source"],
+      "properties": {
+        "value": {
+          "oneOf": [{ "type": "number", "minimum": 0 }, { "const": "unknown" }]
+        },
+        "currency": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["measured", "estimated", "unknown"] },
+        "source": { "type": "string", "minLength": 1 }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactType", "artifactId"],
+      "properties": {
+        "artifactType": { "enum": ["mp4", "srt"] },
+        "artifactId": { "$ref": "#/$defs/uuid" }
+      }
+    }
+  }
+}

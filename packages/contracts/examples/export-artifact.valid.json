@@ -1,0 +1,25 @@
+{
+  "id": "00000000-0000-4000-8000-000000000104",
+  "schema_version": "1.0.0",
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "episodeId": "00000000-0000-4000-8000-000000000002",
+  "timelineVersionId": "00000000-0000-4000-8000-000000000102",
+  "exportJobId": "00000000-0000-4000-8000-000000000106",
+  "artifactType": "mp4",
+  "status": "verified",
+  "objectRef": {
+    "profileId": "local",
+    "objectKey": "projects/p/exports/e1.mp4",
+    "operationKey": "export:1:mp4"
+  },
+  "sizeBytes": 1024,
+  "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "mimeType": "video/mp4",
+  "retention": {
+    "policy": "phase-one",
+    "version": "1",
+    "expiresAt": "2026-08-24T00:00:00Z"
+  },
+  "license": { "status": "approved", "source": "timeline-version" },
+  "hold": false
+}

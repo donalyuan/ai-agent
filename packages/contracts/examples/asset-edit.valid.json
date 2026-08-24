@@ -1,0 +1,20 @@
+{
+  "id": "00000000-0000-0000-0000-000000000001",
+  "schema_version": "1.0.0",
+  "revision": 1,
+  "status": "pending_review",
+  "projectId": "00000000-0000-0000-0000-000000000002",
+  "episodeId": "00000000-0000-0000-0000-000000000003",
+  "targetId": "00000000-0000-0000-0000-000000000004",
+  "base": {
+    "id": "00000000-0000-0000-0000-000000000005",
+    "projectId": "00000000-0000-0000-0000-000000000002",
+    "revision": 0,
+    "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kind": "image",
+    "mimeType": "image/png"
+  },
+  "references": [],
+  "instruction": "replace the background",
+  "turnId": "00000000-0000-0000-0000-000000000006"
+}

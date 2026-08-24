@@ -46,6 +46,8 @@ services:
       PROVIDER_MODE: ${PROVIDER_MODE}
       STORAGE_MODE: ${STORAGE_MODE}
       WORKSPACE_ROOT: ${WORKSPACE_ROOT}
+    volumes:
+      - local-workspace:${WORKSPACE_ROOT}
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,6 +80,7 @@ services:
       dockerfile: services/api/Dockerfile
     command: ["python", "workers/agent/main.py"]
     environment:
+      DATABASE_URL: ${DATABASE_URL}
       TEMPORAL_ADDRESS: ${TEMPORAL_ADDRESS}
       PROVIDER_MODE: ${PROVIDER_MODE}
       STORAGE_MODE: ${STORAGE_MODE}
@@ -120,12 +123,15 @@ services:
       dockerfile: services/api/Dockerfile
     command: ["python", "workers/media/main.py"]
     environment:
+      DATABASE_URL: ${DATABASE_URL}
       TEMPORAL_ADDRESS: ${TEMPORAL_ADDRESS}
       PROVIDER_MODE: ${PROVIDER_MODE}
       STORAGE_MODE: ${STORAGE_MODE}
       WORKSPACE_ROOT: ${WORKSPACE_ROOT}
       MEDIA_TASK_QUEUE: media-tasks
       WORKER_HEALTH_MARKER: /tmp/media-health.json
+    volumes:
+      - local-workspace:${WORKSPACE_ROOT}
     depends_on:
       temporal:
         condition: service_healthy
@@ -135,5 +141,20 @@ services:
       timeout: 3s
       retries: 24
 
+  otel-collector:
+    profiles: ["diagnostics"]
+    image: otel/opentelemetry-collector:0.134.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:4318:4318"
+    healthcheck:
+      test: ["CMD", "/otelcol", "components"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
 volumes:
   postgres-data:
+  local-workspace:

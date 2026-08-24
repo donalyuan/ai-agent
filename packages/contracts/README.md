@@ -1,13 +1,14 @@
 # @video-agent/contracts
 
-阶段 0 的跨层文档契约。`schemas/` 中的九份 Draft 2020-12 JSON Schema 是唯一权威来源；`src/generated/` 和 `src/index.ts` 由它们生成，不能手动编辑。
+跨层文档契约。`schemas/` 中的十二份 Draft 2020-12 JSON Schema 是唯一权威来源；`src/generated/` 和 `src/index.ts` 由它们生成，不能手动编辑。
 
 ## Schema
 
 - `Project`、`Episode`、`Scene`、`Shot`
 - `Asset`、`AssetVersion`
-- `WorkflowDraft`、`WorkflowVersion`
+- `WorkflowDraft`、`WorkflowVersion`、固定 `PublishedWorkflowVersion`
 - `TimelineDocument`
+- `CreativeConfiguration`、`AssetBible`
 
 所有文档都要求稳定 UUID、`schema_version`、非负 `revision` 和受限状态。业务属性使用 camelCase；数据库 adapter 负责映射到 snake_case。
 

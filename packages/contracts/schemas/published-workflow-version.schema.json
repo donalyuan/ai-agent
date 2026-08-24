@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/published-workflow-version.schema.json",
+  "title": "PublishedWorkflowVersion",
+  "$comment": "The immutable, project-scoped MVP-A default workflow source. UI clients consume these explicit ports and never infer graph connections.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "revision",
+    "status",
+    "projectId",
+    "templateKey",
+    "versionNumber",
+    "scopeType",
+    "scopeIds",
+    "contentHash",
+    "definition"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "const": "1.0.0" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "status": { "const": "published" },
+    "projectId": { "$ref": "#/$defs/uuid" },
+    "templateKey": { "const": "drama-mvp-a-default" },
+    "versionNumber": { "type": "integer", "minimum": 1 },
+    "scopeType": { "const": "project" },
+    "scopeIds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/uuid" }
+    },
+    "contentHash": { "$ref": "#/$defs/hash" },
+    "definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodes",
+        "compatibilityLogicalOperations",
+        "skills",
+        "schemaVersion"
+      ],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "prefixItems": [
+            { "$ref": "#/$defs/textGenerate" },
+            { "$ref": "#/$defs/textReview" },
+            { "$ref": "#/$defs/imageGenerate" },
+            { "$ref": "#/$defs/imageReview" },
+            { "$ref": "#/$defs/videoGenerate" },
+            { "$ref": "#/$defs/videoReview" },
+            { "$ref": "#/$defs/mediaInspect" },
+            { "$ref": "#/$defs/timelineHandoff" }
+          ],
+          "items": false
+        },
+        "compatibilityLogicalOperations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["media.generate"],
+          "properties": {
+            "media.generate": {
+              "type": "array",
+              "prefixItems": [
+                { "const": "media.generate.image" },
+                { "const": "media.generate.video" }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        "skills": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "novel-writing" },
+            { "const": "drama-skills" }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "schemaVersion": { "const": "1.0.0" }
+      }
+    }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "hash": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+    "textGenerate": {
+      "type": "object",
+      "$ref": "#/$defs/node",
+      "properties": {
+        "key": { "const": "text.generate" },
+        "ports": { "$ref": "#/$defs/textGeneratePorts" }
+      }
+    },
+    "textReview": {
+      "type": "object",
+      "$ref": "#/$defs/node",
+      "properties": {
+        "key": { "const": "text.review" },
+        "ports": { "$ref": "#/$defs/textReviewPorts" }
+      }
+    },
+    "imageGenerate": {
+      "type": "object",
+      "$ref": "#/$defs/node",
+      "properties": {
+        "key": { "const": "media.generate.image" },
+        "ports": { "$ref": "#/$defs/imageGeneratePorts" }
+      }
+    },
+    "imageReview": {
+      "type": "object",
+      "$ref": "#/$defs/node",
+      "properties": {
+        "key": { "const": "media.review.image" },
+        "ports": { "$ref": "#/$defs/imageReviewPorts" }
+      }
+    },
+    "videoGenerate": {
+      "type": "object",
+      "$ref": "#/$defs/node",
+      "properties": {
+        "key": { "const": "media.generate.video" },
+        "ports": { "$ref": "#/$defs/videoGeneratePorts" }
+      }
+    },
+    "videoReview": {
+      "type": "object",
+      "$ref": "#/$defs/node",
+      "properties": {
+        "key": { "const": "media.review.video" },
+        "ports": { "$ref": "#/$defs/videoReviewPorts" }
+      }
+    },
+    "mediaInspect": {
+      "type": "object",
+      "$ref": "#/$defs/node",
+      "properties": {
+        "key": { "const": "media.inspect" },
+        "ports": { "$ref": "#/$defs/mediaInspectPorts" }
+      }
+    },
+    "timelineHandoff": {
+      "type": "object",
+      "$ref": "#/$defs/node",
+      "properties": {
+        "key": { "const": "timeline.handoff" },
+        "ports": { "$ref": "#/$defs/timelineHandoffPorts" }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "ports"],
+      "properties": {
+        "key": { "type": "string" },
+        "ports": { "type": "object" }
+      }
+    },
+    "textGeneratePorts": {
+      "type": "object",
+      "$ref": "#/$defs/ports",
+      "properties": {
+        "input": { "const": "text.generate.input.v1" },
+        "output": { "const": "text.generate.output.v1" }
+      }
+    },
+    "textReviewPorts": {
+      "type": "object",
+      "$ref": "#/$defs/ports",
+      "properties": {
+        "input": { "const": "text.review.input.v1" },
+        "output": { "const": "text.review.output.v1" }
+      }
+    },
+    "imageGeneratePorts": {
+      "type": "object",
+      "$ref": "#/$defs/ports",
+      "properties": {
+        "input": { "const": "media.generate.image.input.v1" },
+        "output": { "const": "media.generate.image.output.v1" }
+      }
+    },
+    "imageReviewPorts": {
+      "type": "object",
+      "$ref": "#/$defs/ports",
+      "properties": {
+        "input": { "const": "media.review.image.input.v1" },
+        "output": { "const": "media.review.image.output.v1" }
+      }
+    },
+    "videoGeneratePorts": {
+      "type": "object",
+      "$ref": "#/$defs/ports",
+      "properties": {
+        "input": { "const": "media.generate.video.input.v1" },
+        "output": { "const": "media.generate.video.output.v1" }
+      }
+    },
+    "videoReviewPorts": {
+      "type": "object",
+      "$ref": "#/$defs/ports",
+      "properties": {
+        "input": { "const": "media.review.video.input.v1" },
+        "output": { "const": "media.review.video.output.v1" }
+      }
+    },
+    "mediaInspectPorts": {
+      "type": "object",
+      "$ref": "#/$defs/ports",
+      "properties": {
+        "input": { "const": "media.inspect.input.v1" },
+        "output": { "const": "media.inspect.output.v1" }
+      }
+    },
+    "timelineHandoffPorts": {
+      "type": "object",
+      "$ref": "#/$defs/ports",
+      "properties": {
+        "input": { "const": "timeline.handoff.input.v1" },
+        "output": { "const": "timeline.handoff.output.v1" }
+      }
+    },
+    "ports": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output"],
+      "properties": {
+        "input": { "type": "string" },
+        "output": { "type": "string" }
+      }
+    }
+  }
+}

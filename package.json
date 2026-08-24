@@ -14,6 +14,7 @@
     "format:check": "pnpm --filter @video-agent/contracts format:check && pnpm --filter @video-agent/web format:check && uv run --project services/api ruff format --check services/api workers",
     "format": "pnpm --filter @video-agent/web format && uv run --project services/api ruff format services/api workers",
     "check": "pnpm run test && pnpm run lint && pnpm run typecheck && pnpm run format:check",
+    "test:e2e": "pnpm --filter @video-agent/web test:e2e",
     "compose:up": "docker compose --env-file .env.example -f infra/compose/compose.yaml up --build -d",
     "compose:down": "docker compose --env-file .env.example -f infra/compose/compose.yaml down --remove-orphans"
   }

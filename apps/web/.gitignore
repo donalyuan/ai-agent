@@ -2,3 +2,7 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+
+# Playwright runner output
+output/
+test-results/

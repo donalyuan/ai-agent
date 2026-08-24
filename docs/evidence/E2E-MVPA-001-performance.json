@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "1.0.0",
+  "stage": "non-functional localhost projection performance",
+  "profile": "Compose PostgreSQL + Mock Provider + explicit Local test/offline",
+  "listenAddress": "127.0.0.1",
+  "warmupSamplesPerRoute": 10,
+  "samplesPerRoute": 100,
+  "excluded": [
+    "Provider/Agent/Temporal wait",
+    "SSE",
+    "upload/download",
+    "media probe/preview/render/export"
+  ],
+  "routes": [
+    {
+      "route": "/v1/health/ready",
+      "dataShape": "readiness status",
+      "success": 100,
+      "failure": 0,
+      "minMs": 25.108,
+      "p50Ms": 28.784,
+      "p95Ms": 38.859,
+      "maxMs": 46.054
+    },
+    {
+      "route": "/v1/projects",
+      "dataShape": "project list",
+      "success": 100,
+      "failure": 0,
+      "minMs": 19.417,
+      "p50Ms": 22.43,
+      "p95Ms": 26.597,
+      "maxMs": 32.89
+    },
+    {
+      "route": "/v1/projects/{projectId}/creative",
+      "dataShape": "creative owner projection",
+      "success": 100,
+      "failure": 0,
+      "minMs": 18.419,
+      "p50Ms": 23.414,
+      "p95Ms": 30.364,
+      "maxMs": 84.051
+    },
+    {
+      "route": "/v1/projects/{projectId}/assets?pageSize=20",
+      "dataShape": "asset catalog projection",
+      "success": 100,
+      "failure": 0,
+      "minMs": 21.094,
+      "p50Ms": 24.901,
+      "p95Ms": 32.369,
+      "maxMs": 45.41
+    }
+  ],
+  "threshold": {
+    "p95LessThanMs": 500,
+    "maxObservedP95Ms": 38.859,
+    "passed": true
+  },
+  "browser": {
+    "chrome": "146.0.7680.153",
+    "edge": "151.0.4129.101",
+    "workflowProjectionNodes": { "chrome": 300, "edge": 300 },
+    "navigationMutationRequests": { "chrome": 0, "edge": 0 }
+  }
+}

@@ -15,7 +15,7 @@ from video_agent_api.adapters.sqlalchemy import _version_from_model
 from video_agent_api.adapters.sqlalchemy_models import AssetVersion as AssetVersionModel
 
 API_ROOT = Path(__file__).parents[1]
-ASSETS_HEAD_REVISION = "0006_assets_legacy_repair"
+CURRENT_HEAD_REVISION = "0023_export_dispatch_owner"
 OBJECT_KEY_CORPUS = json.loads(
     (
         API_ROOT.parents[1] / "packages/contracts/tests/fixtures/object-key-contract-corpus.json"
@@ -34,17 +34,32 @@ def test_assets_migration_cycle_and_columns(tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'assets.db'}"
     config = _alembic_config(database_url)
     script_directory = ScriptDirectory.from_config(config)
-    assert script_directory.get_current_head() == ASSETS_HEAD_REVISION
+    assert script_directory.get_current_head() == CURRENT_HEAD_REVISION
     assert len(script_directory.get_current_head()) <= 32
 
     command.upgrade(config, "head")
     engine = create_engine(database_url)
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == ASSETS_HEAD_REVISION
+    assert revision == CURRENT_HEAD_REVISION
     assert len(revision) <= 32
     columns = {column["name"] for column in inspect(engine).get_columns("asset_versions")}
     assert {"object_key", "mime_type", "size_bytes", "media_metadata"} <= columns
+    asset_columns = {column["name"] for column in inspect(engine).get_columns("assets")}
+    assert {
+        "source_type",
+        "catalog_role",
+        "tags",
+        "authorization_status",
+        "copyright_owner",
+        "license_label",
+        "license_reference",
+    } <= asset_columns
+    assert "asset_version_reservations" in inspect(engine).get_table_names()
+    reservation_columns = {
+        column["name"] for column in inspect(engine).get_columns("asset_version_reservations")
+    }
+    assert "upload_key" in reservation_columns
     command.downgrade(config, "0003_projects_episodes_slice")
     columns = {column["name"] for column in inspect(engine).get_columns("asset_versions")}
     assert "object_key" not in columns
@@ -84,6 +99,50 @@ def _insert_legacy_asset_version(
                 ),
                 {"checksum": checksum, "storage_ref": storage_ref},
             )
+    finally:
+        engine.dispose()
+
+
+def test_asset_center_migration_backfills_metadata_without_changing_versions(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'asset-center-backfill.db'}"
+    config = _alembic_config(database_url)
+    command.upgrade(config, "0003_projects_episodes_slice")
+    checksum = "a" * 64
+    _insert_legacy_asset_version(database_url, checksum=checksum)
+    command.upgrade(config, "0021_catalog_owner_column_repair")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            before = (
+                connection.execute(text("SELECT * FROM asset_versions WHERE id = 'version-legacy'"))
+                .mappings()
+                .one()
+            )
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            metadata = connection.execute(
+                text(
+                    "SELECT source_type, tags, authorization_status "
+                    "FROM assets WHERE id = 'asset-legacy'"
+                )
+            ).one()
+            after = (
+                connection.execute(text("SELECT * FROM asset_versions WHERE id = 'version-legacy'"))
+                .mappings()
+                .one()
+            )
+        assert metadata.source_type == "imported"
+        assert json.loads(metadata.tags) == []
+        assert metadata.authorization_status == "unknown"
+        assert dict(after) == dict(before)
+
+        command.downgrade(config, "0021_catalog_owner_column_repair")
+        asset_columns = {column["name"] for column in inspect(engine).get_columns("assets")}
+        assert "source_type" not in asset_columns
+        assert "asset_version_reservations" not in inspect(engine).get_table_names()
     finally:
         engine.dispose()
 

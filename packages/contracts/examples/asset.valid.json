@@ -1,9 +1,17 @@
 {
   "id": "00000000-0000-4000-8000-000000000005",
   "schema_version": "1.0.0",
-  "revision": 0,
+  "revision": 1,
   "status": "draft",
   "projectId": "00000000-0000-4000-8000-000000000001",
   "kind": "video",
-  "name": "Opening take"
+  "name": "Opening take",
+  "sourceType": "user_upload",
+  "catalogRole": "video_take",
+  "tags": ["opening"],
+  "authorizationStatus": "verified",
+  "copyrightOwner": "Studio",
+  "licenseLabel": "Owned",
+  "licenseReference": "rights-001",
+  "updatedAt": "2026-08-23T00:00:00Z"
 }

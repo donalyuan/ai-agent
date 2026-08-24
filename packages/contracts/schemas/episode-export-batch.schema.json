@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/episode-export-batch.schema.json",
+  "title": "EpisodeExportBatch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "revision",
+    "projectId",
+    "exportProfile",
+    "settings",
+    "status",
+    "jobs",
+    "members"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "projectId": { "$ref": "#/$defs/uuid" },
+    "exportProfile": { "const": "light" },
+    "settings": { "$ref": "#/$defs/settings" },
+    "status": { "enum": ["queued", "succeeded", "partially_failed", "failed"] },
+    "jobs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/job" }
+    },
+    "members": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/member" }
+    }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "aspectRatio",
+        "width",
+        "height",
+        "fps",
+        "container",
+        "videoCodec",
+        "pixelFormat",
+        "audioCodec",
+        "sampleRate",
+        "subtitleEncoding"
+      ],
+      "properties": {
+        "aspectRatio": { "enum": ["9:16", "16:9", "1:1"] },
+        "width": { "enum": [1080, 1920] },
+        "height": { "enum": [1080, 1920] },
+        "fps": { "const": 30 },
+        "container": { "const": "mp4" },
+        "videoCodec": { "const": "h264" },
+        "pixelFormat": { "const": "yuv420p" },
+        "audioCodec": { "const": "aac" },
+        "sampleRate": { "const": 48000 },
+        "subtitleEncoding": { "const": "UTF-8" }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "episodeId",
+        "timelineVersionId",
+        "timelineVersionRevision",
+        "outputBaseName",
+        "exportJobId",
+        "status"
+      ],
+      "properties": {
+        "episodeId": { "$ref": "#/$defs/uuid" },
+        "timelineVersionId": { "$ref": "#/$defs/uuid" },
+        "timelineVersionRevision": { "const": 1 },
+        "outputBaseName": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,120}$"
+        },
+        "exportJobId": { "$ref": "#/$defs/uuid" },
+        "status": {
+          "enum": [
+            "queued",
+            "preflighting",
+            "rendering",
+            "packaging",
+            "succeeded",
+            "failed",
+            "cancel_requested",
+            "cancelled"
+          ]
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "artifactType",
+        "status",
+        "sizeBytes",
+        "checksum",
+        "mimeType",
+        "hold",
+        "licenseStatus",
+        "expiresAt"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "artifactType": { "enum": ["mp4", "srt", "light_manifest"] },
+        "status": { "enum": ["pending", "verified", "failed", "held"] },
+        "sizeBytes": { "type": ["integer", "null"], "minimum": 0 },
+        "checksum": {
+          "anyOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }]
+        },
+        "mimeType": { "type": ["string", "null"] },
+        "hold": { "type": "boolean" },
+        "licenseStatus": { "type": "string", "minLength": 1 },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "episodeId",
+        "timelineVersionId",
+        "batchId",
+        "revision",
+        "status",
+        "packagingPhase",
+        "logicalOperation",
+        "renderPlanHash",
+        "rendererDiagnostic",
+        "diagnostics",
+        "artifacts"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "episodeId": { "$ref": "#/$defs/uuid" },
+        "timelineVersionId": { "$ref": "#/$defs/uuid" },
+        "batchId": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "status": {
+          "enum": [
+            "queued",
+            "preflighting",
+            "rendering",
+            "packaging",
+            "succeeded",
+            "failed",
+            "cancel_requested",
+            "cancelled"
+          ]
+        },
+        "packagingPhase": {
+          "enum": ["uploading", "verifying", "registering", null]
+        },
+        "logicalOperation": { "type": "string", "minLength": 1 },
+        "renderPlanHash": {
+          "anyOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }]
+        },
+        "rendererDiagnostic": { "type": ["string", "null"] },
+        "diagnostics": { "type": "array", "items": { "type": "object" } },
+        "artifacts": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/artifact" }
+        }
+      }
+    }
+  }
+}

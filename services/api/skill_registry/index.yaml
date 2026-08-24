@@ -1,0 +1,172 @@
+schemaVersion: 1.0.0
+candidates:
+  - name: drama-skills
+    version: 1.0.0
+    sourceType: git
+    sourceIdentity: https://github.com/worldwonderer/drama-skills@c5eec4ccff385b999ba5e4d0d870095b37e22e26
+    upstreamDigest: a7217641a828b8c52778b9c2e0a19772c0faa0e830bc57ffa48e362a9a748b9f
+    runtimeDigest: 5e2dada9b1c31537ff6badc04e46dc115d4c12ddeb340b0d6f2cd05b37e91d78
+    provenance: verified_snapshot
+    approval: approved
+    license: MIT
+    licenseStatus: verified
+    enabled: true
+    stages: [text.generate, text.review]
+    projectTypes: [short_drama]
+    capabilities: [story_spec, script_spec, scene, shot, shot_spec, asset_bible_spec]
+    targetModels: [configured-model, mock-model]
+    inputSchema: {type: object}
+    outputSchema: {type: object}
+    allowedTools: [text_model]
+    access: {network: false, subprocess: false, file: false, secret: false}
+    scriptsAllowed: false
+    priority: 20
+    contentPath: drama-skills/1.0.0/SKILL.md
+  - name: novel-writing
+    version: 1.0.0
+    sourceType: git
+    sourceIdentity: https://github.com/wgwtest/novel-writing@805de0f36544f4ca19f258890924796ffef5af8b
+    upstreamDigest: 63ad1206cdcd49aad86a96ffbd2d49f1b0b56a45cceea7cc09b190ceef0cbcce
+    runtimeDigest: c3e72eecf709edae5845312b9ce2ad14e3fe8ca2fd6553bd6da8b5536ba67b02
+    provenance: verified_snapshot
+    approval: approved
+    license: MIT
+    licenseStatus: verified
+    enabled: true
+    stages: [text.generate, text.review]
+    projectTypes: [short_drama]
+    capabilities: [story_spec, script_spec, continuity_review]
+    targetModels: [configured-model, mock-model]
+    inputSchema: {type: object}
+    outputSchema: {type: object}
+    allowedTools: [text_model]
+    access: {network: false, subprocess: false, file: false, secret: false}
+    scriptsAllowed: false
+    priority: 10
+    contentPath: novel-writing/1.0.0/SKILL.md
+  - name: zy-cinematic-realism
+    version: 1.0.0
+    sourceType: git
+    sourceIdentity: https://github.com/popopo-99/zy-cinematic-realism
+    upstreamDigest: null
+    runtimeDigest: null
+    provenance: pending_provenance
+    approval: not_approved
+    license: CC-BY-NC-4.0
+    licenseStatus: pending_commercial_review
+    enabled: false
+    stages: [media.generate.image]
+    projectTypes: [short_drama]
+    capabilities: [cinematic_realism]
+    targetModels: [configured-model]
+    inputSchema: {type: object}
+    outputSchema: {type: object}
+    allowedTools: [text_model]
+    access: {network: false, subprocess: false, file: false, secret: false}
+    scriptsAllowed: false
+    priority: 0
+  - name: seedance-2.0
+    version: 1.0.0
+    sourceType: git
+    sourceIdentity: https://github.com/Emily2040/seedance-2.0
+    upstreamDigest: null
+    runtimeDigest: null
+    provenance: pending_provenance
+    approval: not_approved
+    license: MIT
+    licenseStatus: pending_audit
+    enabled: false
+    stages: [media.generate.video]
+    projectTypes: [short_drama]
+    capabilities: [seedance_prompt]
+    targetModels: [seedance]
+    inputSchema: {type: object}
+    outputSchema: {type: object}
+    allowedTools: [text_model]
+    access: {network: false, subprocess: false, file: false, secret: false}
+    scriptsAllowed: false
+    priority: 0
+  - name: storyboard-tiktok-video-skill
+    version: 1.0.0
+    sourceType: git
+    sourceIdentity: https://github.com/huifer/storyboard-tiktok-video-skill
+    upstreamDigest: null
+    runtimeDigest: null
+    provenance: pending_provenance
+    approval: not_approved
+    license: unknown
+    licenseStatus: pending_audit
+    enabled: false
+    stages: [media.generate.video]
+    projectTypes: [short_drama]
+    capabilities: [storyboard_prompt]
+    targetModels: [configured-model]
+    inputSchema: {type: object}
+    outputSchema: {type: object}
+    allowedTools: [text_model]
+    access: {network: false, subprocess: false, file: false, secret: false}
+    scriptsAllowed: false
+    priority: 0
+  - name: hell-grind/cinedance-higgsfield
+    version: 1.0.0
+    sourceType: public_markdown
+    sourceIdentity: https://hellgrind.com/skills/cinedance-higgsfield
+    upstreamDigest: null
+    runtimeDigest: null
+    provenance: pending_provenance
+    approval: not_approved
+    license: unknown
+    licenseStatus: pending_audit
+    enabled: false
+    stages: [media.generate.video]
+    projectTypes: [short_drama]
+    capabilities: [cinedance_prompt]
+    targetModels: [higgsfield]
+    inputSchema: {type: object}
+    outputSchema: {type: object}
+    allowedTools: [text_model]
+    access: {network: false, subprocess: false, file: false, secret: false}
+    scriptsAllowed: false
+    priority: 0
+  - name: hell-grind/acting
+    version: 1.0.0
+    sourceType: public_markdown
+    sourceIdentity: https://hellgrind.com/skills/acting
+    upstreamDigest: null
+    runtimeDigest: null
+    provenance: pending_provenance
+    approval: not_approved
+    license: unknown
+    licenseStatus: pending_audit
+    enabled: false
+    stages: [media.generate.video]
+    projectTypes: [short_drama]
+    capabilities: [acting_direction]
+    targetModels: [configured-model]
+    inputSchema: {type: object}
+    outputSchema: {type: object}
+    allowedTools: [text_model]
+    access: {network: false, subprocess: false, file: false, secret: false}
+    scriptsAllowed: false
+    priority: 0
+  - name: hell-grind/lira
+    version: 1.0.0
+    sourceType: public_markdown
+    sourceIdentity: https://hellgrind.com/skills/lira
+    upstreamDigest: null
+    runtimeDigest: null
+    provenance: pending_provenance
+    approval: not_approved
+    license: unknown
+    licenseStatus: pending_audit
+    enabled: false
+    stages: [media.generate.video]
+    projectTypes: [short_drama]
+    capabilities: [lira_prompt]
+    targetModels: [configured-model]
+    inputSchema: {type: object}
+    outputSchema: {type: object}
+    allowedTools: [text_model]
+    access: {network: false, subprocess: false, file: false, secret: false}
+    scriptsAllowed: false
+    priority: 0

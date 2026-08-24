@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,12 +17,37 @@ const schemaNames = [
   "shot",
   "asset",
   "asset-version",
+  "asset-center",
   "workflow-draft",
   "workflow-version",
+  "published-workflow-version",
   "timeline-document",
+  "creative-configuration",
+  "asset-bible",
+  "asset-edit",
+  "timeline-current",
+  "timeline-version",
+  "project-package",
+  "export-artifact",
+  "export-diagnostic-target",
+  "episode-export-batch",
+  "media-inspection",
+  "media-derivative",
+  "preview-artifact",
 ];
 
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
+const canonicalize = (value) => {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalize(value[key])]),
+    );
+  }
+  return value;
+};
 const objectKeyCorpus = await readJson(
   join(packageRoot, "tests/fixtures/object-key-contract-corpus.json"),
 );
@@ -53,7 +79,7 @@ const validateExample = async (name, kind) => {
   return { ajv, value, valid };
 };
 
-test("provides exactly nine Draft 2020-12 schemas", async () => {
+test("provides the phase-one Draft 2020-12 schemas", async () => {
   const files = (await readdir(schemaDirectory)).filter((file) =>
     file.endsWith(".schema.json"),
   );
@@ -81,19 +107,42 @@ for (const name of schemaNames) {
     assert.equal(valid, false);
   });
 
-  test(`${name} requires id and schema_version`, async () => {
+  test(`${name} requires canonical identity fields`, async () => {
     const { ajv, value } = await validateExample(name, "valid");
     const validate = ajv.getSchema(
       `https://video-agent.local/schemas/${name}.schema.json`,
     );
-    const withoutId = structuredClone(value);
-    delete withoutId.id;
-    assert.equal(validate(withoutId), false);
+    if (name !== "asset-center") {
+      const withoutId = structuredClone(value);
+      delete withoutId.id;
+      assert.equal(validate(withoutId), false);
+    }
     const withoutVersion = structuredClone(value);
     delete withoutVersion.schema_version;
     assert.equal(validate(withoutVersion), false);
   });
 }
+
+test("AssetCenter rejects storage locations and a second schema source", async () => {
+  const { ajv, value } = await validateExample("asset-center", "valid");
+  const validate = ajv.getSchema(
+    "https://video-agent.local/schemas/asset-center.schema.json",
+  );
+  for (const forbidden of [
+    "objectKey",
+    "workspaceUri",
+    "presignedUrl",
+    "bytes",
+    "base64",
+  ]) {
+    const leaked = structuredClone(value);
+    leaked[forbidden] = "forbidden";
+    assert.equal(validate(leaked), false, forbidden);
+  }
+  const alias = structuredClone(value);
+  alias.schemaVersion = alias.schema_version;
+  assert.equal(validate(alias), false);
+});
 
 test("hierarchy references use stable UUID contracts", async () => {
   const { ajv, value: episode } = await validateExample("episode", "valid");
@@ -121,6 +170,44 @@ test("WorkflowDraft requires explicit non-empty scope", async () => {
   assert.equal(validate(emptyScopeIds), false);
 });
 
+test("PublishedWorkflowVersion fixes the default graph and explicit ports", async () => {
+  const { ajv, value } = await validateExample(
+    "published-workflow-version",
+    "valid",
+  );
+  const validate = ajv.getSchema(
+    "https://video-agent.local/schemas/published-workflow-version.schema.json",
+  );
+  assert.equal(value.templateKey, "drama-mvp-a-default");
+  assert.equal(
+    value.contentHash,
+    createHash("sha256")
+      .update(JSON.stringify(canonicalize(value.definition)))
+      .digest("hex"),
+  );
+  assert.deepEqual(
+    value.definition.nodes.map((node) => node.key),
+    [
+      "text.generate",
+      "text.review",
+      "media.generate.image",
+      "media.review.image",
+      "media.generate.video",
+      "media.review.video",
+      "media.inspect",
+      "timeline.handoff",
+    ],
+  );
+  for (const property of ["ports", "key"]) {
+    const inferredGraph = structuredClone(value);
+    delete inferredGraph.definition.nodes[0][property];
+    assert.equal(validate(inferredGraph), false, property);
+  }
+  const editableGraph = structuredClone(value);
+  editableGraph.definition.nodes[0].ports.output = "client-inferred.output";
+  assert.equal(validate(editableGraph), false);
+});
+
 test("TimelineDocument rejects non-integer frame values", async () => {
   const { ajv, value } = await validateExample("timeline-document", "valid");
   const validate = ajv.getSchema(
@@ -129,6 +216,48 @@ test("TimelineDocument rejects non-integer frame values", async () => {
   const floatingFrame = structuredClone(value);
   floatingFrame.clips[0].timelineStartFrame = 1.5;
   assert.equal(validate(floatingFrame), false);
+});
+
+test("ProjectPackage rejects missing audit facts, aliases, and a second schema source", async () => {
+  const { ajv, value } = await validateExample("project-package", "valid");
+  const validate = ajv.getSchema(
+    "https://video-agent.local/schemas/project-package.schema.json",
+  );
+  for (const property of [
+    "authorization",
+    "license",
+    "loudness",
+    "models",
+    "skillRevisions",
+    "parameters",
+    "usage",
+    "cost",
+  ]) {
+    const missing = structuredClone(value);
+    delete missing[property];
+    assert.equal(validate(missing), false, property);
+  }
+  const unknownWithoutSource = structuredClone(value);
+  unknownWithoutSource.cost.source = "";
+  assert.equal(validate(unknownWithoutSource), false);
+  for (const property of ["models", "skillRevisions"]) {
+    const empty = structuredClone(value);
+    empty[property] = [];
+    assert.equal(validate(empty), false, `${property} empty`);
+  }
+  for (const alias of ["profile", "export_profile", "schemaVersion"]) {
+    const withAlias = structuredClone(value);
+    withAlias[alias] = alias === "schemaVersion" ? "2.0.0" : "light";
+    assert.equal(validate(withAlias), false, alias);
+  }
+  const portable = structuredClone(value);
+  portable.exportProfile = "portable";
+  assert.equal(validate(portable), false);
+  for (const payloadField of ["bytes", "base64", "blob", "mediaPayload"]) {
+    const embedded = structuredClone(value);
+    embedded[payloadField] = "forbidden";
+    assert.equal(validate(embedded), false, payloadField);
+  }
 });
 
 test("AssetVersion reads the shared objectKey corpus", async () => {
@@ -151,4 +280,22 @@ test("AssetVersion reads the shared objectKey corpus", async () => {
     withUnsafePath.storageObject.objectKey = objectKey;
     assert.equal(validate(withUnsafePath), false, objectKey);
   }
+});
+
+test("AssetBible covers every owner fact and rejects copied owner payload", async () => {
+  const { ajv, value } = await validateExample("asset-bible", "valid");
+  const validate = ajv.getSchema(
+    "https://video-agent.local/schemas/asset-bible.schema.json",
+  );
+  for (const property of ["objectKey", "url", "promptText", "bytes"]) {
+    const copiedOwnerPayload = structuredClone(value);
+    copiedOwnerPayload.versions[0][property] = "forbidden";
+    assert.equal(validate(copiedOwnerPayload), false, property);
+  }
+  const staleHash = structuredClone(value);
+  staleHash.assignments[0].entryVersionHash = "not-a-hash";
+  assert.equal(validate(staleHash), false);
+  const unknownTaskState = structuredClone(value);
+  unknownTaskState.revisionTasks[0].status = "deleted";
+  assert.equal(validate(unknownTaskState), false);
 });

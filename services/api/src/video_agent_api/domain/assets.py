@@ -9,7 +9,9 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from types import MappingProxyType
+from typing import Literal
 from uuid import uuid4
 
 from .entities import SCHEMA_VERSION, STATUS_DRAFT
@@ -17,6 +19,24 @@ from .errors import ImmutableAssetVersionError, ValidationDomainError
 from .object_key_contract import canonical_object_key
 
 ASSET_KINDS = frozenset({"image", "video", "audio", "text", "document"})
+ASSET_SOURCE_TYPES = frozenset({"user_upload", "provider_generated", "source_material", "imported"})
+ASSET_CATALOG_ROLES = frozenset(
+    {
+        "character",
+        "location",
+        "prop",
+        "storyboard",
+        "video_take",
+        "dialogue",
+        "music",
+        "ambience",
+        "effects",
+        "other",
+    }
+)
+ASSET_AUTHORIZATION_STATUSES = frozenset(
+    {"unknown", "declared", "verified", "restricted", "expired"}
+)
 _HASH = re.compile(r"^[a-fA-F0-9]{64}$")
 _MIME = re.compile(r"^[^/\s]+/[^/\s]+$")
 
@@ -61,6 +81,10 @@ class StorageObject:
     e_tag: str | None = None
     media: Mapping[str, int] | None = None
 
+    def __deepcopy__(self, memo: dict[int, object]) -> StorageObject:
+        del memo
+        return self
+
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "storage_provider", _text(self.storage_provider, "storage_provider")
@@ -103,6 +127,14 @@ class Asset:
     status: str = STATUS_DRAFT
     schema_version: str = SCHEMA_VERSION
     revision: int = 1
+    source_type: str = "imported"
+    catalog_role: str | None = None
+    tags: tuple[str, ...] = ()
+    authorization_status: str = "unknown"
+    copyright_owner: str | None = None
+    license_label: str | None = None
+    license_reference: str | None = None
+    updated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def __post_init__(self) -> None:
         if not self.project_id:
@@ -112,6 +144,94 @@ class Asset:
         self.name = _text(self.name, "name")
         if isinstance(self.revision, bool) or self.revision < 1:
             raise ValidationDomainError("revision must be at least 1")
+        if len(self.tags) > 32 or len(set(self.tags)) != len(self.tags):
+            raise ValidationDomainError("tags must be bounded and unique")
+        if self.source_type not in ASSET_SOURCE_TYPES:
+            raise ValidationDomainError("asset source_type is invalid")
+        if self.catalog_role is not None and self.catalog_role not in ASSET_CATALOG_ROLES:
+            raise ValidationDomainError("asset catalog_role is invalid")
+        if self.authorization_status not in ASSET_AUTHORIZATION_STATUSES:
+            raise ValidationDomainError("asset authorization_status is invalid")
+        normalized_tags = tuple(_text(item, "tag") for item in self.tags)
+        if any(len(item) > 64 for item in normalized_tags):
+            raise ValidationDomainError("tag must not exceed 64 characters")
+        self.tags = normalized_tags
+        for field_name in ("copyright_owner", "license_label", "license_reference"):
+            value = getattr(self, field_name)
+            if value is not None:
+                setattr(self, field_name, _text(value, field_name))
+
+    @property
+    def license(self) -> str | None:
+        """历史代码读取同一 canonical license label，不形成第二事实源。"""
+        return self.license_label
+
+    @license.setter
+    def license(self, value: str | None) -> None:
+        self.license_label = value
+
+
+@dataclass(slots=True)
+class AssetVersionReservation:
+    project_id: str
+    asset_id: str
+    operation_key: str
+    fingerprint: str
+    status: Literal["reserved", "registered", "cancelled", "failed"] = "reserved"
+    id: str = field(default_factory=lambda: str(uuid4()))
+    revision: int = 1
+    registered_version_id: str | None = None
+    expected_asset_revision: int = 1
+    declared_kind: str = "image"
+    declared_mime_type: str = "image/png"
+    declared_size_bytes: int = 0
+    declared_checksum: str = "0" * 64
+    storage_profile_id: str = "local-test-offline"
+    storage_profile_revision: int = 1
+    storage_profile_snapshot_hash: str = "0" * 64
+    upload_key: str = ""
+    diagnostic: str | None = None
+    schema_version: str = SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        expected_key = f"asset-upload:{self.project_id}:{self.asset_id}:{self.id}"
+        if self.operation_key != expected_key:
+            raise ValidationDomainError("asset reservation identity is invalid")
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValidationDomainError("unsupported schemaVersion")
+        expected_prefix = f"projects/{self.project_id}/assets/{self.asset_id}/{self.id}/"
+        if not self.upload_key:
+            legacy_extension = self.declared_mime_type.partition("/")[2].replace("jpeg", "jpg")
+            self.upload_key = f"{expected_prefix}original.{legacy_extension or 'bin'}"
+        self.upload_key = _object_key(self.upload_key)
+        if not self.upload_key.startswith(expected_prefix):
+            raise ValidationDomainError("asset reservation upload key is invalid")
+        _hash(self.fingerprint, "fingerprint")
+        if self.status not in {"reserved", "registered", "cancelled", "failed"}:
+            raise ValidationDomainError("asset reservation status is invalid")
+        if self.revision < 1:
+            raise ValidationDomainError("asset reservation revision is invalid")
+        if self.status == "registered" and not self.registered_version_id:
+            raise ValidationDomainError("registered reservation requires AssetVersion")
+        if self.status != "registered" and self.registered_version_id is not None:
+            raise ValidationDomainError("unregistered reservation cannot reference AssetVersion")
+        if self.expected_asset_revision < 1 or self.declared_kind not in ASSET_KINDS:
+            raise ValidationDomainError("asset reservation owner snapshot is invalid")
+        if not _MIME.fullmatch(self.declared_mime_type) or self.declared_size_bytes < 0:
+            raise ValidationDomainError("asset reservation declared media is invalid")
+        _hash(self.declared_checksum, "declared_checksum")
+        _hash(self.storage_profile_snapshot_hash, "storage_profile_snapshot_hash")
+        if self.storage_profile_revision < 1:
+            raise ValidationDomainError("storage profile revision is invalid")
+
+    def transition(self, target: str, registered_version_id: str | None = None) -> None:
+        if target not in {"registered", "cancelled", "failed"} or self.status != "reserved":
+            raise ValidationDomainError("invalid reservation transition")
+        if target == "registered" and not registered_version_id:
+            raise ValidationDomainError("registered reservation requires AssetVersion")
+        self.status = target  # type: ignore[assignment]
+        self.registered_version_id = registered_version_id
+        self.revision += 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +245,10 @@ class AssetVersion:
     status: str = STATUS_DRAFT
     schema_version: str = SCHEMA_VERSION
     revision: int = 0
+
+    def __deepcopy__(self, memo: dict[int, object]) -> AssetVersion:
+        del memo
+        return self
 
     def __post_init__(self) -> None:
         if not self.asset_id or not self.project_id:

@@ -1,0 +1,390 @@
+{
+  "schemaVersion": "1.0.0",
+  "reportId": "E2E-MVPA-001",
+  "date": "2026-08-23",
+  "profile": {
+    "provider": "Mock Provider",
+    "storage": "explicit Local test/offline",
+    "adapterIdentity": "local_workspace",
+    "liveProvider": "unconfigured",
+    "liveTos": "unconfigured",
+    "liveRenderer": "unconfigured"
+  },
+  "runtime": {
+    "compose": "healthy",
+    "api": "http://127.0.0.1:8000",
+    "web": "http://127.0.0.1:5174",
+    "postgres": "healthy",
+    "temporal": "healthy",
+    "alembicHead": "0022_asset_center_owner",
+    "listenBoundary": "localhost-only"
+  },
+  "navigationEvidence": {
+    "entry": "/projects",
+    "requiredRoutes": [
+      "/projects/{projectId}/workbench",
+      "/projects/{projectId}/review",
+      "/projects/{projectId}/assets",
+      "/projects/{projectId}/episodes/select/timeline",
+      "/projects/{projectId}/exports",
+      "/projects/{projectId}/settings"
+    ],
+    "artifacts": [
+      "output/playwright/asset-center-desktop.png",
+      "output/playwright/context-agent-review-desktop.png",
+      "output/playwright/e2e-results.json",
+      "docs/evidence/E2E-MVPA-001-performance.json",
+      "output/playwright/phase-one-chrome-navigation.png",
+      "output/playwright/phase-one-edge-navigation.png",
+      "output/playwright/phase-one-asset-center-compose.png",
+      "output/playwright/phase-one-asset-center-compose.yml",
+      "output/playwright/phase-one-timeline-zero-episode.yml",
+      "output/playwright/phase-one-exports-compose.yml",
+      "output/playwright/phase-one-settings-compose.png",
+      "output/playwright/phase-one-settings-compose.yml"
+    ],
+    "zeroEpisodeBehavior": "Review/Timeline 保持显式选择和只读 empty state，不创建模板 Episode 或 Workflow mutation。"
+  },
+  "nonFunctionalEvidence": {
+    "browsers": {
+      "chrome": {
+        "version": "146.0.7680.153",
+        "tests": "1 passed",
+        "userAgent": "HeadlessChrome/146.0.0.0"
+      },
+      "edge": {
+        "version": "151.0.4129.101",
+        "tests": "1 passed",
+        "userAgent": "HeadlessChrome/151.0.0.0 Edg/151.0.0.0"
+      }
+    },
+    "workflowProjection": {
+      "fixture": "300 fixed published nodes with project/episode/scene/shot scope refs",
+      "chromeRenderedNodes": 300,
+      "edgeRenderedNodes": 300,
+      "mutationRequestsDuringNavigation": 0,
+      "artifact": "output/playwright/e2e-results.json"
+    },
+    "localhostApiP95": {
+      "routeSet": [
+        "/v1/health/ready",
+        "/v1/projects",
+        "/v1/projects/{projectId}/creative",
+        "/v1/projects/{projectId}/assets?pageSize=20"
+      ],
+      "samplesPerRoute": 100,
+      "warmupPerRoute": 10,
+      "successes": 400,
+      "failures": 0,
+      "maxP95Ms": 38.859,
+      "thresholdMs": 500,
+      "environment": "Compose PostgreSQL/API on 127.0.0.1"
+    }
+  },
+  "stages": [
+    {
+      "id": "S01",
+      "name": "project",
+      "owner": "projects/episodes + Workbench shell",
+      "status": "verified",
+      "prerequisites": [
+        "显式 project create/select",
+        "project scope",
+        "If-Match revision"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_projects_episodes_http.py",
+        "apps/web/src/App.test.tsx",
+        "output/playwright/phase-one-asset-center-compose.yml"
+      ],
+      "focusedFailure": "F01 project_scope_conflict",
+      "noSideEffectInvariant": "foreign/stale scope、页面加载、深链和 zero-episode 恢复不创建 Episode、Run、ProviderCall、模板或付费 intent。"
+    },
+    {
+      "id": "S02",
+      "name": "source/brief",
+      "owner": "extend-projects-episodes-creative-slice + SourceMaterial/Storage owner",
+      "status": "verified",
+      "prerequisites": [
+        "S01 selected project",
+        "original/adaptation typed input",
+        "immutable brief/source snapshot"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_creative_slice.py",
+        "services/api/tests/test_text_generation_slice.py",
+        "services/api/tests/test_storage_provider.py"
+      ],
+      "focusedFailure": "F02 source_parse_or_validation_failed / F02a storage_upload_or_verify_failed / F02b asset_registration_failed / F02c source_binding_conflict",
+      "noSideEffectInvariant": "invalid/foreign/stale source 或 upload/register/bind 失败不启动 TextModel/付费 Provider；original 与 inline_text 不创建 storage mutation。"
+    },
+    {
+      "id": "S03",
+      "name": "workflow/run",
+      "owner": "implement-workflows-runs-slice + Skill route owner",
+      "status": "verified",
+      "prerequisites": [
+        "valid S02 snapshot",
+        "published drama-mvp-a-default",
+        "explicit Skill decision/selection"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_workflows_runs_slice.py",
+        "services/api/tests/test_workflows_temporal.py",
+        "apps/web/src/workbench/contracts.test.ts"
+      ],
+      "focusedFailure": "F03 workflow_unconfigured_or_source_conflict",
+      "noSideEffectInvariant": "未裁决 route、source conflict、cancel/successor 冲突不创建额外 Run/NodeRun/ProviderCall；cancelled 不被晚到结果覆盖。"
+    },
+    {
+      "id": "S03a",
+      "name": "historical rerun",
+      "owner": "implement-workflows-runs-slice + Workbench UI",
+      "status": "verified",
+      "prerequisites": [
+        "用户显式选择同项目 immutable RunInputSnapshot",
+        "source refs/revisions/hashes 可重验证",
+        "重新通过 budget/capability gate"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_workflows_runs_slice.py",
+        "services/api/tests/test_workflows_runs_contracts.py",
+        "openspec/changes/archive/2026-08-24-implement-workflows-runs-slice/tasks.md"
+      ],
+      "focusedFailure": "F03a historical_snapshot_rerun_conflict",
+      "noSideEffectInvariant": "历史 Run、snapshot、ProviderCall 和 current 不改写；新 Run 使用新的 run_id + logical_operation，不复用 failed-successor evidence。"
+    },
+    {
+      "id": "S04",
+      "name": "text review and owner handoff",
+      "owner": "integrate-agentscope-text-skills + project/scene/shot owners",
+      "status": "verified",
+      "prerequisites": [
+        "structured allowlist output",
+        "complete TextReviewBatch",
+        "all owner ack"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_text_generation_slice.py",
+        "services/api/tests/test_text_migrations.py",
+        "apps/web/src/workbench/contracts.test.ts"
+      ],
+      "focusedFailure": "F04 text_batch_stale_or_handoff_incomplete",
+      "noSideEffectInvariant": "partial/stale/foreign batch 不写 Project/Episode/Scene/Shot current，不进入付费媒体或 Provider operation。"
+    },
+    {
+      "id": "S04a",
+      "name": "asset bible continuity",
+      "owner": "implement-asset-bible-continuity-slice",
+      "status": "verified",
+      "prerequisites": [
+        "typed entries/current versions/assignments",
+        "complete target set/hash",
+        "explicit accept"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_asset_bible_slice.py",
+        "services/api/tests/test_asset_bible_migrations.py",
+        "docs/adr/0007-persist-asset-bible-as-relational-owner-facts.md"
+      ],
+      "focusedFailure": "F04a asset_bible_impact_or_snapshot_conflict",
+      "noSideEffectInvariant": "impact/snapshot/CAS 失败不创建 successor/pointer/task/ProviderCall；旧 ShotSpec/current media/Timeline 保持原 snapshot。"
+    },
+    {
+      "id": "S05",
+      "name": "image candidate",
+      "owner": "integrate-gpt-image-provider + scenes/shots eligibility owner",
+      "status": "verified_with_unconfigured_boundary",
+      "prerequisites": [
+        "S04 + S04a accepted",
+        "image capability/selection/cost gate",
+        "exact project/episode/target provenance"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_catalog_slice.py",
+        "services/api/tests/test_scenes_slice.py",
+        "services/api/tests/test_phase_one_runtime.py"
+      ],
+      "focusedFailure": "F05 image_unaccepted_or_provenance_mismatch",
+      "noSideEffectInvariant": "snapshot/plan/candidate/current CAS 失败不创建 ProviderCall、外部请求或新 current；缺 live credential 保持 unconfigured。"
+    },
+    {
+      "id": "S06",
+      "name": "AssetEdit/provider",
+      "owner": "implement-agent-asset-edit-review + provider children",
+      "status": "verified_with_unconfigured_boundary",
+      "prerequisites": [
+        "completed Agent turn",
+        "schema-valid pending plan",
+        "accepted continuity snapshot",
+        "fee/capability snapshot"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_agent_edit_review_http.py",
+        "services/api/tests/test_agent_worker_runtime.py",
+        "apps/web/src/pages/AssetEditReviewPage.test.tsx"
+      ],
+      "focusedFailure": "F06 asset_edit_plan_conflict_or_submission_unknown",
+      "noSideEffectInvariant": "plan/snapshot/fee/binding mismatch 不创建 intent、Outbox、ProviderCall、AssetVersion 或 candidate；live provider 缺失不伪造成功。"
+    },
+    {
+      "id": "S07",
+      "name": "video take",
+      "owner": "integrate-agnes-video-provider + scenes/workflows review owner",
+      "status": "verified_with_unconfigured_boundary",
+      "prerequisites": [
+        "accepted image eligibility",
+        "matching ShotSpec/duration/aspect",
+        "explicit budget gate"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_scenes_slice.py",
+        "services/api/tests/test_phase_one_runtime.py",
+        "services/api/tests/test_workflows_runs_slice.py"
+      ],
+      "focusedFailure": "F07 video_take_rejected_or_retake_conflict",
+      "noSideEffectInvariant": "reject/retake/late poll 不覆盖 predecessor/current，不进入 Timeline；Agnes transport 未配置时保留 unconfigured。"
+    },
+    {
+      "id": "S08",
+      "name": "media inspect",
+      "owner": "Timeline/Media owner + Media Worker",
+      "status": "verified_with_unconfigured_boundary",
+      "prerequisites": [
+        "accepted current AssetVersion",
+        "stable source hash/revision",
+        "worker readable bytes"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_media_export_worker.py",
+        "services/api/tests/test_timeline_export_slice.py"
+      ],
+      "focusedFailure": "F08 media_inspection_failed_or_derivative_stale",
+      "noSideEffectInvariant": "failed/stale derivative 不显示 ready、不启用 Timeline/preview/export，重试保持幂等且不改变 accepted/current。"
+    },
+    {
+      "id": "S08a",
+      "name": "asset center",
+      "owner": "implement-project-asset-center + Assets/Storage/Media/usage owners",
+      "status": "verified",
+      "prerequisites": [
+        "selected project",
+        "explicit Local profile",
+        "valid metadata/reservation"
+      ],
+      "successEvidence": [
+        "docs/evidence/E2E-MVPA-001-asset-center.json",
+        "apps/web/src/pages/AssetCenterPage.test.tsx",
+        "output/playwright/asset-center-desktop.png"
+      ],
+      "focusedFailure": "F08a asset_center_upload_or_projection_failed",
+      "noSideEffectInvariant": "读取/筛选/试听/usage/切 tab 不创建 UploadSession、ProviderCall、RunEvent、AssetVersion 或 Timeline 引用；恢复只登记一个版本。"
+    },
+    {
+      "id": "S08b",
+      "name": "2 GiB media chain",
+      "owner": "Storage + Assets + Media Worker + Project Asset Center",
+      "status": "verified",
+      "prerequisites": [
+        "actual 2_147_483_648-byte fixture",
+        "32 x 64 MiB parts",
+        "Local capability admission"
+      ],
+      "successEvidence": [
+        "docs/evidence/E2E-MVPA-001-asset-center-2gib.json",
+        "services/api/scripts/verify_storage_2gib.py"
+      ],
+      "focusedFailure": "F08b media_2gib_capability_or_resume_failed",
+      "noSideEffectInvariant": "能力不足在 reservation/session/read-write 前拒绝；中断恢复不重复对象、分片或 AssetVersion。"
+    },
+    {
+      "id": "S09",
+      "name": "timeline handoff",
+      "owner": "implement-episode-timeline-audio-export + scenes eligibility owner",
+      "status": "verified_with_unconfigured_boundary",
+      "prerequisites": [
+        "accepted eligible media",
+        "ready derivatives",
+        "explicit Episode/current Cut",
+        "30fps integer frame contract"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_timeline_export_slice.py",
+        "services/api/tests/test_timeline_export_migrations.py",
+        "apps/web/src/timeline/api.test.ts",
+        "output/playwright/phase-one-timeline-zero-episode.yml"
+      ],
+      "focusedFailure": "F09 timeline_foreign_or_unaccepted_media",
+      "noSideEffectInvariant": "failed command/409/publish 不修改 Clip/SoundCue/current Cut/既有 TimelineVersion；renderer 缺失返回 renderer_unconfigured/503，不伪造 preview。"
+    },
+    {
+      "id": "S10",
+      "name": "episode export",
+      "owner": "Timeline/Export owner + StoragePort",
+      "status": "verified_with_unconfigured_boundary",
+      "prerequisites": [
+        "explicit Episode + published TimelineVersion",
+        "canonical RenderPlan preflight",
+        "light output profile"
+      ],
+      "successEvidence": [
+        "services/api/tests/test_timeline_export_slice.py",
+        "services/api/tests/test_media_export_worker.py",
+        "output/playwright/phase-one-exports-compose.yml"
+      ],
+      "focusedFailure": "F10 render_plan_or_export_failed",
+      "noSideEffectInvariant": "全集合 preflight 失败零 batch/job；renderer/storage unknown 先 reconcile，不 rerender、duplicate、fallback 或暴露 objectKey。"
+    },
+    {
+      "id": "S11",
+      "name": "resilience",
+      "owner": "implement-operations-resilience",
+      "status": "verified",
+      "prerequisites": [
+        "S01-S10 owner facts",
+        "versioned runbook",
+        "explicit drill fixture"
+      ],
+      "successEvidence": [
+        "docs/evidence/E2E-MVPA-001-resilience.json",
+        "services/api/tests/test_resilience_observability.py",
+        "docs/runbooks/phase-one-backup-restore.md"
+      ],
+      "focusedFailure": "F11 resilience_capacity_or_restore_failed",
+      "noSideEffectInvariant": "拒绝/恢复失败不创建 intent、ProviderCall、UploadSession、ExportJob、AssetVersion、Outbox，不修改 current reference。"
+    },
+    {
+      "id": "S11a",
+      "name": "observability",
+      "owner": "implement-local-observability",
+      "status": "verified",
+      "prerequisites": [
+        "W3C context",
+        "secret-free log/metric allowlist",
+        "in-memory/optional exporter"
+      ],
+      "successEvidence": [
+        "docs/evidence/E2E-MVPA-001-observability.json",
+        "services/api/tests/test_resilience_observability.py",
+        "/v1/operations/telemetry"
+      ],
+      "focusedFailure": "F11a trace_metric_or_redaction_failed",
+      "noSideEffectInvariant": "telemetry/exporter/viewer 失败不改变 UoW/readiness/Run/Export/Provider/Storage/FFmpeg 结果，不创建重复业务事件或费用。"
+    }
+  ],
+  "qualityGates": {
+    "contractsTests": "78 passed",
+    "webTests": "48 passed",
+    "apiTests": "393 passed",
+    "migrationTests": "88 passed",
+    "webTypecheck": "passed",
+    "apiMypy": "passed",
+    "lint": "passed (one existing Fast Refresh warning)",
+    "format": "passed",
+    "e2e": "pnpm run test:e2e: Chrome 1 passed, Edge 1 passed",
+    "localhostPerformance": "4 routes x 100 samples, max P95 38.859ms < 500ms",
+    "openspecStrict": "19/19 passed",
+    "composeHealth": "all services healthy",
+    "externalBoundaries": "live Provider/TOS/FFmpeg remain unconfigured; renderer probe is 503 renderer_unconfigured"
+  }
+}

@@ -1,0 +1,46 @@
+- generic [ref=f2e3]:
+  - complementary [ref=f2e4]:
+    - button "帧间制片" [ref=f2e5] [cursor=pointer]
+    - generic [ref=f2e13]:
+      - text: 当前上下文
+      - link "项目 1bd307e2-2" [ref=f2e14] [cursor=pointer]:
+        - /url: /projects/1bd307e2-28dd-4a41-a4f4-b2cd10fcfdab/workbench
+    - navigation "工作台导航" [ref=f2e18]:
+      - link "项目工作台" [ref=f2e19] [cursor=pointer]:
+        - /url: /projects/1bd307e2-28dd-4a41-a4f4-b2cd10fcfdab/workbench
+      - link "候选审核" [ref=f2e23] [cursor=pointer]:
+        - /url: /projects/1bd307e2-28dd-4a41-a4f4-b2cd10fcfdab/review
+      - link "项目资产" [ref=f2e29] [cursor=pointer]:
+        - /url: /projects/1bd307e2-28dd-4a41-a4f4-b2cd10fcfdab/assets
+      - link "集时间线" [active] [ref=f2e41] [cursor=pointer]:
+        - /url: /projects/1bd307e2-28dd-4a41-a4f4-b2cd10fcfdab/episodes/select/timeline
+      - link "项目导出" [ref=f2e45] [cursor=pointer]:
+        - /url: /projects/1bd307e2-28dd-4a41-a4f4-b2cd10fcfdab/exports
+      - link "模型设置" [ref=f2e49] [cursor=pointer]:
+        - /url: /projects/1bd307e2-28dd-4a41-a4f4-b2cd10fcfdab/settings
+    - generic [ref=f2e54]:
+      - generic [ref=f2e55]: 阶段一 / MVP-A
+      - generic [ref=f2e56]: Mock + Local offline
+      - generic [ref=f2e58]: "adapter: local_workspace"
+  - main [ref=f2e59]:
+    - generic [ref=f2e60]:
+      - generic [ref=f2e61]:
+        - link "项目入口" [ref=f2e62] [cursor=pointer]:
+          - /url: /projects/1bd307e2-28dd-4a41-a4f4-b2cd10fcfdab/workbench
+        - generic [ref=f2e65]:
+          - text: PROJECT / OWNER VIEW
+          - generic [ref=f2e66]: 阶段 0 / 工程基线
+        - heading "创作控制台" [level=1] [ref=f2e67]
+      - generic [ref=f2e68]:
+        - generic [ref=f2e69]: API 已就绪
+        - button "项目设置" [ref=f2e72] [cursor=pointer]
+    - generic [ref=f2e351]:
+      - generic [ref=f2e353]:
+        - text: EPISODE TIMELINE / S09
+        - heading "先选择一集" [level=2] [ref=f2e354]
+        - paragraph [ref=f2e355]: Timeline 是 Episode owner 范围；不会从全部集视图推断 current Cut。
+      - generic [ref=f2e356]:
+        - generic [ref=f2e358]:
+          - text: EPISODE SCOPE
+          - heading "显式选择 Episode" [level=3] [ref=f2e359]
+        - generic [ref=f2e360]: 当前项目尚无 Episode；不会创建模板入口。

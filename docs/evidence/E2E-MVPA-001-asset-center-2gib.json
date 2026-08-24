@@ -1,0 +1,34 @@
+{
+  "stage": "S08b 2 GiB media chain",
+  "change": "implement-project-asset-center",
+  "owner": ["Storage", "Assets", "Media Worker", "Project Asset Center"],
+  "profile": "explicit Local test/offline",
+  "adapter": "local_workspace",
+  "actualBytes": 2147483648,
+  "partSizeBytes": 67108864,
+  "partCount": 32,
+  "interruptedAfterPart": 1,
+  "resumedAfterAdapterRestart": true,
+  "profileRevision": 1,
+  "verification": {
+    "checksum": "a67990532f82970af418835901875d5d2e9b88e5d091ed18a6a75b386f512de7",
+    "etagMatchesChecksum": true,
+    "mimeType": "image/png",
+    "observedBytesMatchExpected": true,
+    "partManifestRecorded": true
+  },
+  "registration": {
+    "assetVersionCount": 1,
+    "duplicateRegistrationReused": true
+  },
+  "media": {
+    "inspection": "inspected",
+    "proxy": "succeeded",
+    "proxySizeBytes": 68,
+    "sourceHashMatches": true
+  },
+  "temporaryMediaRetained": false,
+  "focusedFailure": "F08b media_2gib_capability_or_resume_failed",
+  "noSideEffectInvariant": "能力不支持时在 reservation/session/file read 前拒绝；中断恢复不重复对象、分片或 AssetVersion。",
+  "liveTos": "unconfigured"
+}

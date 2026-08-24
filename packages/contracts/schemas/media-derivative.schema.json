@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/media-derivative.schema.json",
+  "title": "MediaDerivative",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "derivativeSchemaVersion",
+    "projectId",
+    "inspectionId",
+    "assetVersionId",
+    "assetVersionRevision",
+    "sourceHash",
+    "sourceFingerprint",
+    "kind",
+    "status",
+    "parameters",
+    "tool",
+    "toolVersion",
+    "operationKey",
+    "objectRef",
+    "checksum",
+    "sizeBytes",
+    "retention",
+    "license",
+    "hold",
+    "rawDiagnostic"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "derivativeSchemaVersion": { "$ref": "#/$defs/schemaVersion" },
+    "projectId": { "$ref": "#/$defs/uuid" },
+    "inspectionId": { "$ref": "#/$defs/uuid" },
+    "assetVersionId": { "$ref": "#/$defs/uuid" },
+    "assetVersionRevision": { "type": "integer", "minimum": 0 },
+    "sourceHash": { "$ref": "#/$defs/hash" },
+    "sourceFingerprint": { "$ref": "#/$defs/hash" },
+    "kind": { "enum": ["proxy", "thumbnail", "keyframe_index", "waveform"] },
+    "status": { "enum": ["pending", "ready", "failed", "stale"] },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": true,
+      "maxProperties": 32
+    },
+    "tool": { "type": "string", "minLength": 1 },
+    "toolVersion": { "type": "string", "minLength": 1 },
+    "operationKey": { "type": "string", "minLength": 1 },
+    "objectRef": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/objectRef" }]
+    },
+    "checksum": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }] },
+    "sizeBytes": { "type": ["integer", "null"], "minimum": 0 },
+    "retention": { "$ref": "#/$defs/retention" },
+    "license": { "$ref": "#/$defs/license" },
+    "hold": { "type": "boolean" },
+    "rawDiagnostic": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "ready" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "objectRef": { "$ref": "#/$defs/objectRef" },
+          "checksum": { "$ref": "#/$defs/hash" },
+          "sizeBytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "objectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileId", "objectKey", "operationKey"],
+      "properties": {
+        "profileId": { "type": "string", "minLength": 1 },
+        "objectKey": {
+          "type": "string",
+          "pattern": "^(?![/\\\\])(?!.*(?:^|/)\\.\\.(?:/|$))[^?#]+$"
+        },
+        "operationKey": { "type": "string", "minLength": 1 }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "version"],
+      "properties": {
+        "policy": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": { "status": { "type": "string", "minLength": 1 } }
+    }
+  }
+}

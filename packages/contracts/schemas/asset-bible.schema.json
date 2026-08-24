@@ -1,0 +1,394 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/asset-bible.schema.json",
+  "title": "AssetBible",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "assetBible",
+    "entries",
+    "versions",
+    "relationships",
+    "assignments",
+    "snapshots",
+    "impactAnalyses",
+    "acceptDecisions",
+    "revisionTasks"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "const": "1.0.0" },
+    "assetBible": { "$ref": "#/$defs/assetBible" },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/entry" }
+    },
+    "versions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/version" }
+    },
+    "relationships": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/relationship" }
+    },
+    "assignments": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/assignment" }
+    },
+    "snapshots": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/snapshot" }
+    },
+    "impactAnalyses": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/impactAnalysis" }
+    },
+    "acceptDecisions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/acceptDecision" }
+    },
+    "revisionTasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/revisionTask" }
+    }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "hex64": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "entryType": {
+      "enum": [
+        "character",
+        "look",
+        "location",
+        "scene_visual",
+        "prop",
+        "visual_style"
+      ]
+    },
+    "schemaVersion": { "const": "1.0.0" },
+    "assetBible": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "revision",
+        "schema_version",
+        "currentVersionMap"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "currentVersionMap": {
+          "type": "object",
+          "propertyNames": { "format": "uuid" },
+          "additionalProperties": { "$ref": "#/$defs/uuid" }
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "assetBibleId",
+        "projectId",
+        "entryType",
+        "revision",
+        "schema_version",
+        "disabled"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "assetBibleId": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "entryType": { "$ref": "#/$defs/entryType" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "currentVersionId": {
+          "anyOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }]
+        },
+        "disabled": { "type": "boolean" }
+      }
+    },
+    "ownerReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerId", "revision", "contentHash", "purpose"],
+      "properties": {
+        "ownerId": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "contentHash": { "$ref": "#/$defs/hex64" },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "entryId",
+        "projectId",
+        "entryType",
+        "version",
+        "revision",
+        "schema_version",
+        "attributes",
+        "contentHash",
+        "actorUuid",
+        "referenceAssetVersionRefs",
+        "generationSpecRefs"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "entryId": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "entryType": { "$ref": "#/$defs/entryType" },
+        "version": { "type": "integer", "minimum": 1 },
+        "revision": { "const": 1 },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "attributes": { "type": "object" },
+        "contentHash": { "$ref": "#/$defs/hex64" },
+        "actorUuid": { "$ref": "#/$defs/uuid" },
+        "referenceAssetVersionRefs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ownerReference" }
+        },
+        "generationSpecRefs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ownerReference" }
+        }
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "sourceEntryId",
+        "targetEntryId",
+        "kind",
+        "schema_version"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "sourceEntryId": { "$ref": "#/$defs/uuid" },
+        "targetEntryId": { "$ref": "#/$defs/uuid" },
+        "kind": {
+          "enum": ["character_look", "location_scene_visual", "related"]
+        },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" }
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "scopeType",
+        "scopeId",
+        "entryId",
+        "entryVersionId",
+        "entryVersionRevision",
+        "entryVersionHash",
+        "scopeRevision",
+        "revision",
+        "schema_version"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "scopeType": { "enum": ["project", "episode", "scene", "shot"] },
+        "scopeId": { "$ref": "#/$defs/uuid" },
+        "entryId": { "$ref": "#/$defs/uuid" },
+        "entryVersionId": { "$ref": "#/$defs/uuid" },
+        "entryVersionRevision": { "type": "integer", "minimum": 1 },
+        "entryVersionHash": { "$ref": "#/$defs/hex64" },
+        "scopeRevision": { "type": "integer", "minimum": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "targetType",
+        "targetId",
+        "targetRevision",
+        "revision",
+        "schema_version",
+        "status",
+        "overrideChain",
+        "resolvedRefs",
+        "sourceRevisions",
+        "contentHash"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "targetType": { "enum": ["project", "episode", "scene", "shot"] },
+        "targetId": { "$ref": "#/$defs/uuid" },
+        "targetRevision": { "type": "integer", "minimum": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "status": { "enum": ["accepted", "incomplete"] },
+        "overrideChain": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/assignment" }
+        },
+        "resolvedRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/ownerReference" }
+        },
+        "sourceRevisions": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 }
+        },
+        "contentHash": { "$ref": "#/$defs/hex64" }
+      }
+    },
+    "impactTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targetType",
+        "targetId",
+        "targetRevision",
+        "reason",
+        "snapshotId",
+        "snapshotHash",
+        "suggestedAction"
+      ],
+      "properties": {
+        "targetType": { "enum": ["episode", "scene", "shot"] },
+        "targetId": { "$ref": "#/$defs/uuid" },
+        "targetRevision": { "type": "integer", "minimum": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "snapshotId": { "$ref": "#/$defs/uuid" },
+        "snapshotHash": { "$ref": "#/$defs/hex64" },
+        "suggestedAction": { "enum": ["review", "regenerate", "acknowledge"] }
+      }
+    },
+    "impactAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "entryId",
+        "baseVersionId",
+        "candidatePayloadHash",
+        "status",
+        "revision",
+        "schema_version",
+        "targets",
+        "targetSetHash"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "entryId": { "$ref": "#/$defs/uuid" },
+        "baseVersionId": { "$ref": "#/$defs/uuid" },
+        "candidatePayloadHash": { "$ref": "#/$defs/hex64" },
+        "status": { "enum": ["complete", "incomplete"] },
+        "diagnostic": { "type": ["string", "null"] },
+        "revision": { "type": "integer", "minimum": 1 },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "targets": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/impactTarget" }
+        },
+        "targetSetHash": { "$ref": "#/$defs/hex64" }
+      }
+    },
+    "acceptDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "entryId",
+        "analysisId",
+        "oldVersionId",
+        "newVersionId",
+        "targetSetHash",
+        "actorUuid",
+        "correlationId",
+        "fingerprint",
+        "schema_version"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "entryId": { "$ref": "#/$defs/uuid" },
+        "analysisId": { "$ref": "#/$defs/uuid" },
+        "oldVersionId": { "$ref": "#/$defs/uuid" },
+        "newVersionId": { "$ref": "#/$defs/uuid" },
+        "targetSetHash": { "$ref": "#/$defs/hex64" },
+        "actorUuid": { "$ref": "#/$defs/uuid" },
+        "correlationId": { "type": "string", "minLength": 1 },
+        "fingerprint": { "$ref": "#/$defs/hex64" },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" }
+      }
+    },
+    "revisionTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "targetType",
+        "targetId",
+        "targetRevision",
+        "entryId",
+        "oldVersionId",
+        "newVersionId",
+        "oldSnapshotId",
+        "oldSnapshotHash",
+        "reason",
+        "status",
+        "revision",
+        "correlationId",
+        "schema_version"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "targetType": { "enum": ["episode", "scene", "shot"] },
+        "targetId": { "$ref": "#/$defs/uuid" },
+        "targetRevision": { "type": "integer", "minimum": 1 },
+        "entryId": { "$ref": "#/$defs/uuid" },
+        "oldVersionId": { "$ref": "#/$defs/uuid" },
+        "newVersionId": { "$ref": "#/$defs/uuid" },
+        "oldSnapshotId": { "$ref": "#/$defs/uuid" },
+        "oldSnapshotHash": { "$ref": "#/$defs/hex64" },
+        "reason": { "type": "string", "minLength": 1 },
+        "status": {
+          "enum": ["pending", "acknowledged", "resolved", "superseded"]
+        },
+        "revision": { "type": "integer", "minimum": 1 },
+        "correlationId": { "type": "string", "minLength": 1 },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" }
+      }
+    }
+  }
+}

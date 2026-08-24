@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/timeline-current.schema.json",
+  "title": "TimelineCurrent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "revision",
+    "projectId",
+    "episodeId",
+    "fps",
+    "clips",
+    "soundCues",
+    "captions",
+    "ducking",
+    "masterLimiter"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "projectId": { "$ref": "#/$defs/uuid" },
+    "episodeId": { "$ref": "#/$defs/uuid" },
+    "fps": { "const": 30 },
+    "clips": { "type": "array", "items": { "$ref": "#/$defs/clip" } },
+    "soundCues": { "type": "array", "items": { "$ref": "#/$defs/soundCue" } },
+    "captions": { "type": "array", "items": { "$ref": "#/$defs/caption" } },
+    "ducking": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/ducking" }] },
+    "masterLimiter": { "$ref": "#/$defs/masterLimiter" }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "ownerRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerType", "id", "revision", "hash"],
+      "properties": {
+        "ownerType": { "enum": ["asset_bible", "scene", "shot", "shot_spec"] },
+        "id": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "hash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "durationFrames"],
+      "properties": {
+        "type": { "enum": ["cut", "crossfade"] },
+        "durationFrames": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position", "scale", "opacity"],
+      "properties": {
+        "position": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": { "x": { "type": "number" }, "y": { "type": "number" } }
+        },
+        "scale": { "type": "number", "exclusiveMinimum": 0 },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "clip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "assetVersionId",
+        "assetVersionRevision",
+        "assetVersionHash",
+        "derivativeFingerprint",
+        "sourceInFrame",
+        "durationFrames",
+        "timelineStartFrame",
+        "transform",
+        "transition"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "assetVersionId": { "$ref": "#/$defs/uuid" },
+        "assetVersionRevision": { "type": "integer", "minimum": 0 },
+        "assetVersionHash": { "$ref": "#/$defs/hash" },
+        "derivativeFingerprint": { "$ref": "#/$defs/hash" },
+        "sourceInFrame": { "type": "integer", "minimum": 0 },
+        "durationFrames": { "type": "integer", "minimum": 1 },
+        "timelineStartFrame": { "type": "integer", "minimum": 0 },
+        "transform": { "$ref": "#/$defs/transform" },
+        "transition": { "$ref": "#/$defs/transition" }
+      }
+    },
+    "triggerRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerType", "id", "revision", "startFrame", "offsetFrames"],
+      "properties": {
+        "ownerType": { "enum": ["scene", "shot"] },
+        "id": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "startFrame": { "type": "integer", "minimum": 0 },
+        "offsetFrames": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "soundCue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "track",
+        "assetVersionId",
+        "assetVersionRevision",
+        "assetVersionHash",
+        "startFrame",
+        "durationFrames",
+        "trigger",
+        "triggerRef",
+        "priority",
+        "continuityRefs",
+        "gainDb",
+        "mute",
+        "solo",
+        "fadeInFrames",
+        "fadeOutFrames",
+        "authorizationStatus",
+        "licenseStatus"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "track": { "enum": ["dialogue", "music", "ambience", "effects"] },
+        "assetVersionId": { "$ref": "#/$defs/uuid" },
+        "assetVersionRevision": { "type": "integer", "minimum": 0 },
+        "assetVersionHash": { "$ref": "#/$defs/hash" },
+        "startFrame": { "type": "integer", "minimum": 0 },
+        "durationFrames": { "type": "integer", "minimum": 1 },
+        "trigger": {
+          "enum": ["manual", "scene_start", "shot_start", "shot_end"]
+        },
+        "triggerRef": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/triggerRef" }]
+        },
+        "priority": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "continuityRefs": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/ownerRef" }
+        },
+        "gainDb": { "type": "number" },
+        "mute": { "type": "boolean" },
+        "solo": { "type": "boolean" },
+        "fadeInFrames": { "type": "integer", "minimum": 0 },
+        "fadeOutFrames": { "type": "integer", "minimum": 0 },
+        "authorizationStatus": { "const": "authorized" },
+        "licenseStatus": { "const": "approved" }
+      }
+    },
+    "caption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text", "startFrame", "endFrame"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "text": { "type": "string", "minLength": 1 },
+        "startFrame": { "type": "integer", "minimum": 0 },
+        "endFrame": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "ducking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "dialogueIntervals",
+        "attenuationDb",
+        "attackFrames",
+        "releaseFrames",
+        "targetTracks"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "dialogueIntervals": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              { "type": "integer", "minimum": 0 },
+              { "type": "integer", "minimum": 1 }
+            ],
+            "minItems": 2,
+            "maxItems": 2,
+            "items": false
+          }
+        },
+        "attenuationDb": { "type": "number", "exclusiveMinimum": 0 },
+        "attackFrames": { "type": "integer", "minimum": 0 },
+        "releaseFrames": { "type": "integer", "minimum": 0 },
+        "targetTracks": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["music", "ambience", "effects"] }
+        }
+      }
+    },
+    "masterLimiter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["integratedLufs", "truePeakDbtp"],
+      "properties": {
+        "integratedLufs": { "const": -14 },
+        "truePeakDbtp": { "const": -1 }
+      }
+    }
+  }
+}

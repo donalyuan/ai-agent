@@ -2,24 +2,53 @@
 
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import cast
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from video_agent_api.adapters.ffmpeg import SubprocessFfmpegRenderAdapter
 from video_agent_api.adapters.sqlalchemy import make_sqlalchemy_uow_factory
+from video_agent_api.application.agent_edit import AgentEditService
+from video_agent_api.application.asset_bible import AssetBibleService
 from video_agent_api.application.assets import AssetsService
-from video_agent_api.application.ports import AssetsUnitOfWorkFactory, UnitOfWorkFactory
+from video_agent_api.application.catalog import CatalogService
+from video_agent_api.application.creative import CreativeService
+from video_agent_api.application.exports import ExportService
+from video_agent_api.application.ports import (
+    AssetBibleUnitOfWorkFactory,
+    AssetsUnitOfWorkFactory,
+    UnitOfWorkFactory,
+)
 from video_agent_api.application.projects_episodes import ProjectsEpisodesService
+from video_agent_api.application.runs import RunsService
+from video_agent_api.application.scenes import ScenesService
+from video_agent_api.application.skill_routing import SkillRoutingService
+from video_agent_api.application.source_material import SourceMaterialService
+from video_agent_api.application.storage_profiles import StorageProfileService
+from video_agent_api.application.text_generation import TextGenerationService
+from video_agent_api.application.timeline import TimelineService
+from video_agent_api.application.video_generation import AgnesVideoService
 from video_agent_api.db import default_readiness_probe
 from video_agent_api.domain.errors import DomainError
+from video_agent_api.interfaces.http.agent_edit import router as agent_edit_router
 from video_agent_api.interfaces.http.assets import router as assets_router
+from video_agent_api.interfaces.http.catalog import router as catalog_router
+from video_agent_api.interfaces.http.creative import router as creative_router
+from video_agent_api.interfaces.http.phase_one import router as phase_one_router
 from video_agent_api.interfaces.http.projects_episodes import router as projects_episodes_router
+from video_agent_api.interfaces.http.scenes import router as scenes_router
+from video_agent_api.interfaces.http.text_generation import router as text_generation_router
+from video_agent_api.interfaces.http.video_generation import router as video_generation_router
 from video_agent_api.logging import log_event
+from video_agent_api.observability import InMemoryTelemetry, TraceMiddleware
+from video_agent_api.ports.storage import LocalOpaqueReadGrantIssuer
 from video_agent_api.runtime import RuntimeSettings, build_runtime
+from video_agent_api.skills.registry import SkillRegistry
 
 
 def create_app(
@@ -30,6 +59,24 @@ def create_app(
 ) -> FastAPI:
     """构建健康端点和 projects/episodes；未配置数据库时业务端点显式 503。"""
     app = FastAPI(title="Video Agent API", version="0.1.0")
+
+    async def require_project_scope(
+        request: Request,
+        project_scope: str | None = Header(default=None, alias="X-Project-Scope"),
+    ) -> None:
+        """Reject project-scoped requests before an application service reads owner data."""
+        path_project = request.path_params.get("project_id") or request.path_params.get("projectId")
+        if request.url.path.startswith("/v1/asset-media-grants/"):
+            return
+        if not project_scope or not project_scope.strip():
+            raise HTTPException(status_code=403, detail="X-Project-Scope is required")
+        project_scope = project_scope.strip()
+        if path_project is not None and str(path_project) != project_scope:
+            raise HTTPException(status_code=403, detail="project scope is forbidden")
+        request.state.project_scope = project_scope
+
+    app.state.telemetry = InMemoryTelemetry()
+    app.add_middleware(TraceMiddleware, telemetry=app.state.telemetry)
     app.state.runtime = build_runtime(settings or RuntimeSettings.from_env())
     service = projects_episodes_service
     assets = assets_service
@@ -45,23 +92,131 @@ def create_app(
             assets = AssetsService(cast(AssetsUnitOfWorkFactory, uow_factory))
     app.state.projects_episodes_service = service
     app.state.assets_service = assets
+    app.state.creative_service = (
+        CreativeService(cast(object, service._uow_factory)) if service is not None else None
+    )
+    scenes_service = (
+        ScenesService(cast(object, service._uow_factory)) if service is not None else None
+    )
+    app.state.scenes_service = scenes_service
+    app.state.catalog_service = (
+        CatalogService(cast(object, service._uow_factory)) if service is not None else None
+    )
+    app.state.timeline_service = (
+        TimelineService(cast(object, service._uow_factory)) if service is not None else None
+    )
+    app.state.agent_edit_service = (
+        AgentEditService(cast(object, service._uow_factory), scenes_service)
+        if service is not None
+        else None
+    )
+    app.state.storage_profile_service = (
+        StorageProfileService(
+            cast(object, service._uow_factory), storage_mode=app.state.runtime.storage_mode
+        )
+        if service is not None
+        else None
+    )
+    app.state.opaque_read_grants = LocalOpaqueReadGrantIssuer()
+    app.state.export_service = (
+        ExportService(
+            cast(object, service._uow_factory),
+            SubprocessFfmpegRenderAdapter(
+                os.environ.get("FFMPEG_PATH"), os.environ.get("FFPROBE_PATH")
+            ),
+            app.state.opaque_read_grants,
+            app.state.runtime.storage,
+        )
+        if service is not None
+        else None
+    )
+    app.state.asset_bible_service = (
+        AssetBibleService(cast(AssetBibleUnitOfWorkFactory, service._uow_factory))
+        if service is not None
+        else None
+    )
+    app.state.runs_service = (
+        RunsService(cast(object, service._uow_factory), scenes_service)
+        if service is not None
+        else None
+    )
+    app.state.text_generation_service = (
+        TextGenerationService(
+            cast(object, service._uow_factory),
+            app.state.runtime.provider,
+            cast(CatalogService, app.state.catalog_service),
+        )
+        if service is not None
+        else None
+    )
+    app.state.video_generation_service = (
+        AgnesVideoService(
+            cast(object, service._uow_factory),
+            app.state.runtime.provider,
+            cast(CatalogService, app.state.catalog_service),
+            app.state.runtime.storage,
+            assets,
+        )
+        if service is not None and app.state.catalog_service is not None
+        else None
+    )
+    skill_registry = SkillRegistry(Path(__file__).resolve().parents[2] / "skill_registry")
+    skill_registry.load()
+    app.state.skill_registry = skill_registry
+    app.state.skill_routing_service = (
+        SkillRoutingService(cast(object, service._uow_factory), skill_registry)
+        if service is not None and not skill_registry.errors
+        else None
+    )
+    app.state.source_material_service = (
+        SourceMaterialService(cast(object, service._uow_factory)) if service is not None else None
+    )
     probe = readiness_probe or default_readiness_probe
 
     @app.exception_handler(DomainError)
-    async def handle_domain_error(_request: object, error: DomainError) -> JSONResponse:
-        status_code = 503 if error.code == "database_unavailable" else 422
-        if error.code in {"project_not_found", "episode_not_found"}:
+    async def handle_domain_error(request: Request, error: DomainError) -> JSONResponse:
+        status_code = (
+            503
+            if error.code
+            in {
+                "database_unavailable",
+                "credential_master_key_unavailable",
+                "asset_edit_unconfigured",
+                "renderer_unconfigured",
+                "renderer_capability_unsupported",
+            }
+            else 422
+        )
+        if error.code in {
+            "project_not_found",
+            "episode_not_found",
+            "workflow_run_not_found",
+            "storage_profile_not_found",
+            "asset_edit_not_found",
+        }:
             status_code = 404
-        elif error.code in {"episode_number_conflict", "revision_conflict"}:
+        elif error.code == "project_access_forbidden":
+            status_code = 403
+        elif error.code in {
+            "episode_number_conflict",
+            "revision_conflict",
+            "workflow_version_unavailable",
+            "workflow_source_conflict",
+            "workflow_run_conflict",
+            "base_version_conflict",
+            "continuity_stale",
+            "storage_profile_revision_conflict",
+        }:
             status_code = 409
+        trace_id = getattr(getattr(request.state, "trace_context", None), "trace_id", None)
         return JSONResponse(
             status_code=status_code,
-            content={"detail": {"type": error.code, "message": str(error)}},
+            content={"detail": {"type": error.code, "message": str(error), "traceId": trace_id}},
         )
 
     @app.exception_handler(RequestValidationError)
     async def handle_request_validation(
-        _request: object, error: RequestValidationError
+        request: Request, error: RequestValidationError
     ) -> JSONResponse:
         return JSONResponse(
             status_code=422,
@@ -70,6 +225,9 @@ def create_app(
                     "type": "validation",
                     "message": "request validation failed",
                     "errors": jsonable_encoder(error.errors()),
+                    "traceId": getattr(
+                        getattr(request.state, "trace_context", None), "trace_id", None
+                    ),
                 }
             },
         )
@@ -88,7 +246,20 @@ def create_app(
         return {"status": "ready"}
 
     app.include_router(projects_episodes_router)
-    app.include_router(assets_router)
+    app.include_router(assets_router, dependencies=[Depends(require_project_scope)])
+    app.include_router(creative_router, dependencies=[Depends(require_project_scope)])
+    app.include_router(scenes_router, dependencies=[Depends(require_project_scope)])
+    app.include_router(catalog_router)
+    app.include_router(phase_one_router)
+    app.include_router(text_generation_router, dependencies=[Depends(require_project_scope)])
+    app.include_router(video_generation_router, dependencies=[Depends(require_project_scope)])
+    app.include_router(agent_edit_router, dependencies=[Depends(require_project_scope)])
+
+    @app.on_event("startup")
+    async def bootstrap_catalog() -> None:
+        if app.state.catalog_service is not None:
+            await app.state.catalog_service.bootstrap()
+
     return app
 
 

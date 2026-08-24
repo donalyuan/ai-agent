@@ -30,6 +30,16 @@ class Project:
     status: str = STATUS_DRAFT
     schema_version: str = SCHEMA_VERSION
     revision: int = 1
+    creation_mode: str | None = None
+    creative_brief_current: object | None = None
+    creative_brief_history: list[object] = field(default_factory=list)
+    creative_settings_current: object | None = None
+    creative_settings_history: list[object] = field(default_factory=list)
+    source_binding_current: object | None = None
+    source_binding_history: list[object] = field(default_factory=list)
+    story_spec_ref: dict[str, object] | None = None
+    story_spec_history: list[dict[str, object]] = field(default_factory=list)
+    source_materials: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.name = _required_text(self.name, "name")
@@ -53,6 +63,8 @@ class Episode:
     status: str = STATUS_DRAFT
     schema_version: str = SCHEMA_VERSION
     revision: int = 1
+    script_spec_ref: dict[str, object] | None = None
+    script_spec_history: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.title = _required_text(self.title, "title")

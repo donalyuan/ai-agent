@@ -1,0 +1,13 @@
+{
+  "id": "00000000-0000-4000-8000-000000000203",
+  "schema_version": "1.0.0",
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "episodeId": "00000000-0000-4000-8000-000000000002",
+  "cutId": "00000000-0000-4000-8000-000000000102",
+  "cutRevision": 0,
+  "timelineFingerprint": "bad",
+  "renderPlanHash": "bad",
+  "status": "success",
+  "proxyDerivativeIds": ["duplicate", "duplicate"],
+  "rawDiagnostic": null
+}

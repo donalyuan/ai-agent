@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/asset-center.schema.json",
+  "title": "AssetCenter",
+  "oneOf": [
+    { "$ref": "#/$defs/catalogPage" },
+    { "$ref": "#/$defs/reservation" },
+    { "$ref": "#/$defs/mediaProjection" },
+    { "$ref": "#/$defs/usageProjection" },
+    { "$ref": "#/$defs/timelineSelection" }
+  ],
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "hash": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "safeVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision",
+        "contentHash",
+        "checksum",
+        "mimeType",
+        "sizeBytes"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "contentHash": { "$ref": "#/$defs/hash" },
+        "checksum": { "$ref": "#/$defs/hash" },
+        "mimeType": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$" },
+        "sizeBytes": { "type": "integer", "minimum": 0 },
+        "durationMs": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "catalogItem": {
+      "allOf": [
+        { "$ref": "https://video-agent.local/schemas/asset.schema.json" },
+        {
+          "type": "object",
+          "required": ["versionCount", "processingStatus", "latestVersion"],
+          "properties": {
+            "versionCount": { "type": "integer", "minimum": 0 },
+            "processingStatus": {
+              "enum": ["unknown", "pending", "ready", "failed", "stale"]
+            },
+            "latestVersion": {
+              "oneOf": [{ "$ref": "#/$defs/safeVersion" }, { "type": "null" }]
+            }
+          }
+        }
+      ]
+    },
+    "catalogPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractKind", "schema_version", "items", "nextCursor"],
+      "properties": {
+        "contractKind": { "const": "catalog_page" },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "items": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/catalogItem" }
+        },
+        "nextCursor": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      }
+    },
+    "reservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractKind",
+        "schema_version",
+        "id",
+        "projectId",
+        "assetId",
+        "revision",
+        "operationKey",
+        "fingerprint",
+        "status",
+        "expectedAssetRevision",
+        "declaredKind",
+        "declaredMimeType",
+        "declaredSizeBytes",
+        "declaredChecksum",
+        "storageProfileId",
+        "storageProfileRevision",
+        "storageProfileSnapshotHash"
+      ],
+      "properties": {
+        "contractKind": { "const": "reservation" },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "id": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "assetId": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "operationKey": {
+          "type": "string",
+          "pattern": "^asset-upload:[^:]+:[^:]+:[^:]+$"
+        },
+        "fingerprint": { "$ref": "#/$defs/hash" },
+        "status": { "enum": ["reserved", "registered", "cancelled", "failed"] },
+        "registeredVersionId": {
+          "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }]
+        },
+        "expectedAssetRevision": { "type": "integer", "minimum": 1 },
+        "declaredKind": {
+          "enum": ["image", "video", "audio", "text", "document"]
+        },
+        "declaredMimeType": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$"
+        },
+        "declaredSizeBytes": { "type": "integer", "minimum": 0 },
+        "declaredChecksum": { "$ref": "#/$defs/hash" },
+        "storageProfileId": { "type": "string", "minLength": 1 },
+        "storageProfileRevision": { "type": "integer", "minimum": 1 },
+        "storageProfileSnapshotHash": { "$ref": "#/$defs/hash" },
+        "diagnostic": { "type": ["string", "null"] }
+      }
+    },
+    "mediaProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractKind",
+        "schema_version",
+        "projectId",
+        "assetVersionId",
+        "assetVersionRevision",
+        "sourceHash",
+        "status",
+        "derivatives"
+      ],
+      "properties": {
+        "contractKind": { "const": "media_projection" },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "assetVersionId": { "$ref": "#/$defs/uuid" },
+        "assetVersionRevision": { "type": "integer", "minimum": 0 },
+        "sourceHash": { "$ref": "#/$defs/hash" },
+        "status": {
+          "enum": ["pending", "ready", "failed", "stale", "unavailable"]
+        },
+        "diagnostic": { "type": ["string", "null"] },
+        "derivatives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "kind", "status", "grantAvailable"],
+            "properties": {
+              "id": { "$ref": "#/$defs/uuid" },
+              "kind": {
+                "enum": ["proxy", "thumbnail", "keyframe_index", "waveform"]
+              },
+              "status": { "enum": ["pending", "ready", "failed", "stale"] },
+              "grantAvailable": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "usageProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractKind",
+        "schema_version",
+        "projectId",
+        "assetVersionId",
+        "status",
+        "references",
+        "unavailableOwners"
+      ],
+      "properties": {
+        "contractKind": { "const": "usage_projection" },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "assetVersionId": { "$ref": "#/$defs/uuid" },
+        "status": { "enum": ["complete", "partial", "unavailable"] },
+        "diagnostic": { "type": ["string", "null"] },
+        "unavailableOwners": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ownerType",
+              "ownerId",
+              "ownerRevision",
+              "scope",
+              "state",
+              "sourceHash",
+              "deepLink"
+            ],
+            "properties": {
+              "ownerType": { "type": "string", "minLength": 1 },
+              "ownerId": { "type": "string", "minLength": 1 },
+              "ownerRevision": { "type": "integer", "minimum": 0 },
+              "scope": {
+                "type": "object",
+                "additionalProperties": { "type": "string" },
+                "required": ["projectId"],
+                "properties": {
+                  "projectId": { "$ref": "#/$defs/uuid" }
+                }
+              },
+              "state": { "type": "string", "minLength": 1 },
+              "sourceHash": { "$ref": "#/$defs/hash" },
+              "deepLink": { "type": "string", "pattern": "^/projects/" }
+            }
+          }
+        }
+      }
+    },
+    "timelineSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractKind",
+        "schema_version",
+        "projectId",
+        "episodeId",
+        "assetVersionId",
+        "assetVersionRevision",
+        "assetVersionHash",
+        "authorizationStatus"
+      ],
+      "properties": {
+        "contractKind": { "const": "timeline_selection" },
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "episodeId": { "$ref": "#/$defs/uuid" },
+        "assetVersionId": { "$ref": "#/$defs/uuid" },
+        "assetVersionRevision": { "type": "integer", "minimum": 0 },
+        "assetVersionHash": { "$ref": "#/$defs/hash" },
+        "authorizationStatus": { "const": "verified" },
+        "licenseLabel": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

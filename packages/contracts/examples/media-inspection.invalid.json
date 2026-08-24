@@ -1,0 +1,19 @@
+{
+  "id": "not-a-uuid",
+  "schema_version": "1",
+  "revision": 0,
+  "projectId": "foreign",
+  "assetVersionId": "stale",
+  "assetVersionRevision": -1,
+  "sourceHash": "bad",
+  "sourceFingerprint": "bad",
+  "status": "unknown",
+  "metadata": {},
+  "tool": "",
+  "toolVersion": "",
+  "operationKey": "",
+  "retention": { "policy": "", "version": "" },
+  "license": { "status": "" },
+  "hold": false,
+  "rawDiagnostic": null
+}

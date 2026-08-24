@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-agent.local/schemas/asset-edit.schema.json",
+  "title": "AssetEditPlan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "schema_version",
+    "revision",
+    "status",
+    "projectId",
+    "episodeId",
+    "base",
+    "references",
+    "instruction",
+    "turnId"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/uuid" },
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "revision": { "$ref": "#/$defs/revision" },
+    "status": { "enum": ["pending_review", "stale", "executing"] },
+    "projectId": { "$ref": "#/$defs/uuid" },
+    "episodeId": { "$ref": "#/$defs/uuid" },
+    "targetId": { "$ref": "#/$defs/uuid" },
+    "base": { "$ref": "#/$defs/versionRef" },
+    "references": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/versionRef" },
+      "uniqueItems": true
+    },
+    "instruction": { "type": "string", "minLength": 1 },
+    "turnId": { "$ref": "#/$defs/uuid" },
+    "continuity": { "$ref": "#/$defs/continuityRef" }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "schemaVersion": { "const": "1.0.0" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "hash": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+    "versionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "revision",
+        "contentHash",
+        "kind",
+        "mimeType"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "projectId": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "contentHash": { "$ref": "#/$defs/hash" },
+        "kind": { "enum": ["image", "video"] },
+        "mimeType": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$" }
+      }
+    },
+    "continuityRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "contentHash", "targetId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "contentHash": { "$ref": "#/$defs/hash" },
+        "targetId": { "$ref": "#/$defs/uuid" }
+      }
+    }
+  }
+}

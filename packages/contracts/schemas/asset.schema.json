@@ -3,7 +3,7 @@
   "$id": "https://video-agent.local/schemas/asset.schema.json",
   "title": "Asset",
   "type": "object",
-  "additionalProperties": false,
+  "unevaluatedProperties": false,
   "required": [
     "id",
     "schema_version",
@@ -11,7 +11,11 @@
     "status",
     "projectId",
     "kind",
-    "name"
+    "name",
+    "sourceType",
+    "tags",
+    "authorizationStatus",
+    "updatedAt"
   ],
   "properties": {
     "id": { "$ref": "#/$defs/uuid" },
@@ -25,7 +29,46 @@
       "type": "string",
       "enum": ["image", "video", "audio", "text", "document"]
     },
-    "name": { "type": "string", "minLength": 1 }
+    "name": { "type": "string", "minLength": 1 },
+    "sourceType": {
+      "type": "string",
+      "enum": [
+        "user_upload",
+        "provider_generated",
+        "source_material",
+        "imported"
+      ]
+    },
+    "catalogRole": {
+      "type": ["string", "null"],
+      "enum": [
+        "character",
+        "location",
+        "prop",
+        "storyboard",
+        "video_take",
+        "dialogue",
+        "music",
+        "ambience",
+        "effects",
+        "other",
+        null
+      ]
+    },
+    "tags": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+    },
+    "authorizationStatus": {
+      "type": "string",
+      "enum": ["unknown", "declared", "verified", "restricted", "expired"]
+    },
+    "copyrightOwner": { "type": ["string", "null"], "minLength": 1 },
+    "licenseLabel": { "type": ["string", "null"], "minLength": 1 },
+    "licenseReference": { "type": ["string", "null"], "minLength": 1 },
+    "updatedAt": { "type": "string", "format": "date-time" }
   },
   "$defs": {
     "uuid": { "type": "string", "format": "uuid" },

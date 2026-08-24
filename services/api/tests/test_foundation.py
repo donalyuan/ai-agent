@@ -23,6 +23,9 @@ from video_agent_api.ports.contracts import (
     AdapterNotConfiguredError,
     DisabledConfigurationError,
     ModelSelection,
+    PartReceipt,
+    StorageValidationError,
+    StorageWriteIntent,
 )
 from video_agent_api.ports.mocks import DeterministicMockProvider
 from video_agent_api.ports.storage import LocalWorkspaceAdapter, TOSAdapter
@@ -153,46 +156,67 @@ def test_local_workspace_uses_abstract_references_and_rejects_escape(tmp_path: P
     assert storage.get(completed.object_ref) == b"hello"
 
 
-def test_skill_registry_and_router_are_deterministic(tmp_path: Path) -> None:
-    skill_dir = tmp_path / "skills" / "drama"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "manifest.yaml").write_text(
-        "\n".join(
-            [
-                "name: drama",
-                "version: 1.0.0",
-                "source_commit: abc123",
-                "license: MIT",
-                "enabled: true",
-                "stages: [script]",
-                "project_types: [short_drama]",
-                "capabilities: [scene_writing]",
-                "allowed_tools: [text_model]",
-                "target_models: [configured-model]",
-                "input_schema: {type: object}",
-                "output_schema: {type: object}",
-                "priority: 10",
-            ]
-        ),
-        encoding="utf-8",
+def test_local_storage_v2_multipart_is_scoped_idempotent_and_abortable(tmp_path: Path) -> None:
+    storage = LocalWorkspaceAdapter(tmp_path / "workspace")
+    intent = StorageWriteIntent(
+        "asset-upload:project:asset:reservation",
+        "project",
+        "local",
+        "projects/project/assets/asset/version/original.bin",
     )
-    (skill_dir / "SKILL.md").write_text("# Drama\n", encoding="utf-8")
-    registry = SkillRegistry(tmp_path / "skills")
+    session = storage.create_multipart(intent, "trace-v2")
+    receipt = PartReceipt(
+        1,
+        "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        "etag-1",
+        5,
+    )
+    assert storage.upload_part(session, receipt, b"hello", "trace-v2") == receipt
+    assert storage.resume_multipart(intent, "trace-v2") == session
+    result = storage.complete_multipart(session, (receipt,), "trace-v2")
+    assert storage.complete_multipart(session, (receipt,), "trace-v2") == result
+    with pytest.raises(StorageValidationError, match="multipart_complete_conflict"):
+        storage.complete_multipart(session, (PartReceipt(2, "a" * 64, "etag-2", 1),), "trace-v2")
+
+    second = storage.create_multipart(
+        StorageWriteIntent(
+            "op-2", "project", "local", "projects/project/assets/asset/v2/original.bin"
+        ),
+        "trace-v2",
+    )
+    assert storage.abort_multipart(second, "trace-v2").status == "aborted"
+
+
+def test_skill_registry_and_router_are_deterministic(tmp_path: Path) -> None:
+    del tmp_path
+    registry = SkillRegistry(Path(__file__).parents[1] / "skill_registry")
     registry.load()
-    assert registry.resolve("drama", "1.0.0").source_commit == "abc123"
-    assert registry.read("drama", "1.0.0") == "# Drama\n"
+    assert len(registry.list()) == 8
+    assert {item.name for item in registry.routable()} == {"drama-skills", "novel-writing"}
+    assert "c5eec4cc" in registry.resolve("drama-skills", "1.0.0").source_identity
+    selected_content = registry.load_selected_content(
+        "drama-skills",
+        "1.0.0",
+        allowed_skills=frozenset({"drama-skills"}),
+        required_capabilities=frozenset({"story_spec"}),
+        selection_mode="fixed",
+    )
+    assert "structured candidate graph" in selected_content
 
     context = RouteContext(
         project_type="short_drama",
-        stage="script",
+        stage="text.generate",
         target_model="configured-model",
-        query="write a scene",
+        query="story spec scene shot",
         allowed_tools={"text_model"},
         allowed_licenses={"MIT"},
     )
     first = SkillRouter(registry).route(context)
     second = SkillRouter(registry).route(context)
-    assert [candidate.name for candidate in first.candidates] == ["drama"]
+    assert [candidate.name for candidate in first.candidates] == [
+        "drama-skills",
+        "novel-writing",
+    ]
     assert first == second
     assert first.selected is None
     assert first.needs_manual_selection is True
@@ -217,31 +241,6 @@ def test_skill_registry_and_router_are_deterministic(tmp_path: Path) -> None:
     low_confidence = SkillRouter(registry, LowConfidenceAdapter()).route(context)
     assert low_confidence.needs_manual_selection is True
     assert low_confidence.fallback_reason == "semantic_adapter_low_confidence"
-
-    tie_dir = tmp_path / "skills" / "tie"
-    tie_dir.mkdir()
-    (tie_dir / "manifest.yaml").write_text(
-        "\n".join(
-            [
-                "name: tie",
-                "version: 1.0.0",
-                "source_commit: def456",
-                "license: MIT",
-                "enabled: true",
-                "stages: [script]",
-                "project_types: [short_drama]",
-                "capabilities: [scene_writing]",
-                "allowed_tools: [text_model]",
-                "target_models: [configured-model]",
-                "input_schema: {type: object}",
-                "output_schema: {type: object}",
-                "priority: 10",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    registry.load()
-    assert SkillRouter(registry).route(context).needs_manual_selection is True
 
     class BrokenAdapter:
         def rank(self, query: str, candidates: object) -> tuple[object, float]:
@@ -273,6 +272,35 @@ def test_health_and_structured_logging_do_not_expose_secrets() -> None:
     serialized = JsonFormatter().format(record)
     assert "secret" not in serialized
     assert json.loads(serialized)["event"] == "provider.call"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("get", "/v1/projects/project/text-review-batches", None),
+        ("get", "/v1/projects/project/skill-route-decisions", None),
+        ("get", "/v1/catalog", None),
+        ("get", "/v1/projects/project/episodes/episode/storyboard", None),
+        (
+            "post",
+            "/v1/video-operations/poll",
+            {"runId": "run", "logicalOperation": "video.generate"},
+        ),
+    ],
+)
+def test_unconfigured_business_dependencies_return_stable_503(
+    method: str, path: str, payload: dict[str, object] | None
+) -> None:
+    client = TestClient(create_app(readiness_probe=lambda: True))
+    response = client.request(
+        method,
+        path,
+        json=payload,
+        headers={"X-Project-Scope": "project"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["type"] == "database_unavailable"
 
 
 async def test_database_readiness_probe_uses_a_non_mutating_query() -> None:

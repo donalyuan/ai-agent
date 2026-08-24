@@ -1,0 +1,68 @@
+{
+  "stage": "S08a asset center",
+  "change": "implement-project-asset-center",
+  "owner": ["Assets", "Storage", "Media", "usage", "Project Asset Center"],
+  "profile": "Mock Provider + explicit Local test/offline",
+  "adapter": "local_workspace",
+  "prerequisites": [
+    "selected project c705ec60-b7cd-4964-8985-c2188ceb4082",
+    "API/PostgreSQL/Workers/Web Compose services healthy",
+    "Local storage profile available"
+  ],
+  "navigation": [
+    "/projects -> project workbench -> 项目资产",
+    "项目资产 -> 交给 Timeline -> explicit episode selection page"
+  ],
+  "successEvidence": {
+    "catalog": {
+      "initialItems": 2,
+      "filteredImageItems": 1,
+      "filterMutationCount": 0,
+      "cursor": "(updatedAt,id)"
+    },
+    "upload": {
+      "reservation": "7b8f6ef1-ba2f-4b74-8bd3-42192e2c342f",
+      "interruptedAt": "complete request rejected by strict manifest validation",
+      "diagnostic": "422 additionalProperties=false mismatch was fixed by projecting part receipts",
+      "resumedFromSameReservation": true,
+      "registeredAssetVersionCount": 1,
+      "duplicateRegistrationReused": true,
+      "actualAudio": {
+        "assetId": "f10b1ed7-49cb-4ab0-ab66-a1b32faa13a9",
+        "assetVersionId": "0d1ffe12-8747-4b10-afff-193de2e01460",
+        "mimeType": "audio/wav",
+        "sizeBytes": 137134,
+        "mediaStatus": "pending"
+      }
+    },
+    "audioPreview": {
+      "contractTest": "apps/web/src/pages/AssetCenterPage.test.tsx",
+      "readyDerivativeRequired": true,
+      "opaqueGrantTtlSeconds": 120,
+      "persistentMediaUrl": false,
+      "liveAudioDerivative": "unconfigured"
+    },
+    "usage": {
+      "status": "complete",
+      "references": 0,
+      "unknownOwnerIsNotReportedAsEmpty": true
+    },
+    "timelineHandoff": {
+      "assetVersionId": "715d9d13-fe70-49c1-a085-5a2083bcc665",
+      "assetVersionRevision": 0,
+      "assetVersionHash": "bcd9d6fd462d4a586424178e1685dbd94fe0191431cd647e5a2ee1164f7b98f3",
+      "target": "/projects/c705ec60-b7cd-4964-8985-c2188ceb4082/episodes/select/timeline"
+    },
+    "artifacts": [
+      "output/playwright/asset-center-desktop.png",
+      "output/playwright/asset-center-mobile.png",
+      "output/playwright/asset-center-upload-modal.png",
+      "output/playwright/asset-center-upload-complete.png"
+    ]
+  },
+  "focusedFailure": "F08a asset_center_upload_or_projection_failed",
+  "noSideEffectInvariant": "读取、筛选、usage、页面切 tab 不创建 UploadSession、ProviderCall、RunEvent、AssetVersion 或 Timeline 引用；complete 失败后恢复只登记一个版本。",
+  "liveProvider": "unconfigured",
+  "liveTos": "unconfigured",
+  "liveRenderer": "unconfigured"
+}

@@ -1,0 +1,81 @@
+{
+  "id": "00000000-0000-4000-8000-000000000109",
+  "schema_version": "1.0.0",
+  "revision": 1,
+  "projectId": "00000000-0000-4000-8000-000000000001",
+  "exportProfile": "light",
+  "settings": {
+    "aspectRatio": "9:16",
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "container": "mp4",
+    "videoCodec": "h264",
+    "pixelFormat": "yuv420p",
+    "audioCodec": "aac",
+    "sampleRate": 48000,
+    "subtitleEncoding": "UTF-8"
+  },
+  "status": "queued",
+  "jobs": [
+    {
+      "id": "00000000-0000-4000-8000-000000000106",
+      "projectId": "00000000-0000-4000-8000-000000000001",
+      "episodeId": "00000000-0000-4000-8000-000000000002",
+      "timelineVersionId": "00000000-0000-4000-8000-000000000102",
+      "batchId": "00000000-0000-4000-8000-000000000109",
+      "revision": 4,
+      "status": "queued",
+      "packagingPhase": null,
+      "logicalOperation": "export:initial",
+      "renderPlanHash": null,
+      "rendererDiagnostic": null,
+      "diagnostics": [],
+      "artifacts": [
+        {
+          "id": "00000000-0000-4000-8000-000000000104",
+          "artifactType": "mp4",
+          "status": "pending",
+          "sizeBytes": null,
+          "checksum": null,
+          "mimeType": null,
+          "hold": false,
+          "licenseStatus": "approved",
+          "expiresAt": "2999-12-31T23:59:59Z"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000105",
+          "artifactType": "srt",
+          "status": "pending",
+          "sizeBytes": null,
+          "checksum": null,
+          "mimeType": null,
+          "hold": false,
+          "licenseStatus": "approved",
+          "expiresAt": "2999-12-31T23:59:59Z"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000107",
+          "artifactType": "light_manifest",
+          "status": "pending",
+          "sizeBytes": null,
+          "checksum": null,
+          "mimeType": null,
+          "hold": false,
+          "licenseStatus": "approved",
+          "expiresAt": "2999-12-31T23:59:59Z"
+        }
+      ]
+    }
+  ],
+  "members": [
+    {
+      "episodeId": "00000000-0000-4000-8000-000000000002",
+      "timelineVersionId": "00000000-0000-4000-8000-000000000102",
+      "timelineVersionRevision": 1,
+      "outputBaseName": "episode-01",
+      "exportJobId": "00000000-0000-4000-8000-000000000106",
+      "status": "queued"
+    }
+  ]
+}
