@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -326,7 +327,120 @@ def test_reservation_register_is_idempotent_and_public_responses_are_safe() -> N
     )
     assert selection.status_code == 200
     assert selection.json()["assetVersionHash"] == version.content_hash
+    assert selection.json()["derivativeFingerprint"] == derivative.source_fingerprint
+    assert selection.json()["availableFrames"] == inspection.metadata["durationFrames"]
     assert "objectKey" not in selection.text
+
+    timeline_before = (len(uow.state.timeline_cuts), len(uow.state.timeline_versions))
+
+    # Timeline consumes only proxy derivatives. A same-source non-proxy must not
+    # change the selected inspection or its canonical frame count.
+    non_proxy_inspection = MediaInspection(
+        project["id"],
+        version.id,
+        version.revision,
+        version.content_hash,
+        "ready",
+        {
+            **_media_metadata(version.content_hash),
+            "durationFrames": inspection.metadata["durationFrames"] + 10,
+        },
+        "ffprobe",
+        "7.1",
+        "inspect:http:keyframe-index",
+    )
+    index_bytes = b"keyframe-index"
+    non_proxy_derivative = MediaDerivative(
+        project["id"],
+        non_proxy_inspection.id,
+        version.id,
+        version.revision,
+        version.content_hash,
+        source_fingerprint(version.id, version.revision, version.content_hash),
+        "keyframe_index",
+        "ready",
+        {"index": "keyframes"},
+        "ffmpeg",
+        "7.1",
+        "derive:http:keyframe-index",
+        object_ref={
+            "profileId": "local-test-offline",
+            "objectKey": f"projects/{project['id']}/keyframe-index.json",
+            "operationKey": "derive:http:keyframe-index",
+        },
+        checksum=hashlib.sha256(index_bytes).hexdigest(),
+        size_bytes=len(index_bytes),
+    )
+    uow.state.media_inspections[non_proxy_inspection.id] = non_proxy_inspection
+    uow.state.media_derivatives[non_proxy_derivative.id] = non_proxy_derivative
+    mixed_selection = client.post(
+        f"/v1/projects/{project['id']}/asset-versions/{version.id}/timeline-selection",
+        json={"episodeId": episode["id"], "schemaVersion": SCHEMA},
+    )
+    assert mixed_selection.status_code == 200
+    assert mixed_selection.json()["derivativeFingerprint"] == derivative.source_fingerprint
+    assert mixed_selection.json()["availableFrames"] == inspection.metadata["durationFrames"]
+
+    uow.state.media_derivatives.pop(derivative.id)
+    non_proxy_only = client.post(
+        f"/v1/projects/{project['id']}/asset-versions/{version.id}/timeline-selection",
+        json={"episodeId": episode["id"], "schemaVersion": SCHEMA},
+    )
+    assert non_proxy_only.status_code == 422
+    assert timeline_before == (
+        len(uow.state.timeline_cuts),
+        len(uow.state.timeline_versions),
+    )
+    uow.state.media_derivatives[derivative.id] = derivative
+
+    for invalid_frame_count in (True, 0, "3"):
+        object.__setattr__(
+            uow.state.media_inspections[inspection.id],
+            "metadata",
+            {
+                **uow.state.media_inspections[inspection.id].metadata,
+                "durationFrames": invalid_frame_count,
+            },
+        )
+        rejected = client.post(
+            f"/v1/projects/{project['id']}/asset-versions/{version.id}/timeline-selection",
+            json={"episodeId": episode["id"], "schemaVersion": SCHEMA},
+        )
+        assert rejected.status_code == 422
+
+    uow.state.media_inspections.pop(inspection.id)
+    missing_inspection = client.post(
+        f"/v1/projects/{project['id']}/asset-versions/{version.id}/timeline-selection",
+        json={"episodeId": episode["id"], "schemaVersion": SCHEMA},
+    )
+    assert missing_inspection.status_code == 422
+
+    mismatched_hash = hashlib.sha256(b"mismatched-inspection").hexdigest()
+    mismatched_inspection = MediaInspection(
+        project["id"],
+        version.id,
+        version.revision,
+        mismatched_hash,
+        "ready",
+        _media_metadata(mismatched_hash),
+        "ffprobe",
+        "7.1",
+        "inspect:http:mismatched",
+    )
+    uow.state.media_inspections[mismatched_inspection.id] = mismatched_inspection
+    uow.state.media_derivatives[derivative.id] = replace(
+        uow.state.media_derivatives[derivative.id],
+        inspection_id=mismatched_inspection.id,
+    )
+    mismatched_inspection_response = client.post(
+        f"/v1/projects/{project['id']}/asset-versions/{version.id}/timeline-selection",
+        json={"episodeId": episode["id"], "schemaVersion": SCHEMA},
+    )
+    assert mismatched_inspection_response.status_code == 422
+    assert timeline_before == (
+        len(uow.state.timeline_cuts),
+        len(uow.state.timeline_versions),
+    )
 
     access_token = grant.json()["accessPath"].rsplit("/", 1)[1]
     client.app.state.opaque_read_grants.resolve(access_token, now=grant.json()["expiresAt"] - 1)

@@ -58,7 +58,16 @@ test("shared project navigation stays read-only and renders the fixed workflow p
   await expect(page.getByText("Mock + Local offline")).toBeVisible();
   await expect(page.getByText("adapter: local_workspace")).toBeVisible();
   await page.getByRole("tab", { name: "Workflow source" }).click();
-  await expect(page.locator(".workflow-node")).toHaveCount(300);
+  await expect(page.getByTestId("workflow-projection")).toHaveAttribute(
+    "data-node-count",
+    "300",
+  );
+  await expect
+    .poll(() => page.locator(".react-flow__node").count())
+    .toBeGreaterThan(0);
+  await expect
+    .poll(() => page.locator(".react-flow__node").count())
+    .toBeLessThan(300);
 
   const routes = [
     ["候选审核", "候选审片台"],

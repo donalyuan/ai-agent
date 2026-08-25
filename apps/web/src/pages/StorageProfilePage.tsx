@@ -86,7 +86,7 @@ export function StorageProfilePage() {
   });
   if (!storageProfileId)
     return (
-      <section className="page-body">
+      <section className="mx-auto flex w-full max-w-screen-2xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
         <PageIntro
           eyebrow="STORAGE PROFILE"
           title="需要显式选择 profile"
@@ -95,7 +95,7 @@ export function StorageProfilePage() {
       </section>
     );
   return (
-    <section className="page-body">
+    <section className="mx-auto flex w-full max-w-screen-2xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <PageIntro
         eyebrow="STORAGE PROFILE / OWNER"
         title="存储连接"
@@ -109,13 +109,13 @@ export function StorageProfilePage() {
           const get = <K extends keyof Profile>(key: K) =>
             draft[key] ?? value[key];
           return (
-            <section className="surface storage-profile-form">
-              <div className="setting-note">
+            <section className="rounded-lg border border-border bg-card p-5 shadow-sm rounded-lg border border-border bg-card p-5 shadow-sm">
+              <div className="rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground">
                 <LockKeyhole size={15} /> credential:{" "}
                 <strong>{value.credentialStatus}</strong>{" "}
                 {value.credentialSummary ?? ""}
               </div>
-              <label className="setting-line">
+              <label className="grid gap-1 text-sm">
                 <span>名称</span>
                 <input
                   value={String(get("name"))}
@@ -124,7 +124,7 @@ export function StorageProfilePage() {
                   }
                 />
               </label>
-              <label className="setting-line">
+              <label className="grid gap-1 text-sm">
                 <span>Endpoint</span>
                 <input
                   value={String(get("endpoint"))}
@@ -133,7 +133,7 @@ export function StorageProfilePage() {
                   }
                 />
               </label>
-              <label className="setting-line">
+              <label className="grid gap-1 text-sm">
                 <span>Bucket</span>
                 <input
                   value={String(get("bucket"))}
@@ -142,7 +142,7 @@ export function StorageProfilePage() {
                   }
                 />
               </label>
-              <label className="setting-line">
+              <label className="grid gap-1 text-sm">
                 <span>Region</span>
                 <input
                   value={String(get("region"))}
@@ -151,7 +151,7 @@ export function StorageProfilePage() {
                   }
                 />
               </label>
-              <label className="setting-line">
+              <label className="grid gap-1 text-sm">
                 <span>Presign TTL</span>
                 <input
                   type="number"
@@ -166,9 +166,9 @@ export function StorageProfilePage() {
                   }
                 />
               </label>
-              <div className="setting-actions">
+              <div className="flex flex-wrap gap-2">
                 <button
-                  className="primary-button"
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
                   onClick={() =>
                     update.mutate({
                       name: get("name"),
@@ -191,24 +191,24 @@ export function StorageProfilePage() {
                   <Save size={15} /> 保存
                 </button>
                 <button
-                  className="secondary-button"
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
                   onClick={() => toggle.mutate(!value.enabled)}
                 >
                   {value.enabled ? "停用" : "启用"}
                 </button>
                 <button
-                  className="secondary-button"
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
                   onClick={() => test.mutate()}
                 >
                   <PlugZap size={15} /> connection-test
                 </button>
               </div>
               {diagnostic && (
-                <div className="warning-line">
+                <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                   <CircleAlert size={14} /> {diagnostic}
                 </div>
               )}
-              <small className="mono">
+              <small className="font-mono text-xs text-muted-foreground">
                 {value.storageProfileId} / rev {value.revision} / project{" "}
                 {projectId}
               </small>

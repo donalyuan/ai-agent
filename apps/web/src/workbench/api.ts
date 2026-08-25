@@ -375,6 +375,7 @@ export const workbenchApi = {
     );
   },
   async decideTextReview(
+    projectId: string,
     batchId: string,
     expectedRevision: number,
     action: "accept" | "reject" | "retake",
@@ -382,14 +383,19 @@ export const workbenchApi = {
     return normalizeOwnerPayload(
       await request(`/v1/text-review-batches/${batchId}/decision`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          ...ownerHeaders(projectId),
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ expectedRevision, action }),
       }),
     );
   },
-  async getMediaGate(handoffId: string) {
+  async getMediaGate(projectId: string, handoffId: string) {
     return normalizeOwnerPayload(
-      await request(`/v1/text-handoffs/${handoffId}/media-gate`),
+      await request(`/v1/text-handoffs/${handoffId}/media-gate`, {
+        headers: ownerHeaders(projectId),
+      }),
     ) as {
       status: "ready" | "blocked";
       handoffId: string;

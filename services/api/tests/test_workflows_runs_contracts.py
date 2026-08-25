@@ -21,16 +21,10 @@ API_PACKAGE = ROOT / "services/api/src/video_agent_api"
 
 
 def test_workflows_change_traces_plan_and_shared_exit_requirements() -> None:
-    plan = (
-        ROOT / "openspec/changes/archive/2026-08-24-plan-phase-one-drama-mvp-a/tasks.md"
-    ).read_text()
-    tasks = (
-        ROOT / "openspec/changes/archive/2026-08-24-implement-workflows-runs-slice/tasks.md"
-    ).read_text()
+    plan = (ROOT / "openspec/changes/plan-phase-one-drama-mvp-a/tasks.md").read_text()
+    tasks = (ROOT / "openspec/changes/implement-workflows-runs-slice/tasks.md").read_text()
     spec = (
-        ROOT
-        / "openspec/changes/archive/2026-08-24-implement-workflows-runs-slice"
-        / "specs/workflows-runs/spec.md"
+        ROOT / "openspec/changes/implement-workflows-runs-slice" / "specs/workflows-runs/spec.md"
     ).read_text()
     assert "2.2 实施 `implement-workflows-runs-slice`" in plan
     for shared in ("5.1", "5.2", "5.3", "5.5"):

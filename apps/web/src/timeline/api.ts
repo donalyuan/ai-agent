@@ -137,6 +137,29 @@ export const timelineApi = {
         },
       ),
     ),
+  preflightPublish: async (
+    projectId: string,
+    episodeId: string,
+    expectedRevision: number,
+    name: string,
+  ) =>
+    request(
+      `/v1/projects/${projectId}/episodes/${episodeId}/timeline/versions/preflight`,
+      {
+        method: "POST",
+        headers: { ...scope(projectId), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expectedRevision,
+          name,
+          schemaVersion: "1.0.0",
+        }),
+      },
+    ) as Promise<{
+      cutId: string;
+      expectedRevision: number;
+      timelineFingerprint: string;
+      name: string;
+    }>,
   probeRenderer: async (projectId: string) =>
     request(`/v1/projects/${projectId}/renderer/probe`, {
       headers: scope(projectId),

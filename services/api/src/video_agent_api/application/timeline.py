@@ -41,6 +41,15 @@ class PublishTimelineCommand:
     name: str
 
 
+@dataclass(frozen=True, slots=True)
+class TimelinePublishPreflight:
+    """Read-only owner result used before a user confirms publication."""
+
+    cut_id: str
+    expected_revision: int
+    timeline_fingerprint: str
+
+
 def timeline_cut_projection(cut: TimelineCut) -> dict[str, object]:
     return {
         "id": cut.id,
@@ -219,6 +228,29 @@ class TimelineService:
             )
             await uow.commit()
             return version
+
+    async def preflight_publish(
+        self,
+        episode_id: str,
+        expected_revision: int,
+        project_id: str | None = None,
+    ) -> TimelinePublishPreflight:
+        """Validate the exact current Cut without creating a TimelineVersion."""
+        async with self._uow_factory() as uow:
+            episode = await uow.episodes.get(episode_id)
+            if episode is None or (project_id is not None and episode.project_id != project_id):
+                raise EpisodeNotFoundError(episode_id)
+            cut = uow.timeline_cuts.get(episode_id)
+            if cut is None:
+                raise ValidationDomainError("current Cut has not been persisted")
+            if expected_revision != cut.revision:
+                raise RevisionConflictError(cut.id, expected_revision, cut.revision)
+            self._preflight(cut)
+            return TimelinePublishPreflight(
+                cut_id=cut.id,
+                expected_revision=cut.revision,
+                timeline_fingerprint=cut.fingerprint(),
+            )
 
     async def get_version(
         self, project_id: str, episode_id: str, version_id: str

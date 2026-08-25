@@ -390,6 +390,117 @@ describe("AssetEdit Review page", () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method)).toEqual([]);
   });
 
+  it("keeps accept disabled unless the plan impact is clear", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/projects/project-1/review?episodeId=episode-1&sessionId=session-1",
+    );
+    const stale = JSON.parse(JSON.stringify(ownerSession())) as {
+      plans: Array<{
+        impact: {
+          id: string | null;
+          status: string;
+          reasons: string[];
+          staleTargets: string[];
+        };
+      }>;
+    };
+    stale.plans[0].impact = {
+      id: "impact-1",
+      status: "stale",
+      reasons: ["target changed"],
+      staleTargets: ["shot-1"],
+    };
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith("/health/ready")) return response({ status: "ready" });
+      if (path.includes("text-review-batches")) return response([]);
+      if (path.endsWith("/asset-edit-sessions/session-1"))
+        return response(stale);
+      if (path.includes("asset-edit-sessions?"))
+        return response({
+          schemaVersion: "1.0.0",
+          items: [
+            {
+              id: "session-1",
+              revision: 1,
+              projectId: "project-1",
+              episodeId: "episode-1",
+              targetId: "shot-1",
+              status: "active",
+            },
+          ],
+        });
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    expect(await screen.findByText("target changed")).toBeVisible();
+    expect(screen.getByRole("button", { name: "接受候选" })).toBeDisabled();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method)).toEqual([]);
+  });
+
+  it("refetches the authoritative session after a candidate 409 without retrying", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/projects/project-1/review?episodeId=episode-1&sessionId=session-1",
+    );
+    let sessionReads = 0;
+    const fetchMock = vi
+      .fn()
+      .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (path.endsWith("/health/ready"))
+          return response({ status: "ready" });
+        if (path.includes("text-review-batches")) return response([]);
+        if (path.endsWith("/asset-edit-sessions/session-1")) {
+          sessionReads += 1;
+          return response(ownerSession());
+        }
+        if (path.includes("asset-edit-sessions?"))
+          return response({
+            schemaVersion: "1.0.0",
+            items: [
+              {
+                id: "session-1",
+                revision: 1,
+                projectId: "project-1",
+                episodeId: "episode-1",
+                targetId: "shot-1",
+                status: "active",
+              },
+            ],
+          });
+        if (
+          path.endsWith("/asset-edit-candidates/candidate-1/review") &&
+          init?.method === "POST"
+        )
+          return response(
+            {
+              detail: { type: "revision_conflict", message: "stale candidate" },
+            },
+            false,
+            409,
+          );
+        return response({});
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "接受候选" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认接受" }));
+    await waitFor(() => expect(sessionReads).toBeGreaterThan(1));
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input, init]) =>
+          String(input).endsWith("/asset-edit-candidates/candidate-1/review") &&
+          init?.method === "POST",
+      ),
+    ).toHaveLength(1);
+    expect(await screen.findByText("stale candidate")).toBeVisible();
+  });
+
   it("rejects a foreign Episode session before reading it and never falls back", async () => {
     window.history.pushState(
       {},

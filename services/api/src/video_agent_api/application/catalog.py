@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, replace
 from typing import Any, cast
+from uuid import uuid4
 
 from video_agent_api.domain.catalog import (
     CapabilitySnapshot,
@@ -16,6 +17,7 @@ from video_agent_api.domain.catalog import (
 )
 from video_agent_api.domain.errors import (
     CredentialMasterKeyUnavailableError,
+    RevisionConflictError,
     ValidationDomainError,
 )
 from video_agent_api.domain.provider_ops import (
@@ -139,6 +141,8 @@ class ReplaceCredentialCommand:
 class ModelSyncCommand:
     profile_id: str
     remote_models: tuple[str, ...]
+    expected_revision: int | None = None
+    source: str = "explicit_input"
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,7 +283,7 @@ class CatalogService:
             if profile is None:
                 raise ValidationDomainError("profile not found")
             if expected_revision != profile.revision:
-                raise ValidationDomainError("revision conflict")
+                raise RevisionConflictError(profile.id, expected_revision, profile.revision)
             required = {"maxConcurrency", "rateLimit", "rateWindowSeconds"}
             if set(policy) != required or any(int(str(policy[key])) < 1 for key in required):
                 raise ValidationDomainError("operation policy is invalid")
@@ -522,7 +526,20 @@ class CatalogService:
             provider = uow.providers.get(command.entity_id)
             if provider is None:
                 raise ValidationDomainError("provider not found")
-            provider.update(command.expected_revision, **command.changes)
+            changes = self._normalize_changes(
+                command.changes,
+                {
+                    "name",
+                    "adapter_key",
+                    "approval",
+                    "feature_gate",
+                    "adapter_installed",
+                    "enabled",
+                },
+            )
+            if changes.get("enabled") is True:
+                self._require_provider_runnable(provider)
+            provider.update(command.expected_revision, **changes)
             await uow.commit()
             return cast(Provider, provider)
 
@@ -531,7 +548,37 @@ class CatalogService:
             profile = uow.profiles.get(command.entity_id)
             if profile is None:
                 raise ValidationDomainError("profile not found")
-            profile.update(command.expected_revision, **command.changes)
+            changes = self._normalize_changes(
+                command.changes,
+                {
+                    "name",
+                    "adapter_identity",
+                    "enabled",
+                    "explicit_live_opt_in",
+                    "operation_policies",
+                },
+            )
+            if changes.get("enabled") is True:
+                provider = uow.providers.get(profile.provider_id)
+                if provider is None or not provider.enabled:
+                    raise ValidationDomainError("provider_disabled")
+                if profile.adapter_identity != "local_workspace" and (
+                    not profile.explicit_live_opt_in or profile.credential_status != "configured"
+                ):
+                    raise ValidationDomainError("live_provider_unconfigured")
+            policy_changes = command.changes.get("operationPolicies")
+            if policy_changes is None:
+                policy_changes = command.changes.get("operation_policies")
+            if policy_changes is not None:
+                self._validate_operation_policies(policy_changes)
+            profile.update(command.expected_revision, **changes)
+            if policy_changes is not None:
+                profile.operation_policies = {
+                    str(operation): dict(policy)
+                    for operation, policy in cast(
+                        dict[str, dict[str, object]], policy_changes
+                    ).items()
+                }
             await uow.commit()
             return cast(ProviderProfile, profile)
 
@@ -540,9 +587,114 @@ class CatalogService:
             model = uow.models.get(command.entity_id)
             if model is None:
                 raise ValidationDomainError("model not found")
-            model.update(command.expected_revision, **command.changes)
+            model.update(
+                command.expected_revision,
+                **self._normalize_changes(command.changes, {"model_key", "enabled"}),
+            )
             await uow.commit()
             return cast(Model, model)
+
+    @staticmethod
+    def _normalize_changes(changes: dict[str, object], allowed: set[str]) -> dict[str, object]:
+        aliases = {
+            "adapterKey": "adapter_key",
+            "featureGate": "feature_gate",
+            "adapterInstalled": "adapter_installed",
+            "explicitLiveOptIn": "explicit_live_opt_in",
+            "modelKey": "model_key",
+            "operationPolicies": "operation_policies",
+        }
+        normalized = {aliases.get(key, key): value for key, value in changes.items()}
+        unknown = set(normalized) - allowed
+        if unknown:
+            raise ValidationDomainError(f"unknown catalog field: {sorted(unknown)[0]}")
+        return normalized
+
+    @staticmethod
+    def _validate_operation_policies(value: object) -> None:
+        if not isinstance(value, dict):
+            raise ValidationDomainError("operation policy is invalid")
+        required = {"maxConcurrency", "rateLimit", "rateWindowSeconds"}
+        for operation, policy in value.items():
+            if not isinstance(operation, str) or not isinstance(policy, dict):
+                raise ValidationDomainError("operation policy is invalid")
+            if set(policy) != required:
+                raise ValidationDomainError("operation policy is invalid")
+            try:
+                if any(int(str(policy[key])) < 1 for key in required):
+                    raise ValueError
+            except (TypeError, ValueError) as error:
+                raise ValidationDomainError("operation policy is invalid") from error
+
+    @staticmethod
+    def _require_provider_runnable(provider: Provider) -> None:
+        if (
+            provider.approval != "approved"
+            or provider.feature_gate != "MVP-A"
+            or not provider.adapter_installed
+        ):
+            raise ValidationDomainError("provider_unconfigured")
+
+    async def set_provider_enabled(
+        self, entity_id: str, expected_revision: int, enabled: bool
+    ) -> Provider:
+        return await self.update_provider(
+            UpdateCatalogCommand(entity_id, expected_revision, {"enabled": enabled})
+        )
+
+    async def set_profile_enabled(
+        self, entity_id: str, expected_revision: int, enabled: bool
+    ) -> ProviderProfile:
+        return await self.update_profile(
+            UpdateCatalogCommand(entity_id, expected_revision, {"enabled": enabled})
+        )
+
+    async def set_model_enabled(
+        self, entity_id: str, expected_revision: int, enabled: bool
+    ) -> Model:
+        async with self._uow_factory() as uow:
+            model = uow.models.get(entity_id)
+            if model is None:
+                raise ValidationDomainError("model not found")
+            if enabled:
+                profile = uow.profiles.get(model.profile_id)
+                provider = uow.providers.get(profile.provider_id) if profile else None
+                if (
+                    profile is None
+                    or provider is None
+                    or not profile.enabled
+                    or not provider.enabled
+                ):
+                    raise ValidationDomainError("catalog_resource_disabled")
+                if not any(snapshot.runnable for snapshot in profile.capability_snapshots.values()):
+                    raise ValidationDomainError("capability_snapshot_unavailable")
+            model.update(expected_revision, enabled=enabled)
+            await uow.commit()
+            return cast(Model, model)
+
+    async def set_skill_enabled(
+        self, entity_id: str, expected_revision: int, enabled: bool
+    ) -> SkillRevisionRecord:
+        async with self._uow_factory() as uow:
+            current = next((item for item in uow.skills if item.id == entity_id), None)
+            if current is None:
+                raise ValidationDomainError("skill revision not found")
+            if current.revision != expected_revision:
+                raise RevisionConflictError(current.id, expected_revision, current.revision)
+            if enabled and (
+                current.approval != "approved" or current.provenance != "verified_snapshot"
+            ):
+                raise ValidationDomainError("skill_not_approved")
+            updated = replace(
+                current,
+                id=str(uuid4()),
+                revision=current.revision + 1,
+                enabled=enabled,
+            )
+            # SkillRevision rows are immutable; a lifecycle toggle is a new owner revision.
+            uow.skills.append(updated)
+            await uow.commit()
+            return updated
 
     async def disable_model(self, entity_id: str, expected_revision: int) -> Model:
         async with self._uow_factory() as uow:
@@ -570,7 +722,7 @@ class CatalogService:
             if model is None:
                 raise ValidationDomainError("model not found")
             if model.revision != expected_revision:
-                raise ValidationDomainError("revision conflict")
+                raise RevisionConflictError(model.id, expected_revision, model.revision)
             if not all(
                 hasattr(uow, field)
                 for field in (
@@ -618,12 +770,18 @@ class CatalogService:
             await uow.commit()
 
     async def snapshot(
-        self, profile_id: str, operation: str, runnable: bool = True
+        self,
+        profile_id: str,
+        operation: str,
+        runnable: bool = True,
+        expected_revision: int | None = None,
     ) -> CapabilitySnapshot:
         async with self._uow_factory() as uow:
             profile = uow.profiles.get(profile_id)
             if profile is None:
                 raise ValidationDomainError("profile not found")
+            if expected_revision is not None and profile.revision != expected_revision:
+                raise RevisionConflictError(profile.id, expected_revision, profile.revision)
             provider = uow.providers.get(profile.provider_id)
             if (
                 provider is None
@@ -702,9 +860,17 @@ class CatalogService:
             return {"status": "rotated", "count": len(replacements), "keyVersion": target.version}
 
     async def preview_model_sync(self, command: ModelSyncCommand) -> ModelSyncCandidate:
+        if command.source != "explicit_input":
+            raise ValidationDomainError("model sync source must be explicit_input")
         async with self._uow_factory() as uow:
-            if command.profile_id not in uow.profiles:
+            profile = uow.profiles.get(command.profile_id)
+            if profile is None:
                 raise ValidationDomainError("profile not found")
+            if (
+                command.expected_revision is not None
+                and profile.revision != command.expected_revision
+            ):
+                raise RevisionConflictError(profile.id, command.expected_revision, profile.revision)
             if len(command.remote_models) != len(set(command.remote_models)):
                 raise ValidationDomainError("model sync candidate contains duplicates")
             local = {
@@ -736,7 +902,7 @@ class CatalogService:
                 or candidate.revision != expected_revision
                 or candidate.status != "pending"
             ):
-                raise ValidationDomainError("model sync candidate is stale")
+                raise RevisionConflictError(candidate.id, expected_revision, candidate.revision)
             if decision == "accept":
                 for key in candidate.added:
                     model = Model(candidate.profile_id, key)
@@ -764,7 +930,9 @@ class CatalogService:
             revisions = [item for item in uow.skills if item.name == command.name]
             current_revision = max((item.revision for item in revisions), default=0)
             if current_revision != command.expected_revision:
-                raise ValidationDomainError("skill revision conflict")
+                raise RevisionConflictError(
+                    command.name, command.expected_revision, current_revision
+                )
             if command.source_type == "git" and "commit:" not in command.source_identity:
                 raise ValidationDomainError("git skill source requires commit identity")
             if (
@@ -798,9 +966,14 @@ class CatalogService:
             )
             if skill is None:
                 raise ValidationDomainError("skill revision not found")
+            current = max(
+                (item for item in uow.skills if item.name == skill.name),
+                key=lambda item: item.revision,
+            )
             allowed = command.access == "metadata" or (
                 command.access in {"content", "reference"}
                 and command.selected
+                and skill.id == current.id
                 and skill.enabled
                 and skill.approval == "approved"
             )
@@ -877,11 +1050,39 @@ class CatalogService:
 
     async def projection(self) -> dict[str, object]:
         async with self._uow_factory() as uow:
+            operation_schemas: dict[str, dict[str, object]] = {
+                profile.id: {} for profile in uow.profiles.values()
+            }
+            for model in uow.models.values():
+                raw_schema = getattr(model, "parameter_schema", None)
+                if not isinstance(raw_schema, dict) or not raw_schema:
+                    continue
+                profile_id = getattr(model, "profile_id", None)
+                if profile_id not in operation_schemas:
+                    continue
+                if isinstance(raw_schema.get("properties"), dict):
+                    profile = uow.profiles[profile_id]
+                    operations = set(profile.operation_policies) | set(profile.capability_snapshots)
+                    for operation in operations:
+                        operation_schemas[profile_id][operation] = dict(raw_schema)
+                else:
+                    for operation, schema in raw_schema.items():
+                        if isinstance(operation, str) and isinstance(schema, dict):
+                            operation_schemas[profile_id][operation] = dict(schema)
             return {
+                "schema_version": "1.0.0",
                 "providers": list(uow.providers.values()),
                 "profiles": list(uow.profiles.values()),
                 "models": list(uow.models.values()),
-                "skills": list(uow.skills),
+                # History stays append-only; settings consumers resolve one current
+                # lifecycle row per skill name.
+                "skills": list(
+                    {
+                        item.name: item
+                        for item in sorted(uow.skills, key=lambda value: value.revision)
+                    }.values()
+                ),
+                "profile_parameter_schemas": operation_schemas,
                 "credentialStatuses": {
                     profile_id: dict(masked_credential_status(envelope))
                     for profile_id, envelope in uow.credential_envelopes.items()

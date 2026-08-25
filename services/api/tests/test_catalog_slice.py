@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from alembic.config import Config
@@ -387,3 +388,89 @@ def test_catalog_http_rejects_plaintext_without_master_key() -> None:
     assert response.status_code == 503
     assert response.json()["detail"]["type"] == "credential_master_key_unavailable"
     assert "must-not-leak" not in response.text
+
+
+def test_catalog_projection_exposes_owner_parameter_schemas_without_probe() -> None:
+    uow = InMemoryUnitOfWork()
+    projects = ProjectsEpisodesService(lambda: uow)
+    app = create_app(readiness_probe=lambda: True, projects_episodes_service=projects)
+    with TestClient(app) as client:
+        response = client.get("/v1/catalog")
+        assert response.status_code == 200
+        payload = response.json()
+        profile = payload["profiles"][0]
+        assert payload["schemaVersion"] == "1.0.0"
+        assert payload["profileParameterSchemas"][profile["id"]] == {}
+
+        uow.models["owner-model"] = SimpleNamespace(
+            id="owner-model",
+            profile_id=profile["id"],
+            enabled=True,
+            parameter_schema={
+                "image.generate": {
+                    "type": "object",
+                    "properties": {"prompt": {"type": "string"}},
+                }
+            },
+        )
+        response = client.get("/v1/catalog")
+
+    assert response.status_code == 200
+    payload = response.json()
+    schema = payload["profileParameterSchemas"][profile["id"]]["image.generate"]
+    assert schema["properties"]["prompt"]["type"] == "string"
+    assert "maxConcurrency" not in schema["properties"]
+    assert uow.audit_events == [] and uow.provider_calls == {}
+
+
+@pytest.mark.asyncio
+async def test_catalog_lifecycle_cas_and_immutable_skill_toggle() -> None:
+    uow = InMemoryUnitOfWork()
+    service = CatalogService(lambda: uow)
+    await service.bootstrap()
+    provider = next(iter(uow.providers.values()))
+    model = next(iter(uow.models.values()))
+    provider_revision = provider.revision
+    disabled_provider = await service.set_provider_enabled(provider.id, provider_revision, False)
+    assert disabled_provider.enabled is False
+    with pytest.raises(RevisionConflictError):
+        await service.set_provider_enabled(provider.id, provider_revision, True)
+    await service.set_provider_enabled(provider.id, disabled_provider.revision, True)
+    disabled_model = await service.set_model_enabled(model.id, model.revision, False)
+    enabled_model = await service.set_model_enabled(model.id, disabled_model.revision, True)
+    assert enabled_model.enabled is True
+
+    original = next(item for item in uow.skills if item.name == "drama-skills")
+    toggled = await service.set_skill_enabled(original.id, original.revision, False)
+    assert original.enabled is True
+    assert toggled.enabled is False and toggled.revision == original.revision + 1
+    assert original.id != toggled.id
+    projection = await service.projection()
+    current = [item for item in projection["skills"] if item.name == original.name]
+    assert len(current) == 1 and current[0].id == toggled.id
+    with pytest.raises(ValidationDomainError, match="not_authorized"):
+        await service.audit_skill_access(
+            AuditSkillAccessCommand(original.id, "run", "node", "content", selected=True)
+        )
+
+
+@pytest.mark.asyncio
+async def test_model_sync_requires_explicit_input_source() -> None:
+    uow = InMemoryUnitOfWork()
+    service = CatalogService(lambda: uow)
+    provider = await service.create_provider(CreateProviderCommand("P", "mock"))
+    profile = await service.create_profile(CreateProfileCommand(provider.id, "Local"))
+    with pytest.raises(ValidationDomainError, match="explicit_input"):
+        await service.preview_model_sync(
+            ModelSyncCommand(profile.id, ("model",), profile.revision, "adapter_discovery")
+        )
+
+
+@pytest.mark.asyncio
+async def test_probe_requires_current_profile_revision() -> None:
+    uow = InMemoryUnitOfWork()
+    service = CatalogService(lambda: uow)
+    await service.bootstrap()
+    profile = next(iter(uow.profiles.values()))
+    with pytest.raises(RevisionConflictError, match="revision conflict"):
+        await service.snapshot(profile.id, "image.generate", expected_revision=profile.revision - 1)

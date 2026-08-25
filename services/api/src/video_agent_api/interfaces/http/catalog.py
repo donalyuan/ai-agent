@@ -76,6 +76,8 @@ class CredentialRequest(_DTO):
 
 class ModelSyncRequest(_DTO):
     remote_models: list[str] = Field(alias="remoteModels")
+    expected_revision: int | None = Field(default=None, alias="expectedRevision", ge=1)
+    source: str = "explicit_input"
 
 
 class ModelSyncDecisionRequest(_DTO):
@@ -96,6 +98,11 @@ class SkillRevisionRequest(_DTO):
 
 class ProbeRequest(_DTO):
     operation: str
+    expected_revision: int | None = Field(default=None, alias="expectedRevision", ge=1)
+
+
+class LifecycleRequest(_DTO):
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
 def _camel(value: str) -> str:
@@ -133,7 +140,7 @@ def _service(request: Request) -> CatalogService:
 
 @router.get("/v1/catalog")
 async def projection(service: Annotated[CatalogService, Depends(_service)]) -> dict[str, object]:
-    return await service.projection()
+    return cast(dict[str, object], _response(await service.projection()))
 
 
 @router.post("/v1/catalog/providers", status_code=201)
@@ -231,14 +238,98 @@ async def update_model(
     )
 
 
+@router.post("/v1/catalog/providers/{provider_id}/enable")
+async def enable_provider(
+    provider_id: str,
+    body: LifecycleRequest,
+    service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> object:
+    return _response(
+        await service.set_provider_enabled(
+            provider_id, _expected(body.expected_revision, if_match), True
+        )
+    )
+
+
+@router.post("/v1/catalog/providers/{provider_id}/disable")
+async def disable_provider(
+    provider_id: str,
+    body: LifecycleRequest,
+    service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> object:
+    return _response(
+        await service.set_provider_enabled(
+            provider_id, _expected(body.expected_revision, if_match), False
+        )
+    )
+
+
+@router.post("/v1/catalog/profiles/{profile_id}/enable")
+async def enable_profile(
+    profile_id: str,
+    body: LifecycleRequest,
+    service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> object:
+    return _response(
+        await service.set_profile_enabled(
+            profile_id, _expected(body.expected_revision, if_match), True
+        )
+    )
+
+
+@router.post("/v1/catalog/profiles/{profile_id}/disable")
+async def disable_profile(
+    profile_id: str,
+    body: LifecycleRequest,
+    service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> object:
+    return _response(
+        await service.set_profile_enabled(
+            profile_id, _expected(body.expected_revision, if_match), False
+        )
+    )
+
+
+@router.post("/v1/catalog/models/{model_id}/enable")
+async def enable_model(
+    model_id: str,
+    body: LifecycleRequest,
+    service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> object:
+    return _response(
+        await service.set_model_enabled(model_id, _expected(body.expected_revision, if_match), True)
+    )
+
+
+@router.post("/v1/catalog/models/{model_id}/disable")
+async def disable_model(
+    model_id: str,
+    body: LifecycleRequest,
+    service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> object:
+    return _response(
+        await service.set_model_enabled(
+            model_id, _expected(body.expected_revision, if_match), False
+        )
+    )
+
+
 @router.put("/v1/catalog/profiles/{profile_id}/credential")
 async def replace_credential(
     profile_id: str,
     body: CredentialRequest,
     service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> dict[str, str]:
+    expected_revision = _expected(body.expected_revision, if_match)
     return await service.replace_credential(
-        ReplaceCredentialCommand(profile_id, body.credential_id, body.value, body.expected_revision)
+        ReplaceCredentialCommand(profile_id, body.credential_id, body.value, expected_revision)
     )
 
 
@@ -254,10 +345,23 @@ async def preview_model_sync(
     profile_id: str,
     body: ModelSyncRequest,
     service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> object:
-    return _response(
-        await service.preview_model_sync(ModelSyncCommand(profile_id, tuple(body.remote_models)))
+    expected_revision = (
+        None if body.expected_revision is None else _expected(body.expected_revision, if_match)
     )
+    candidate = await service.preview_model_sync(
+        ModelSyncCommand(
+            profile_id,
+            tuple(body.remote_models),
+            expected_revision,
+            body.source,
+        )
+    )
+    payload = cast(dict[str, object], _response(candidate))
+    payload["source"] = "explicit_input"
+    payload["discovery"] = "not_performed"
+    return payload
 
 
 @router.post("/v1/catalog/model-syncs/{candidate_id}/decision")
@@ -265,9 +369,12 @@ async def decide_model_sync(
     candidate_id: str,
     body: ModelSyncDecisionRequest,
     service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> object:
     return _response(
-        await service.decide_model_sync(candidate_id, body.expected_revision, body.decision)
+        await service.decide_model_sync(
+            candidate_id, _expected(body.expected_revision, if_match), body.decision
+        )
     )
 
 
@@ -292,13 +399,51 @@ async def append_skill_revision(
     )
 
 
+@router.post("/v1/catalog/skill-revisions/{skill_id}/enable")
+@router.post("/v1/catalog/skills/{skill_id}/enable")
+async def enable_skill(
+    skill_id: str,
+    body: LifecycleRequest,
+    service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> object:
+    return _response(
+        await service.set_skill_enabled(skill_id, _expected(body.expected_revision, if_match), True)
+    )
+
+
+@router.post("/v1/catalog/skill-revisions/{skill_id}/disable")
+@router.post("/v1/catalog/skills/{skill_id}/disable")
+async def disable_skill(
+    skill_id: str,
+    body: LifecycleRequest,
+    service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> object:
+    return _response(
+        await service.set_skill_enabled(
+            skill_id, _expected(body.expected_revision, if_match), False
+        )
+    )
+
+
 @router.post("/v1/catalog/profiles/{profile_id}/probe")
 async def probe_profile(
     profile_id: str,
     body: ProbeRequest,
     service: Annotated[CatalogService, Depends(_service)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> object:
-    return _response(await service.snapshot(profile_id, body.operation))
+    if body.expected_revision is None and if_match is None:
+        raise ValidationDomainError("probe expectedRevision is required")
+    expected_revision = (
+        body.expected_revision
+        if if_match is None
+        else _expected(body.expected_revision or 0, if_match)
+    )
+    return _response(
+        await service.snapshot(profile_id, body.operation, expected_revision=expected_revision)
+    )
 
 
 @router.get("/v1/projects/{project_id}/runs/{run_id}/provider-calls")

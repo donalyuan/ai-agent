@@ -12,5 +12,5 @@ GPT Image operation 在任何 ProviderCall、StoragePort 或 AssetVersion 写入
 
 ## 依据
 
-- [阶段一 Catalog change](../../openspec/changes/archive/2026-08-24-implement-provider-model-skill-catalog/design.md)
-- [GPT Image change](../../openspec/changes/archive/2026-08-24-integrate-gpt-image-provider/design.md)
+- [阶段一 Catalog change](../../openspec/changes/implement-provider-model-skill-catalog/design.md)
+- [GPT Image change](../../openspec/changes/integrate-gpt-image-provider/design.md)

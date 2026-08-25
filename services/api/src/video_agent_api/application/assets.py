@@ -827,16 +827,43 @@ class AssetsService:
             asset = await uow.assets.get(version.asset_id)
             if asset is None or asset.authorization_status != "verified":
                 raise ValidationDomainError("asset selection is unauthorized")
-            ready = any(
-                getattr(item, "project_id", None) == project_id
-                and getattr(item, "asset_version_id", None) == version.id
-                and getattr(item, "asset_version_revision", None) == version.revision
-                and getattr(item, "source_hash", None) == version.content_hash
-                and getattr(item, "status", None) == "ready"
-                for item in uow.media_derivatives.values()
+            derivatives = sorted(
+                (
+                    item
+                    for item in uow.media_derivatives.values()
+                    if getattr(item, "project_id", None) == project_id
+                    and getattr(item, "asset_version_id", None) == version.id
+                    and getattr(item, "asset_version_revision", None) == version.revision
+                    and getattr(item, "source_hash", None) == version.content_hash
+                    and getattr(item, "kind", None) == "proxy"
+                    and getattr(item, "status", None) == "ready"
+                ),
+                key=lambda item: (str(getattr(item, "kind", "")), str(item.id)),
             )
-            if not ready:
+            if not derivatives:
                 raise ValidationDomainError("asset selection derivative is not ready")
+            derivative = derivatives[0]
+            inspection = uow.media_inspections.get(derivative.inspection_id)
+            if (
+                inspection is None
+                or inspection.project_id != project_id
+                or inspection.asset_version_id != version.id
+                or inspection.asset_version_revision != version.revision
+                or inspection.source_hash != version.content_hash
+                or inspection.status != "ready"
+                or inspection.source_fingerprint != derivative.source_fingerprint
+            ):
+                raise ValidationDomainError("asset selection inspection is unavailable")
+            metadata = inspection.metadata
+            available_frames = (
+                metadata.get("durationFrames") if isinstance(metadata, dict) else None
+            )
+            if (
+                isinstance(available_frames, bool)
+                or not isinstance(available_frames, int)
+                or available_frames < 1
+            ):
+                raise ValidationDomainError("asset selection derivative frame count is unavailable")
             if asset.kind in {"image", "video"}:
                 accepted = any(
                     getattr(current, "asset_version_id", None) == version.id
@@ -852,13 +879,20 @@ class AssetsService:
                 )
                 if not accepted:
                     raise ValidationDomainError("asset selection is not accepted current")
-        return {
-            "schemaVersion": "1.0.0",
-            "projectId": project_id,
-            "episodeId": episode_id,
-            "assetVersionId": version.id,
-            "assetVersionRevision": version.revision,
-            "assetVersionHash": version.content_hash,
-            "authorizationStatus": asset.authorization_status,
-            "licenseLabel": asset.license_label,
-        }
+            return {
+                "schemaVersion": "1.0.0",
+                "projectId": project_id,
+                "episodeId": episode_id,
+                "assetVersionId": version.id,
+                "assetVersionRevision": version.revision,
+                "assetVersionHash": version.content_hash,
+                "kind": asset.kind,
+                "authorizationStatus": asset.authorization_status,
+                "licenseLabel": asset.license_label,
+                "licenseStatus": "approved" if asset.license else "unknown",
+                "storageVerified": version.storage_object is not None,
+                "derivativeFingerprint": derivative.source_fingerprint,
+                "acceptedCurrent": True,
+                "derivativeStatus": "ready",
+                "availableFrames": available_frames,
+            }

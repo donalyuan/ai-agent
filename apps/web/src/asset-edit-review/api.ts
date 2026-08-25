@@ -87,7 +87,9 @@ export const assetEditReviewApi = {
   async getAssetVersion(projectId: string, versionId: string) {
     const value = parse(
       assetVersionOwnerSchema,
-      await request(`/v1/asset-versions/${versionId}`),
+      await request(`/v1/asset-versions/${versionId}`, {
+        headers: headers(projectId),
+      }),
     );
     if (
       value.projectId !== projectId ||
@@ -112,7 +114,9 @@ export const assetEditReviewApi = {
     const params = new URLSearchParams({ episodeId });
     return parse(
       sessionIndexSchema,
-      await request(`/v1/projects/${projectId}/asset-edit-sessions?${params}`),
+      await request(`/v1/projects/${projectId}/asset-edit-sessions?${params}`, {
+        headers: headers(projectId),
+      }),
     );
   },
   async getSession(projectId: string, sessionId: string) {
@@ -120,6 +124,7 @@ export const assetEditReviewApi = {
       reviewSessionSchema,
       await request(
         `/v1/projects/${projectId}/asset-edit-sessions/${sessionId}`,
+        { headers: headers(projectId) },
       ),
     );
   },
@@ -150,6 +155,7 @@ export const assetEditReviewApi = {
     return parse(commandResultSchema, payload);
   },
   async appendMessage(
+    projectId: string,
     sessionId: string,
     contentHash: string,
     correlationId: string,
@@ -159,7 +165,7 @@ export const assetEditReviewApi = {
       commandResultSchema,
       await request(`/v1/asset-edit-sessions/${sessionId}/messages`, {
         method: "POST",
-        headers: headers(),
+        headers: headers(projectId),
         body: JSON.stringify({ contentHash, correlationId, expectedRevision }),
       }),
     );
@@ -183,6 +189,7 @@ export const assetEditReviewApi = {
     );
   },
   async executePlan(
+    projectId: string,
     planId: string,
     input: {
       planRevision: number;
@@ -197,12 +204,13 @@ export const assetEditReviewApi = {
       commandResultSchema,
       await request(`/v1/asset-edit-plans/${planId}/execute`, {
         method: "POST",
-        headers: headers(),
+        headers: headers(projectId),
         body: JSON.stringify(input),
       }),
     );
   },
   async reviewCandidate(
+    projectId: string,
     candidateId: string,
     input:
       | z.input<typeof acceptCommandSchema>
@@ -221,13 +229,15 @@ export const assetEditReviewApi = {
       commandResultSchema,
       await request(`/v1/asset-edit-candidates/${candidateId}/review`, {
         method: "POST",
-        headers: headers(),
+        headers: headers(projectId),
         body: JSON.stringify(body),
       }),
     );
   },
-  compareCandidate(candidateId: string) {
-    return request(`/v1/asset-edit-candidates/${candidateId}/compare`);
+  compareCandidate(projectId: string, candidateId: string) {
+    return request(`/v1/asset-edit-candidates/${candidateId}/compare`, {
+      headers: headers(projectId),
+    });
   },
 };
 

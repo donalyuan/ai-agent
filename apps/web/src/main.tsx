@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { Toaster } from "sonner";
 import { App } from "./App";
 import "./styles.css";
 
@@ -12,5 +13,6 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <StrictMode>
     <App />
+    <Toaster closeButton position="bottom-right" richColors />
   </StrictMode>,
 );

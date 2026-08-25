@@ -76,6 +76,12 @@ describe("assetEditReviewApi", () => {
     await assetEditReviewApi.getSession("project-1", index.items[0].id);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls.every(([, init]) => !init?.method)).toBe(true);
+    expect(
+      fetchMock.mock.calls.every(
+        ([, init]) =>
+          new Headers(init?.headers).get("X-Project-Scope") === "project-1",
+      ),
+    ).toBe(true);
     expect(assetEditReviewQueryKeys.session("project-1", "session-1")).toEqual([
       "projects",
       "project-1",
@@ -95,7 +101,7 @@ describe("assetEditReviewApi", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     await expect(
-      assetEditReviewApi.reviewCandidate("candidate-1", {
+      assetEditReviewApi.reviewCandidate("project-1", "candidate-1", {
         action: "accept",
         expectedRevision: 1,
         expectedBaseVersionId: "version-1",
@@ -114,5 +120,8 @@ describe("assetEditReviewApi", () => {
       }),
     ).rejects.toMatchObject({ status: 409, code: "base_version_conflict" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("X-Project-Scope"),
+    ).toBe("project-1");
   });
 });

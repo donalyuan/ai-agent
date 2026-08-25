@@ -923,6 +923,36 @@ async def publish_timeline(
     )
 
 
+@router.post("/v1/projects/{project_id}/episodes/{episode_id}/timeline/versions/preflight")
+async def preflight_publish_timeline(
+    project_id: str,
+    episode_id: str,
+    body: TimelinePublishRequest,
+    service: Annotated[TimelineService, Depends(timeline)],
+    project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
+) -> object:
+    """Run owner publication checks without appending a TimelineVersion."""
+    _project_access(project_id, project_scope)
+    _schema(body.schema_version)
+    try:
+        result = await service.preflight_publish(episode_id, body.expected_revision, project_id)
+    except RevisionConflictError as error:
+        authoritative = await service.get_cut(episode_id, project_id)
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": {"type": error.code, "message": str(error)},
+                "authoritative": timeline_cut_projection(authoritative),
+            },
+        )
+    return {
+        "cutId": result.cut_id,
+        "expectedRevision": result.expected_revision,
+        "timelineFingerprint": result.timeline_fingerprint,
+        "name": body.name,
+    }
+
+
 @router.get("/v1/projects/{project_id}/episodes/{episode_id}/timeline/versions")
 async def list_timeline_versions(
     project_id: str,

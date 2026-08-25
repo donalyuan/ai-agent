@@ -64,7 +64,13 @@ describe("Project Asset Center", () => {
       const path = String(input);
       if (path.endsWith("/health/ready")) return response({ status: "ready" });
       if (path.includes("/v1/assets/asset-1/versions"))
-        return response([{ ...asset.latestVersion, versionNumber: 1 }]);
+        return response(
+          Array.from({ length: 120 }, (_, index) => ({
+            ...asset.latestVersion,
+            id: `version-${index + 1}`,
+            versionNumber: index + 1,
+          })),
+        );
       if (path.includes("/asset-versions/version-1/media"))
         return response({
           status: "ready",
@@ -85,6 +91,12 @@ describe("Project Asset Center", () => {
     render(<App />);
     expect((await screen.findAllByText("主角对白.wav")).length).toBe(2);
     expect(await screen.findByText("waveform · ready")).toBeVisible();
+    expect(
+      (
+        await screen.findByRole("list", { name: "AssetVersion 版本历史" })
+      ).querySelectorAll('[role="listitem"]').length,
+    ).toBeLessThan(120);
+    expect(screen.getByRole("table")).toBeVisible();
     fireEvent.change(screen.getByLabelText("类型"), {
       target: { value: "audio" },
     });
@@ -93,6 +105,31 @@ describe("Project Asset Center", () => {
       expect(
         fetchMock.mock.calls.some(([input]) =>
           String(input).includes("kind=audio"),
+        ),
+      ).toBe(true),
+    );
+    for (const [label, value, queryParam] of [
+      ["角色", "dialogue", "catalogRole=dialogue"],
+      ["来源", "user_upload", "sourceType=user_upload"],
+      ["授权", "verified", "authorizationStatus=verified"],
+      ["处理", "ready", "processingStatus=ready"],
+    ] as const) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.some(([input]) =>
+            String(input).includes(queryParam),
+          ),
+        ).toBe(true),
+      );
+    }
+    fireEvent.change(screen.getByPlaceholderText("例如 lead"), {
+      target: { value: "lead" },
+    });
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("tag=lead"),
         ),
       ).toBe(true),
     );
@@ -124,7 +161,9 @@ describe("Project Asset Center", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "使用位置" }));
+    const usageTab = await screen.findByRole("tab", { name: "使用位置" });
+    fireEvent.mouseDown(usageTab, { button: 0 });
+    fireEvent.click(usageTab);
     expect(await screen.findByText("partial · 0 个引用")).toBeVisible();
     expect(screen.getByText("owner unavailable: timeline")).toBeVisible();
   });

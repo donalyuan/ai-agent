@@ -9,8 +9,6 @@ import {
   Image as ImageIcon,
   LoaderCircle,
   Music2,
-  Pause,
-  Play,
   RefreshCw,
   ShieldCheck,
   Upload,
@@ -20,6 +18,7 @@ import {
 import * as Dialog from "@radix-ui/react-dialog";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import {
@@ -30,6 +29,15 @@ import {
 } from "../asset-center/api";
 import type { CatalogItem, CatalogPage } from "../asset-center/contracts";
 import { useAssetCenterStore } from "../asset-center/store";
+import {
+  DataTable,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  VirtualList,
+} from "../shared/ui";
+import { AssetAudioPlayer } from "./asset-center/AssetAudioPlayer";
 import { traceHeaders } from "../workbench/trace-context";
 
 const PAGE_SIZE = 30;
@@ -92,7 +100,9 @@ function AuthBadge({ status }: { status: string }) {
         ? "bad"
         : "waiting";
   return (
-    <span className={`status-tag ${tone}`}>
+    <span
+      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${tone === "ready" ? "bg-success/10 text-success" : tone === "bad" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}
+    >
       {status === "verified" ? (
         <ShieldCheck size={13} />
       ) : (
@@ -102,6 +112,29 @@ function AuthBadge({ status }: { status: string }) {
     </span>
   );
 }
+
+type VersionRow = {
+  id: string;
+  versionNumber?: number;
+  revision: number;
+  contentHash: string;
+  mimeType: string;
+  sizeBytes: number;
+};
+
+type UsageReference = {
+  ownerType: string;
+  ownerId: string;
+  ownerRevision: number;
+  state: string;
+  deepLink: string;
+};
+
+type UsageProjection = {
+  status?: "complete" | "partial" | "unavailable";
+  references?: UsageReference[];
+  unavailableOwners?: string[];
+};
 
 function AssetCenterPage() {
   const { projectId = "" } = useParams();
@@ -145,6 +178,10 @@ function AssetCenterPage() {
   const [metadataAuthorization, setMetadataAuthorization] = useState("unknown");
   const [metadataError, setMetadataError] = useState<string | null>(null);
   const [audioPath, setAudioPath] = useState<string | null>(null);
+  const [audioGrantExpiresAt, setAudioGrantExpiresAt] = useState<string | null>(
+    null,
+  );
+  const [audioError, setAudioError] = useState<string | null>(null);
   const [pageHistory, setPageHistory] = useState<Array<string | null>>([]);
   const [usageTab, setUsageTab] = useState<"versions" | "usage">("versions");
   useEffect(() => enterProject(projectId), [enterProject, projectId]);
@@ -212,6 +249,83 @@ function AssetCenterPage() {
       assetCenterApi.usage(projectId, selected?.latestVersion?.id ?? ""),
     enabled: Boolean(selected?.latestVersion?.id && usageTab === "usage"),
   });
+  const catalogColumns = useMemo<ColumnDef<CatalogItem, unknown>[]>(
+    () => [
+      {
+        id: "asset",
+        header: "资产",
+        cell: ({ row }) => {
+          const item = row.original;
+          const Icon = assetIcon(item.kind);
+          return (
+            <button
+              className="text-left"
+              aria-label={`选择素材 ${item.name}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                selectAsset(item.id);
+                setUsageTab("versions");
+              }}
+            >
+              <span className="flex items-center gap-2">
+                <span className="grid size-8 place-items-center rounded-md bg-muted text-muted-foreground">
+                  <Icon size={17} />
+                </span>
+                <span className="min-w-0">
+                  <strong className="block truncate">{item.name}</strong>
+                  <small className="text-muted-foreground">
+                    {item.kind} · rev {item.revision}
+                  </small>
+                </span>
+              </span>
+            </button>
+          );
+        },
+      },
+      {
+        id: "catalogRole",
+        header: "目录角色 / 来源",
+        cell: ({ row }) => (
+          <span>
+            {row.original.catalogRole ?? "未指定"}
+            <small className="block text-muted-foreground">
+              {row.original.sourceType}
+            </small>
+          </span>
+        ),
+      },
+      {
+        id: "authorization",
+        header: "授权",
+        cell: ({ row }) => (
+          <AuthBadge status={row.original.authorizationStatus} />
+        ),
+      },
+      {
+        id: "processing",
+        header: "处理 / 版本",
+        cell: ({ row }) => (
+          <span className="grid gap-1">
+            <span
+              className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${row.original.processingStatus === "ready" ? "bg-success/10 text-success" : row.original.processingStatus === "failed" || row.original.processingStatus === "stale" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}
+            >
+              {statusLabel(row.original.processingStatus)}
+            </span>
+            <small className="text-muted-foreground">
+              {row.original.versionCount} 个版本
+            </small>
+          </span>
+        ),
+      },
+    ],
+    [selectAsset],
+  );
+  const versionRows = useMemo(
+    () => (Array.isArray(versions.data) ? (versions.data as VersionRow[]) : []),
+    [versions.data],
+  );
+  const usageProjection = (usage.data ?? {}) as UsageProjection;
+  const usageRows = usageProjection.references ?? [];
   const playableDerivative = useMemo(() => {
     const projection = media.data as
       | {
@@ -469,16 +583,26 @@ function AssetCenterPage() {
     if (playing) {
       setPlaying(false);
       setAudioPath(null);
+      setAudioGrantExpiresAt(null);
       return;
     }
     if (!selected?.latestVersion || !playableDerivative) return;
-    const grant = (await assetCenterApi.mediaGrant(
-      projectId,
-      selected.latestVersion.id,
-      playableDerivative.id,
-    )) as { accessPath: string };
-    setAudioPath(`/api${grant.accessPath}`);
-    setPlaying(true);
+    setAudioError(null);
+    try {
+      const grant = (await assetCenterApi.mediaGrant(
+        projectId,
+        selected.latestVersion.id,
+        playableDerivative.id,
+      )) as { accessPath: string; expiresAt?: string };
+      setAudioGrantExpiresAt(grant.expiresAt ?? null);
+      setAudioPath(`/api${grant.accessPath}`);
+      setPlaying(true);
+    } catch (error) {
+      setAudioError(
+        error instanceof Error ? error.message : "试听授权不可用，请稍后重试",
+      );
+      setPlaying(false);
+    }
   }
 
   const steps = [
@@ -489,10 +613,10 @@ function AssetCenterPage() {
   ] as const;
 
   return (
-    <section className="page-body asset-center-page">
-      <div className="asset-hero">
+    <section className="mx-auto flex w-full max-w-screen-2xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <span className="micro-label accent">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             PROJECT ASSET CENTER / S08a
           </span>
           <h2>素材库</h2>
@@ -501,13 +625,15 @@ function AssetCenterPage() {
             里。读取、筛选和切换详情不会产生业务副作用。
           </p>
         </div>
-        <div className="asset-hero-meta">
-          <span className="status-tag ready">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+          <span className="inline-flex rounded-full bg-success/10 px-2 py-1 text-xs font-semibold text-success">
             <ShieldCheck size={13} /> Local profile
           </span>
-          <span className="mono">adapter: local_workspace</span>
+          <span className="font-mono text-xs text-muted-foreground">
+            adapter: local_workspace
+          </span>
           <button
-            className="primary-button"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
             onClick={() => {
               setUploadOpen(true);
               setUploadStage("idle");
@@ -517,23 +643,23 @@ function AssetCenterPage() {
           </button>
         </div>
       </div>
-      <div className="asset-center-layout">
-        <section className="asset-catalog-column">
-          <div className="asset-filter-bar surface">
-            <div className="asset-filter-heading">
-              <span className="micro-label">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
+        <section className="min-w-0">
+          <div className="rounded-lg border border-border bg-card p-4 shadow-sm rounded-lg border border-border bg-card p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-4">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 CATALOG /{" "}
                 {(query.data?.items.length ?? 0).toString().padStart(2, "0")}
               </span>
               <button
-                className="icon-button"
+                className="inline-flex size-10 items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
                 title="刷新目录"
                 onClick={() => query.refetch()}
               >
                 <RefreshCw size={15} />
               </button>
             </div>
-            <div className="asset-filter-grid">
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               <label>
                 类型
                 <select
@@ -583,7 +709,7 @@ function AssetCenterPage() {
                   <option value="stale">已过期</option>
                 </select>
               </label>
-              <label className="asset-tag-filter">
+              <label className="grid gap-1 text-sm">
                 标签
                 <input
                   value={filters.tag}
@@ -628,24 +754,28 @@ function AssetCenterPage() {
                 </select>
               </label>
             </div>
-            <div className="asset-filter-footer">
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
               <span className="read-only-label">
                 只读 projection · stable cursor (updatedAt, id)
               </span>
               {Object.values(filters).some(Boolean) && (
-                <button className="text-button" onClick={resetFilters}>
+                <button
+                  className="inline-flex items-center gap-1 text-sm font-medium text-primary underline-offset-4 hover:underline disabled:pointer-events-none disabled:opacity-50"
+                  onClick={resetFilters}
+                >
                   清除筛选
                 </button>
               )}
             </div>
           </div>
           {query.isPending && (
-            <div className="data-notice loading">
-              <LoaderCircle className="spin" size={15} /> 正在读取资产目录...
+            <div className="flex items-start gap-2 rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground">
+              <LoaderCircle className="animate-spin" size={15} />{" "}
+              正在读取资产目录...
             </div>
           )}
           {query.error && (
-            <div className="data-notice unavailable">
+            <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
               <AlertTriangle size={15} />{" "}
               {query.error instanceof Error
                 ? query.error.message
@@ -655,60 +785,37 @@ function AssetCenterPage() {
           {!query.isPending &&
             !query.error &&
             query.data?.items.length === 0 && (
-              <div className="asset-empty surface">
+              <div className="grid place-items-center gap-3 rounded-lg border border-border bg-card p-5 text-center shadow-sm">
                 <ImageIcon size={22} />
                 <strong>这里还没有素材</strong>
                 <span>
                   上传第一张图片或一段音频，上传完成后才会出现 AssetVersion。
                 </span>
                 <button
-                  className="secondary-button"
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
                   onClick={() => setUploadOpen(true)}
                 >
                   <Upload size={14} /> 开始上传
                 </button>
               </div>
             )}
-          <div className="asset-list" aria-label="资产目录">
-            {query.data?.items.map((asset) => {
-              const Icon = assetIcon(asset.kind);
-              return (
-                <button
-                  key={asset.id}
-                  className={`asset-list-row ${selected?.id === asset.id ? "selected" : ""}`}
-                  onClick={() => {
-                    selectAsset(asset.id);
-                    setUsageTab("versions");
-                  }}
-                >
-                  <span className={`asset-kind-icon kind-${asset.kind}`}>
-                    <Icon size={17} />
-                  </span>
-                  <span className="asset-list-main">
-                    <strong>{asset.name}</strong>
-                    <span>
-                      {asset.tags.length
-                        ? asset.tags.map((tag) => `#${tag}`).join(" ")
-                        : "无标签"}{" "}
-                      · rev {asset.revision}
-                    </span>
-                  </span>
-                  <span className="asset-list-status">
-                    <span
-                      className={`status-tag ${asset.processingStatus === "ready" ? "ready" : asset.processingStatus === "failed" ? "bad" : asset.processingStatus === "pending" ? "running" : "neutral"}`}
-                    >
-                      {statusLabel(asset.processingStatus)}
-                    </span>
-                    <small>{asset.versionCount} 个版本</small>
-                  </span>
-                  <ChevronRight size={16} />
-                </button>
-              );
-            })}
-          </div>
-          <div className="asset-pagination">
+          {query.data && (
+            <DataTable
+              columns={catalogColumns}
+              data={query.data.items}
+              emptyLabel="没有匹配的资产 projection"
+              filterPlaceholder="筛选当前页资产"
+              getRowId={(row) => row.id}
+              onRowClick={(item) => {
+                selectAsset(item.id);
+                setUsageTab("versions");
+              }}
+              className="mt-3"
+            />
+          )}
+          <div className="mt-4 flex items-center justify-between gap-3">
             <button
-              className="icon-button"
+              className="inline-flex size-10 items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
               title="上一页"
               disabled={!pageHistory.length}
               onClick={() => {
@@ -719,9 +826,11 @@ function AssetCenterPage() {
             >
               <ChevronLeft size={16} />
             </button>
-            <span className="mono">{query.data?.items.length ?? 0} / page</span>
+            <span className="font-mono text-xs text-muted-foreground">
+              {query.data?.items.length ?? 0} / page
+            </span>
             <button
-              className="icon-button"
+              className="inline-flex size-10 items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
               title="下一页"
               disabled={!query.data?.nextCursor}
               onClick={() => {
@@ -735,9 +844,9 @@ function AssetCenterPage() {
             </button>
           </div>
         </section>
-        <aside className="asset-inspector surface">
+        <aside className="h-fit rounded-lg border border-border bg-card p-5 shadow-sm xl:sticky xl:top-24 rounded-lg border border-border bg-card p-5 shadow-sm">
           {!selected && (
-            <div className="inspector-empty">
+            <div className="grid place-items-center gap-3 rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
               <BoxesMark />
               <strong>选择一个素材</strong>
               <span>版本、授权和使用位置会在这里展开。</span>
@@ -745,24 +854,26 @@ function AssetCenterPage() {
           )}
           {selected && (
             <>
-              <div className="inspector-heading">
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <span className="micro-label">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     ASSET / {selected.id.slice(0, 8)}
                   </span>
                   <h3>{selected.name}</h3>
                 </div>
                 <AuthBadge status={selected.authorizationStatus} />
               </div>
-              <div className="inspector-meta">
+              <div className="mt-4 grid gap-3 text-sm">
                 <span>
                   {selected.kind} · {selected.sourceType}
                 </span>
-                <span className="mono">revision {selected.revision}</span>
+                <span className="font-mono text-xs text-muted-foreground">
+                  revision {selected.revision}
+                </span>
               </div>
               {!metadataOpen ? (
                 <button
-                  className="text-button metadata-edit-button"
+                  className="inline-flex items-center gap-1 text-sm font-medium text-primary underline-offset-4 hover:underline disabled:pointer-events-none disabled:opacity-50"
                   onClick={() => {
                     setMetadataTags(selected.tags.join(", "));
                     setMetadataAuthorization(selected.authorizationStatus);
@@ -798,24 +909,27 @@ function AssetCenterPage() {
                   </label>
                   <div className="metadata-actions">
                     <button
-                      className="secondary-button"
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
                       onClick={() => setMetadataOpen(false)}
                     >
                       取消
                     </button>
-                    <button className="primary-button" onClick={saveMetadata}>
+                    <button
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
+                      onClick={saveMetadata}
+                    >
                       保存变更
                     </button>
                   </div>
                   {metadataError && (
-                    <div className="warning-line">
+                    <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                       <AlertTriangle size={14} /> {metadataError}
                     </div>
                   )}
                 </div>
               )}
-              <div className="asset-preview-frame">
-                <div className={`preview-mark kind-${selected.kind}`}>
+              <div className="mt-4 aspect-video overflow-hidden rounded-md bg-muted">
+                <div className="grid min-h-48 place-items-center rounded-md bg-muted text-muted-foreground">
                   {selected.kind === "audio" ? (
                     <Music2 size={30} />
                   ) : selected.kind === "video" ? (
@@ -830,31 +944,26 @@ function AssetCenterPage() {
                     : "尚未登记版本"}
                 </span>
               </div>
-              <div className="asset-tabbar">
-                <button
-                  className={usageTab === "versions" ? "active" : ""}
-                  onClick={() => setUsageTab("versions")}
-                >
-                  版本与派生
-                </button>
-                <button
-                  className={usageTab === "usage" ? "active" : ""}
-                  onClick={() => setUsageTab("usage")}
-                >
-                  使用位置
-                </button>
-              </div>
-              {usageTab === "versions" && (
-                <div className="asset-detail-content">
-                  <div className="detail-grid">
-                    <span>
+              <Tabs
+                value={usageTab}
+                onValueChange={(value) =>
+                  setUsageTab(value as "versions" | "usage")
+                }
+              >
+                <TabsList aria-label="资产详情视图">
+                  <TabsTrigger value="versions">版本与派生</TabsTrigger>
+                  <TabsTrigger value="usage">使用位置</TabsTrigger>
+                </TabsList>
+                <TabsContent value="versions" className="mt-4">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <span className="grid gap-1 rounded-md bg-muted p-3 text-sm">
                       目录角色
                       <strong>{selected.catalogRole ?? "未指定"}</strong>
                     </span>
-                    <span>
+                    <span className="grid gap-1 rounded-md bg-muted p-3 text-sm">
                       许可证<strong>{selected.licenseLabel ?? "未声明"}</strong>
                     </span>
-                    <span>
+                    <span className="grid gap-1 rounded-md bg-muted p-3 text-sm">
                       更新时间
                       <strong>
                         {new Date(selected.updatedAt).toLocaleDateString(
@@ -862,20 +971,24 @@ function AssetCenterPage() {
                         )}
                       </strong>
                     </span>
-                    <span>
+                    <span className="grid gap-1 rounded-md bg-muted p-3 text-sm">
                       版本数量<strong>{selected.versionCount}</strong>
                     </span>
                   </div>
-                  <div className="derivative-strip">
-                    <span className="micro-label">MEDIA READINESS</span>
+                  <div className="mt-4 grid gap-2 rounded-md border border-border p-3">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      MEDIA READINESS
+                    </span>
                     {media.isPending && (
-                      <span className="muted">读取中...</span>
+                      <span className="text-sm text-muted-foreground">
+                        读取中...
+                      </span>
                     )}
                     {media.error && (
-                      <span className="warning-text">不可用</span>
+                      <span className="text-warning-foreground">不可用</span>
                     )}
                     {!media.isPending && !media.error && (
-                      <div className="derivative-list">
+                      <div className="flex flex-wrap gap-2">
                         {(
                           (
                             media.data as
@@ -893,8 +1006,8 @@ function AssetCenterPage() {
                             key={item.kind}
                             className={
                               item.status === "ready" && item.grantAvailable
-                                ? "derivative ready"
-                                : "derivative"
+                                ? "rounded-full bg-success/10 px-2 py-1 text-xs font-semibold text-success"
+                                : "rounded-full bg-muted px-2 py-1 text-xs font-semibold text-muted-foreground"
                             }
                           >
                             {item.kind.replace("_", " ")} · {item.status}
@@ -904,147 +1017,121 @@ function AssetCenterPage() {
                     )}
                   </div>
                   {selected.kind === "audio" && (
-                    <div className="audio-bar">
-                      <button
-                        className="icon-button"
-                        title={playing ? "暂停试听" : "试听"}
-                        onClick={() => void toggleAudio()}
-                        disabled={!playableDerivative}
-                      >
-                        <span>
-                          {playing ? <Pause size={16} /> : <Play size={16} />}
-                        </span>
-                      </button>
-                      <div className="audio-wave">
-                        <span />
-                        <span />
-                        <span />
-                        <span />
-                        <span />
-                        <span />
-                        <span />
-                        <span />
-                        <span />
-                        <span />
-                      </div>
-                      <span className="mono">
-                        {selected.latestVersion?.durationMs
-                          ? `${Math.round(selected.latestVersion.durationMs / 1000)}s`
-                          : "--"}
-                      </span>
-                      {audioPath && (
-                        <audio
-                          className="asset-audio"
-                          src={audioPath}
-                          controls
-                          autoPlay
-                          onEnded={() => {
-                            setPlaying(false);
-                            setAudioPath(null);
-                          }}
-                        />
-                      )}
+                    <AssetAudioPlayer
+                      audioPath={audioPath}
+                      durationMs={selected.latestVersion?.durationMs}
+                      playing={playing}
+                      disabled={!playableDerivative}
+                      onToggle={() => void toggleAudio()}
+                      onEnded={() => {
+                        setPlaying(false);
+                        setAudioPath(null);
+                        setAudioGrantExpiresAt(null);
+                      }}
+                      onExpired={() => {
+                        setPlaying(false);
+                        setAudioPath(null);
+                        setAudioError(
+                          audioGrantExpiresAt
+                            ? "试听授权已过期，请重新获取短期授权"
+                            : "试听媒体不可用，请检查 derivative readiness",
+                        );
+                      }}
+                    />
+                  )}
+                  {audioError && (
+                    <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
+                      <AlertTriangle size={14} /> {audioError}
                     </div>
                   )}
-                  <div className="version-list">
+                  <div className="mt-4 grid gap-2">
                     {versions.isPending && (
-                      <span className="muted">读取版本历史...</span>
+                      <span className="text-sm text-muted-foreground">
+                        读取版本历史...
+                      </span>
                     )}
-                    {Array.isArray(versions.data) &&
-                      (
-                        versions.data as Array<{
-                          id: string;
-                          versionNumber?: number;
-                          revision: number;
-                          contentHash: string;
-                          mimeType: string;
-                          sizeBytes: number;
-                        }>
-                      ).map((version) => (
-                        <div key={version.id} className="version-line">
-                          <span className="version-badge">
-                            v{version.versionNumber ?? "?"}
-                          </span>
-                          <span className="mono">
-                            {version.contentHash.slice(0, 12)}...
-                          </span>
-                          <span>
-                            {version.mimeType} · {bytes(version.sizeBytes)}
-                          </span>
-                          <span className="muted">rev {version.revision}</span>
-                        </div>
-                      ))}
+                    {!versions.isPending && (
+                      <VirtualList
+                        items={versionRows}
+                        estimateSize={36}
+                        height={220}
+                        getKey={(version) => version.id}
+                        ariaLabel="AssetVersion 版本历史"
+                        renderItem={(version) => (
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 text-sm last:border-0">
+                            <span className="rounded-full bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
+                              v{version.versionNumber ?? "?"}
+                            </span>
+                            <span className="font-mono text-xs text-muted-foreground">
+                              {version.contentHash.slice(0, 12)}...
+                            </span>
+                            <span>
+                              {version.mimeType} · {bytes(version.sizeBytes)}
+                            </span>
+                            <span className="text-sm text-muted-foreground">
+                              rev {version.revision}
+                            </span>
+                          </div>
+                        )}
+                      />
+                    )}
                   </div>
-                </div>
-              )}
-              {usageTab === "usage" && (
-                <div className="asset-detail-content">
+                </TabsContent>
+                <TabsContent value="usage" className="mt-4">
                   {usage.isPending && (
-                    <span className="muted">读取使用位置...</span>
+                    <span className="text-sm text-muted-foreground">
+                      读取使用位置...
+                    </span>
                   )}
                   {usage.error && (
-                    <div className="data-notice unavailable">
+                    <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
                       <AlertTriangle size={14} /> usage projection unavailable
                     </div>
                   )}
                   {usage.data !== undefined && (
                     <>
                       <div
-                        className={`usage-state ${(usage.data as { status?: string }).status}`}
+                        className={`rounded-md border p-3 text-sm ${usageProjection.status === "complete" ? "border-success/30 bg-success/10 text-success" : "border-warning/30 bg-warning/10 text-warning-foreground"}`}
                       >
-                        {(usage.data as { status?: string }).status} ·{" "}
-                        {
-                          (
-                            (usage.data as { references?: unknown[] })
-                              .references ?? []
-                          ).length
-                        }{" "}
-                        个引用
+                        {usageProjection.status === "unavailable"
+                          ? "usage projection unavailable · owner data not available"
+                          : `${usageProjection.status ?? "unknown"} · ${usageRows.length} 个引用`}
                       </div>
-                      <div className="usage-list">
-                        {(
-                          (
-                            usage.data as {
-                              references?: Array<{
-                                ownerType: string;
-                                ownerId: string;
-                                ownerRevision: number;
-                                state: string;
-                                deepLink: string;
-                              }>;
-                            }
-                          ).references ?? []
-                        ).map((reference) => (
-                          <Link
-                            key={`${reference.ownerType}-${reference.ownerId}`}
-                            to={reference.deepLink}
-                            className="usage-line"
-                          >
-                            <span>{reference.ownerType}</span>
-                            <strong>{reference.state}</strong>
-                            <small>rev {reference.ownerRevision}</small>
-                            <ChevronRight size={14} />
-                          </Link>
-                        ))}
-                      </div>
-                      {(
-                        (usage.data as { unavailableOwners?: string[] })
-                          .unavailableOwners ?? []
-                      ).length > 0 && (
-                        <div className="warning-line">
+                      {usageProjection.status !== "unavailable" && (
+                        <VirtualList
+                          items={usageRows}
+                          estimateSize={42}
+                          height={240}
+                          getKey={(reference) =>
+                            `${reference.ownerType}-${reference.ownerId}`
+                          }
+                          ariaLabel="AssetVersion 使用位置"
+                          renderItem={(reference) => (
+                            <Link
+                              to={reference.deepLink}
+                              className="flex items-center justify-between gap-2 border-b border-border py-3 text-sm hover:text-primary"
+                            >
+                              <span>{reference.ownerType}</span>
+                              <strong>{reference.state}</strong>
+                              <small>rev {reference.ownerRevision}</small>
+                              <ChevronRight size={14} />
+                            </Link>
+                          )}
+                        />
+                      )}
+                      {(usageProjection.unavailableOwners ?? []).length > 0 && (
+                        <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
                           <AlertTriangle size={14} /> owner unavailable:{" "}
-                          {(
-                            usage.data as { unavailableOwners: string[] }
-                          ).unavailableOwners.join(", ")}
+                          {usageProjection.unavailableOwners?.join(", ")}
                         </div>
                       )}
                     </>
                   )}
-                </div>
-              )}
-              <div className="inspector-footer">
+                </TabsContent>
+              </Tabs>
+              <div className="mt-5 flex flex-wrap gap-3 border-t border-border pt-4">
                 <Link
-                  className="secondary-button"
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
                   to={
                     selected.latestVersion
                       ? `/projects/${projectId}/episodes/select/timeline?assetVersionId=${encodeURIComponent(selected.latestVersion.id)}&assetVersionRevision=${selected.latestVersion.revision}&assetVersionHash=${encodeURIComponent(selected.latestVersion.contentHash)}`
@@ -1054,7 +1141,7 @@ function AssetCenterPage() {
                   <Video size={14} /> 交给 Timeline
                 </Link>
                 <Link
-                  className="text-button"
+                  className="inline-flex items-center gap-1 text-sm font-medium text-primary underline-offset-4 hover:underline disabled:pointer-events-none disabled:opacity-50"
                   to={`/projects/${projectId}/review`}
                 >
                   候选审核
@@ -1066,182 +1153,188 @@ function AssetCenterPage() {
       </div>
       <Dialog.Root open={uploadOpen} onOpenChange={setUploadOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="modal-backdrop">
-            <Dialog.Content
-              className="upload-modal surface"
-              aria-labelledby="upload-title"
-            >
-              <div className="modal-heading">
-                <div>
-                  <span className="micro-label accent">
-                    LOCAL UPLOAD / OWNER HANDOFF
-                  </span>
-                  <Dialog.Title asChild>
-                    <h3 id="upload-title">上传素材</h3>
-                  </Dialog.Title>
-                </div>
-                <Dialog.Close asChild>
-                  <button className="icon-button" title="关闭">
-                    <X size={17} />
-                  </button>
-                </Dialog.Close>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/25" />
+          <Dialog.Content
+            className="fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-[min(42rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-md border border-border bg-popover p-5 text-popover-foreground shadow-lg outline-none"
+            aria-labelledby="upload-title"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  LOCAL UPLOAD / OWNER HANDOFF
+                </span>
+                <Dialog.Title asChild>
+                  <h3 id="upload-title">上传素材</h3>
+                </Dialog.Title>
               </div>
-              {activeReservation && (
-                <div className="reservation-recovery">
-                  <div>
-                    <span className="micro-label">RECOVERED RESERVATION</span>
-                    <strong className="mono">{activeReservation.id}</strong>
-                    <small>
-                      {activeReservation.status} / rev{" "}
-                      {activeReservation.revision}
-                    </small>
-                  </div>
-                  <div>
-                    <button
-                      className="secondary-button"
-                      onClick={() => void mutateUpload("reconcile")}
-                    >
-                      <RefreshCw size={14} /> Reconcile
-                    </button>
-                    <button
-                      className="danger-button"
-                      onClick={() => void mutateUpload("cancel")}
-                    >
-                      <X size={14} /> 取消上传
-                    </button>
-                  </div>
-                </div>
-              )}
-              {uploadStage === "idle" && (
-                <>
-                  <label className="setting-line">
-                    <span>StorageProfile</span>
-                    <select
-                      aria-label="StorageProfile"
-                      value={selectedProfile?.storageProfileId ?? ""}
-                      disabled={
-                        Boolean(activeReservation) || uploadProfiles.isPending
-                      }
-                      onChange={(event) =>
-                        setSelectedProfileId(event.target.value)
-                      }
-                    >
-                      {(uploadProfiles.data ?? []).map((profile) => (
-                        <option
-                          key={profile.storageProfileId}
-                          value={profile.storageProfileId}
-                          disabled={!profile.enabled}
-                        >
-                          {profile.name} / {profile.adapterKey} / rev{" "}
-                          {profile.revision}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {uploadProfiles.error && (
-                    <div className="data-notice unavailable">
-                      <AlertTriangle size={14} />
-                      {uploadProfiles.error instanceof Error
-                        ? uploadProfiles.error.message
-                        : "StorageProfile projection unavailable"}
-                    </div>
-                  )}
-                  <label className="drop-zone">
-                    <Upload size={25} />
-                    <strong>选择图片、视频、音频或文档</strong>
-                    <span>
-                      {activeReservation
-                        ? "重新选择 fingerprint 匹配的原文件，将恢复同一 UploadSession。"
-                        : "文件 metadata 先经过 owner admission；通过后才分片读取和哈希。"}
-                    </span>
-                    <input
-                      type="file"
-                      disabled={!selectedProfile}
-                      onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        if (file) void upload(file);
-                      }}
-                    />
-                  </label>
-                </>
-              )}
-              {uploadStage !== "idle" && (
-                <>
-                  <div className="upload-steps">
-                    {steps.map(([key, label]) => (
-                      <div
-                        key={key}
-                        className={
-                          uploadStage === key ||
-                          (uploadStage === "failed" && key === "uploading")
-                            ? "active"
-                            : steps.findIndex(([name]) => name === key) <
-                                steps.findIndex(
-                                  ([name]) => name === uploadStage,
-                                )
-                              ? "done"
-                              : ""
-                        }
-                      >
-                        <span>
-                          {steps.findIndex(([name]) => name === key) <
-                          steps.findIndex(([name]) => name === uploadStage) ? (
-                            <Check size={13} />
-                          ) : (
-                            steps.findIndex(([name]) => name === uploadStage) +
-                            1
-                          )}
-                        </span>
-                        {label}
-                      </div>
-                    ))}
-                  </div>
-                  <div className="upload-progress">
-                    <div style={{ width: `${uploadProgress}%` }} />
-                  </div>
-                  <div className="upload-status">
-                    <strong>
-                      {uploadStage === "registered"
-                        ? "已登记 AssetVersion"
-                        : uploadStage === "failed"
-                          ? "上传状态需要诊断"
-                          : uploadStage === "preflight"
-                            ? "校验文件和 profile capability"
-                            : uploadStage === "reservation"
-                              ? "创建 reservation"
-                              : uploadStage === "uploading"
-                                ? `上传 multipart · ${uploadProgress}%`
-                                : "校验 StoredObject"}
-                    </strong>
-                    <span>
-                      {uploadStage === "registered"
-                        ? "同一 operation 可安全重试，不会创建第二版本。"
-                        : (uploadError ?? "owner 正在处理，不要重复点击。")}
-                    </span>
-                  </div>
-                  {uploadStage === "failed" && (
-                    <div className="data-notice unavailable">
-                      <AlertTriangle size={14} />{" "}
-                      {uploadError ?? "submission_unknown，请先 reconcile"}
-                    </div>
-                  )}
-                </>
-              )}
-              {uploadStage === "registered" && (
+              <Dialog.Close asChild>
                 <button
-                  className="primary-button full"
-                  onClick={() => {
-                    setUploadOpen(false);
-                    void queryClient.invalidateQueries({
-                      queryKey: ["projects", projectId, "asset-center"],
-                    });
-                  }}
+                  className="inline-flex size-10 items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                  title="关闭"
                 >
-                  完成
+                  <X size={17} />
                 </button>
-              )}
-            </Dialog.Content>
-          </Dialog.Overlay>
+              </Dialog.Close>
+            </div>
+            {activeReservation && (
+              <div className="grid gap-3 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    RECOVERED RESERVATION
+                  </span>
+                  <strong className="font-mono text-xs text-muted-foreground">
+                    {activeReservation.id}
+                  </strong>
+                  <small>
+                    {activeReservation.status} / rev{" "}
+                    {activeReservation.revision}
+                  </small>
+                </div>
+                <div>
+                  <button
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                    onClick={() => void mutateUpload("reconcile")}
+                  >
+                    <RefreshCw size={14} /> Reconcile
+                  </button>
+                  <button
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-destructive px-4 text-sm font-semibold text-destructive-foreground hover:bg-destructive/90 disabled:pointer-events-none disabled:opacity-50"
+                    onClick={() => void mutateUpload("cancel")}
+                  >
+                    <X size={14} /> 取消上传
+                  </button>
+                </div>
+              </div>
+            )}
+            {uploadStage === "idle" && (
+              <>
+                <label className="grid gap-1 text-sm">
+                  <span>StorageProfile</span>
+                  <select
+                    aria-label="StorageProfile"
+                    value={selectedProfile?.storageProfileId ?? ""}
+                    disabled={
+                      Boolean(activeReservation) || uploadProfiles.isPending
+                    }
+                    onChange={(event) =>
+                      setSelectedProfileId(event.target.value)
+                    }
+                  >
+                    {(uploadProfiles.data ?? []).map((profile) => (
+                      <option
+                        key={profile.storageProfileId}
+                        value={profile.storageProfileId}
+                        disabled={!profile.enabled}
+                      >
+                        {profile.name} / {profile.adapterKey} / rev{" "}
+                        {profile.revision}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {uploadProfiles.error && (
+                  <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
+                    <AlertTriangle size={14} />
+                    {uploadProfiles.error instanceof Error
+                      ? uploadProfiles.error.message
+                      : "StorageProfile projection unavailable"}
+                  </div>
+                )}
+                <label className="grid cursor-pointer gap-2 rounded-md border border-dashed border-border p-5 text-sm hover:bg-muted">
+                  <Upload size={25} />
+                  <strong>选择图片、视频、音频或文档</strong>
+                  <span>
+                    {activeReservation
+                      ? "重新选择 fingerprint 匹配的原文件，将恢复同一 UploadSession。"
+                      : "文件 metadata 先经过 owner admission；通过后才分片读取和哈希。"}
+                  </span>
+                  <input
+                    type="file"
+                    disabled={!selectedProfile}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) void upload(file);
+                    }}
+                  />
+                </label>
+              </>
+            )}
+            {uploadStage !== "idle" && (
+              <>
+                <div className="grid gap-2 text-sm text-muted-foreground">
+                  {steps.map(([key, label]) => (
+                    <div
+                      key={key}
+                      className={
+                        uploadStage === key ||
+                        (uploadStage === "failed" && key === "uploading")
+                          ? "flex items-center gap-2 font-semibold text-foreground"
+                          : steps.findIndex(([name]) => name === key) <
+                              steps.findIndex(([name]) => name === uploadStage)
+                            ? "flex items-center gap-2 text-success"
+                            : "flex items-center gap-2 text-muted-foreground"
+                      }
+                    >
+                      <span>
+                        {steps.findIndex(([name]) => name === key) <
+                        steps.findIndex(([name]) => name === uploadStage) ? (
+                          <Check size={13} />
+                        ) : (
+                          steps.findIndex(([name]) => name === uploadStage) + 1
+                        )}
+                      </span>
+                      {label}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full bg-primary transition-[width]"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+                <div className="mt-2 text-sm text-muted-foreground">
+                  <strong>
+                    {uploadStage === "registered"
+                      ? "已登记 AssetVersion"
+                      : uploadStage === "failed"
+                        ? "上传状态需要诊断"
+                        : uploadStage === "preflight"
+                          ? "校验文件和 profile capability"
+                          : uploadStage === "reservation"
+                            ? "创建 reservation"
+                            : uploadStage === "uploading"
+                              ? `上传 multipart · ${uploadProgress}%`
+                              : "校验 StoredObject"}
+                  </strong>
+                  <span>
+                    {uploadStage === "registered"
+                      ? "同一 operation 可安全重试，不会创建第二版本。"
+                      : (uploadError ?? "owner 正在处理，不要重复点击。")}
+                  </span>
+                </div>
+                {uploadStage === "failed" && (
+                  <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                    <AlertTriangle size={14} />{" "}
+                    {uploadError ?? "submission_unknown，请先 reconcile"}
+                  </div>
+                )}
+              </>
+            )}
+            {uploadStage === "registered" && (
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50 full"
+                onClick={() => {
+                  setUploadOpen(false);
+                  void queryClient.invalidateQueries({
+                    queryKey: ["projects", projectId, "asset-center"],
+                  });
+                }}
+              >
+                完成
+              </button>
+            )}
+          </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
     </section>
@@ -1250,7 +1343,7 @@ function AssetCenterPage() {
 
 function BoxesMark() {
   return (
-    <span className="inspector-empty-mark">
+    <span className="grid size-12 place-items-center rounded-full bg-muted text-muted-foreground">
       <Upload size={21} />
     </span>
   );

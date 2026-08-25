@@ -848,6 +848,31 @@ def test_timeline_http_is_project_scoped_strict_and_returns_authoritative_409(
     assert forbidden.status_code == 403
 
 
+def test_timeline_publish_preflight_is_read_only_and_conflicts_authoritatively(
+    tmp_path: Path,
+) -> None:
+    client, uow, owner = _http_owner_client(tmp_path)
+    project, episode = owner["project"], owner["episode"]
+    scope = {"X-Project-Scope": project["id"]}
+    path = f"/v1/projects/{project['id']}/episodes/{episode['id']}/timeline/versions/preflight"
+    before = (len(uow.timeline_versions), len(uow.audit_events), len(uow.outbox_events))
+    ready = client.post(
+        path,
+        headers=scope,
+        json={"name": "check-only", "expectedRevision": 1, "schemaVersion": "1.0.0"},
+    )
+    assert ready.status_code == 200
+    assert ready.json()["expectedRevision"] == 1
+    assert (len(uow.timeline_versions), len(uow.audit_events), len(uow.outbox_events)) == before
+    stale = client.post(
+        path,
+        headers=scope,
+        json={"name": "stale", "expectedRevision": 2, "schemaVersion": "1.0.0"},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["authoritative"]["revision"] == 1
+
+
 def test_export_http_batch_retry_artifact_and_renderer_boundaries(tmp_path: Path) -> None:
     client, uow, owner = _http_owner_client(tmp_path)
     project, episode, version = owner["project"], owner["episode"], owner["version"]

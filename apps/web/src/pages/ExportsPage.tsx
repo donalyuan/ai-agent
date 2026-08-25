@@ -214,23 +214,23 @@ export function ExportsPage() {
   };
 
   return (
-    <section className="page-body">
+    <section className="mx-auto flex w-full max-w-screen-2xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <PageIntro
         eyebrow="PROJECT EXPORTS / S10"
         title="逐集导出"
         detail="显式组装 Episode 与 published TimelineVersion；一个 batch 完成全集合 preflight，每集独立输出。"
       />
-      <section className="surface export-panel">
-        <div className="export-rule">
+      <section className="rounded-lg border border-border bg-card p-5 shadow-sm rounded-lg border border-border bg-card p-5 shadow-sm">
+        <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
           <CircleAlert size={17} />
           <span>
             Renderer、Storage 或 artifact 未配置时保留 owner 原始诊断。
           </span>
         </div>
 
-        <div className="export-create-grid">
-          <div className="export-fields">
-            <label className="setting-line">
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.8fr)]">
+          <div className="grid gap-4">
+            <label className="grid gap-1 text-sm">
               <span>Episode ID</span>
               <input
                 value={episodeId}
@@ -238,7 +238,7 @@ export function ExportsPage() {
                 placeholder="显式 Episode owner ID"
               />
             </label>
-            <label className="setting-line">
+            <label className="grid gap-1 text-sm">
               <span>Published Version ID</span>
               <input
                 value={timelineVersionId}
@@ -248,7 +248,7 @@ export function ExportsPage() {
                 placeholder="显式 TimelineVersion"
               />
             </label>
-            <label className="setting-line compact-number">
+            <label className="grid max-w-40 gap-1 text-sm">
               <span>Version revision</span>
               <input
                 type="number"
@@ -260,7 +260,7 @@ export function ExportsPage() {
                 }
               />
             </label>
-            <label className="setting-line">
+            <label className="grid gap-1 text-sm">
               <span>Output base name</span>
               <input
                 value={outputBaseName}
@@ -270,22 +270,33 @@ export function ExportsPage() {
                 placeholder="episode-01"
               />
             </label>
-            <button className="secondary-button" onClick={addSelection}>
+            <button
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+              onClick={addSelection}
+            >
               <Plus size={15} /> 添加成员
             </button>
           </div>
 
-          <div className="export-selection-list" aria-label="待提交导出成员">
-            <div className="export-list-heading">
+          <div
+            className="grid content-start gap-2 rounded-md border border-border p-3"
+            aria-label="待提交导出成员"
+          >
+            <div className="mt-5 flex items-center justify-between border-b border-border pb-2 text-sm font-semibold">
               <strong>批次成员</strong>
               <span>{selections.length} 集</span>
             </div>
             {selections.length === 0 ? (
-              <div className="export-empty">尚未添加 Episode</div>
+              <div className="rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
+                尚未添加 Episode
+              </div>
             ) : (
               selections.map((selection, index) => (
-                <div className="export-selection-row" key={selection.episodeId}>
-                  <span className="export-index">
+                <div
+                  className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-3"
+                  key={selection.episodeId}
+                >
+                  <span className="font-mono text-xs text-muted-foreground">
                     {String(index + 1).padStart(2, "0")}
                   </span>
                   <span>
@@ -294,7 +305,7 @@ export function ExportsPage() {
                     <small>{selection.timelineVersionId}</small>
                   </span>
                   <button
-                    className="icon-button"
+                    className="inline-flex size-10 items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
                     title="移除成员"
                     aria-label={`移除 Episode ${selection.episodeId}`}
                     onClick={() =>
@@ -312,8 +323,8 @@ export function ExportsPage() {
             )}
           </div>
 
-          <div className="export-submit-row">
-            <label className="setting-line">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="grid gap-1 text-sm">
               <span>StorageProfile ID</span>
               <input
                 value={storageProfileId}
@@ -323,7 +334,7 @@ export function ExportsPage() {
                 placeholder="显式 profile ID"
               />
             </label>
-            <label className="setting-line compact-number">
+            <label className="grid max-w-40 gap-1 text-sm">
               <span>Profile revision</span>
               <input
                 type="number"
@@ -335,7 +346,7 @@ export function ExportsPage() {
               />
             </label>
             <button
-              className="primary-button"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
               disabled={
                 selections.length === 0 ||
                 !storageProfileId ||
@@ -349,8 +360,8 @@ export function ExportsPage() {
           </div>
         </div>
 
-        <div className="export-batch-loader">
-          <label className="setting-line">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="grid gap-1 text-sm">
             <span>ExportBatch ID</span>
             <input
               value={batchId}
@@ -359,7 +370,7 @@ export function ExportsPage() {
             />
           </label>
           <button
-            className="secondary-button"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
             disabled={!batchId || batch.isFetching}
             onClick={() => batch.refetch()}
           >
@@ -369,20 +380,20 @@ export function ExportsPage() {
 
         {batch.error && <ErrorNotice error={batch.error} />}
         {diagnostic && (
-          <div className="warning-line">
+          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             <CircleAlert size={14} /> {diagnostic}
           </div>
         )}
 
         {batch.data && (
-          <div className="export-batch-detail">
-            <div className="export-list-heading">
+          <div className="grid gap-4 rounded-md border border-border p-4">
+            <div className="mt-5 flex items-center justify-between border-b border-border pb-2 text-sm font-semibold">
               <span>
                 <strong>{batch.data.id}</strong>
                 <small>{batch.data.status}</small>
               </span>
               <button
-                className="secondary-button"
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
                 disabled={
                   selectedFailedEpisodeIds.length === 0 || retry.isPending
                 }
@@ -391,10 +402,13 @@ export function ExportsPage() {
                 <RotateCcw size={14} /> 重试所选失败集
               </button>
             </div>
-            <div className="export-job-list">
+            <div className="grid gap-2">
               {[...latestJobs.values()].map((job) => (
-                <div className="export-job-row" key={job.id}>
-                  <div className="export-job-title">
+                <div
+                  className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border p-3"
+                  key={job.id}
+                >
+                  <div className="grid gap-1">
                     {job.status === "failed" ? (
                       <input
                         type="checkbox"
@@ -410,7 +424,7 @@ export function ExportsPage() {
                       />
                     ) : (
                       <span
-                        className="export-status-dot"
+                        className="size-2 rounded-full bg-primary"
                         data-status={job.status}
                       />
                     )}
@@ -422,10 +436,10 @@ export function ExportsPage() {
                       </small>
                     </span>
                   </div>
-                  <div className="export-artifact-actions">
+                  <div className="flex flex-wrap items-center gap-2">
                     {job.artifacts.map((artifact) => (
                       <button
-                        className="secondary-button"
+                        className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
                         key={artifact.id}
                         disabled={
                           !downloadableArtifact(job, artifact) ||
@@ -439,7 +453,7 @@ export function ExportsPage() {
                     ))}
                   </div>
                   {(job.rendererDiagnostic || job.diagnostics.length > 0) && (
-                    <small className="export-job-diagnostic">
+                    <small className="w-full text-sm text-muted-foreground">
                       {job.rendererDiagnostic ??
                         `${job.diagnostics.length} 项 owner diagnostic`}
                     </small>

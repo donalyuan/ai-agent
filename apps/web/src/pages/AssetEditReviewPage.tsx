@@ -1,4 +1,3 @@
-import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -32,6 +31,13 @@ import {
   reviewSliceKey,
   useAssetEditReviewStore,
 } from "../asset-edit-review/store";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "../shared/ui";
 import { OwnerApiError } from "../workbench/api";
 
 type Props = { projectId: string };
@@ -56,15 +62,19 @@ function FactVersion({
   version: ReviewPlan["base"];
 }) {
   return (
-    <div className="review-version-fact">
-      <span className="micro-label">{label}</span>
+    <div className="grid gap-1 rounded-md border border-border bg-muted/40 p-3 text-sm">
+      <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
       <strong>
         {version.kind === "image" ? "完整图片版本" : "完整视频版本"}
       </strong>
-      <span className="mono">
+      <span className="font-mono text-xs text-muted-foreground">
         {version.assetVersionId} · rev {version.revision}
       </span>
-      <span className="mono">{shortHash(version.contentHash)}</span>
+      <span className="font-mono text-xs text-muted-foreground">
+        {shortHash(version.contentHash)}
+      </span>
       <span>{version.mimeType}</span>
     </div>
   );
@@ -77,7 +87,9 @@ function ContinuityGate({
 }) {
   const ready = continuity.status === "accepted_current";
   return (
-    <div className={`review-gate ${ready ? "ready" : "blocked"}`}>
+    <div
+      className={`flex items-start gap-2 rounded-md border p-3 text-sm ${ready ? "border-success/30 bg-success/10 text-success" : "border-warning/30 bg-warning/10 text-warning-foreground"}`}
+    >
       {ready ? <ShieldCheck size={17} /> : <CircleAlert size={17} />}
       <div>
         <strong>{ready ? "Continuity 已对齐" : "continuity_stale"}</strong>
@@ -87,7 +99,10 @@ function ContinuityGate({
             : "未绑定 accepted ResolvedContinuitySnapshot"}
         </span>
         {continuity.tasks.map((task) => (
-          <span key={task.id} className="mono">
+          <span
+            key={task.id}
+            className="font-mono text-xs text-muted-foreground"
+          >
             task {task.id} · {task.status} · rev {task.revision}
           </span>
         ))}
@@ -101,7 +116,10 @@ function ErrorState({ error }: { error: unknown }) {
   const message =
     error instanceof Error ? error.message : "owner projection unavailable";
   return (
-    <div className="review-diagnostic" role="alert">
+    <div
+      className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+      role="alert"
+    >
       <CircleAlert size={17} />
       <span>
         <strong>{code}</strong>
@@ -135,6 +153,7 @@ export function AssetEditReviewPage({ projectId }: Props) {
   const [selectedTurnId, setSelectedTurnId] = useState("");
   const [selectedPlanId, setSelectedPlanId] = useState("");
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+  const [staleRevision, setStaleRevision] = useState(false);
 
   const sessions = useQuery({
     queryKey: assetEditReviewQueryKeys.sessions(projectId, episodeId),
@@ -184,10 +203,24 @@ export function AssetEditReviewPage({ projectId }: Props) {
       queryKey: assetEditReviewQueryKeys.session(projectId, activeSessionId),
     });
   };
+  const recoverRevisionConflict = async (error: unknown) => {
+    if (error instanceof OwnerApiError && error.status === 409) {
+      setStaleRevision(true);
+      setConfirm(null);
+      await queryClient.refetchQueries({
+        queryKey: assetEditReviewQueryKeys.session(projectId, activeSessionId),
+      });
+      await queryClient.refetchQueries({
+        queryKey: assetEditReviewQueryKeys.sessions(projectId, episodeId),
+      });
+      setStaleRevision(false);
+    }
+  };
   const sendMessage = useMutation({
     mutationFn: async () => {
       if (!session.data || !message.trim()) throw new Error("消息不能为空");
       return assetEditReviewApi.appendMessage(
+        projectId,
         session.data.id,
         await hashUserInput(message.trim()),
         correlation("review-message"),
@@ -293,14 +326,18 @@ export function AssetEditReviewPage({ projectId }: Props) {
         correlationId: correlation("review-plan"),
       });
     },
-    onSuccess: invalidateSession,
+    onSuccess: async () => {
+      setStaleRevision(false);
+      await invalidateSession();
+    },
+    onError: recoverRevisionConflict,
   });
   const execute = useMutation({
     mutationFn: async (plan: ReviewPlan) => {
       const runId = params.get("runId") ?? "";
       const nodeRunId = params.get("nodeRunId") ?? "";
       const logicalOperation = `asset-edit:${plan.id}:execute`;
-      return assetEditReviewApi.executePlan(plan.id, {
+      return assetEditReviewApi.executePlan(projectId, plan.id, {
         planRevision: plan.revision,
         runId,
         nodeRunId,
@@ -311,7 +348,11 @@ export function AssetEditReviewPage({ projectId }: Props) {
         ),
       });
     },
-    onSuccess: invalidateSession,
+    onSuccess: async () => {
+      setStaleRevision(false);
+      await invalidateSession();
+    },
+    onError: recoverRevisionConflict,
   });
   const review = useMutation({
     mutationFn: async ({
@@ -323,7 +364,7 @@ export function AssetEditReviewPage({ projectId }: Props) {
         candidate.provenance.expectedTargetRevision,
       );
       if (kind === "accept") {
-        return assetEditReviewApi.reviewCandidate(candidate.id, {
+        return assetEditReviewApi.reviewCandidate(projectId, candidate.id, {
           action: "accept",
           expectedRevision: candidate.revision,
           expectedBaseVersionId: plan.base.assetVersionId,
@@ -346,7 +387,7 @@ export function AssetEditReviewPage({ projectId }: Props) {
           ],
         });
       }
-      return assetEditReviewApi.reviewCandidate(candidate.id, {
+      return assetEditReviewApi.reviewCandidate(projectId, candidate.id, {
         action: kind,
         expectedRevision: candidate.revision,
         expectedBaseVersionId: plan.base.assetVersionId,
@@ -355,7 +396,11 @@ export function AssetEditReviewPage({ projectId }: Props) {
           kind === "retake" ? correlation(`retake:${candidate.id}`) : undefined,
       });
     },
-    onSuccess: invalidateSession,
+    onSuccess: async () => {
+      setStaleRevision(false);
+      await invalidateSession();
+    },
+    onError: recoverRevisionConflict,
   });
 
   const mutationError =
@@ -378,8 +423,11 @@ export function AssetEditReviewPage({ projectId }: Props) {
 
   if (unsupported) {
     return (
-      <section className="page-body review-page">
-        <div className="review-diagnostic unsupported" role="alert">
+      <section className="mx-auto flex w-full max-w-screen-2xl flex-col gap-6 p-4 sm:p-6 lg:p-8 gap-5">
+        <div
+          className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive unsupported"
+          role="alert"
+        >
           <CircleAlert size={20} />
           <span>
             <strong>unsupported_feature</strong>
@@ -392,22 +440,26 @@ export function AssetEditReviewPage({ projectId }: Props) {
   }
 
   return (
-    <section className="page-body review-page">
-      <header className="review-heading">
+    <section className="mx-auto flex w-full max-w-screen-2xl flex-col gap-6 p-4 sm:p-6 lg:p-8 gap-5">
+      <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
         <div>
-          <span className="micro-label">ASSET EDIT / OWNER REVIEW</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            ASSET EDIT / OWNER REVIEW
+          </span>
           <h2>候选审片台</h2>
           <p>对话只形成待审核计划；执行、接受与重拍始终由独立确认触发。</p>
         </div>
-        <div className="review-profile-fact">
+        <div className="rounded-md border border-border bg-muted px-3 py-2 text-sm">
           <span className="project-led" />
           <strong>Mock + Local offline</strong>
-          <span className="mono">adapter: local_workspace</span>
+          <span className="font-mono text-xs text-muted-foreground">
+            adapter: local_workspace
+          </span>
         </div>
       </header>
 
       {!episodeId && (
-        <div className="review-empty">
+        <div className="rounded-lg border border-dashed border-border bg-card p-8 text-center text-sm text-muted-foreground">
           <MessageSquareText size={24} />
           <strong>请选择 Episode</strong>
           <span>
@@ -417,8 +469,8 @@ export function AssetEditReviewPage({ projectId }: Props) {
         </div>
       )}
       {(sessions.isPending || session.isPending) && episodeId && (
-        <div className="review-loading">
-          <LoaderCircle className="spin" size={18} /> 正在读取 AssetEdit
+        <div className="flex items-center gap-2 rounded-md border border-border bg-muted p-3 text-sm">
+          <LoaderCircle className="animate-spin" size={18} /> 正在读取 AssetEdit
           owner...
         </div>
       )}
@@ -426,7 +478,10 @@ export function AssetEditReviewPage({ projectId }: Props) {
         <ErrorState error={sessions.error || session.error} />
       )}
       {requestedSessionInvalid && (
-        <div className="review-diagnostic" role="alert">
+        <div
+          className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+          role="alert"
+        >
           <CircleAlert size={17} />
           <span>
             <strong>active_session_scope_invalid</strong>
@@ -439,9 +494,11 @@ export function AssetEditReviewPage({ projectId }: Props) {
         sessions.data?.items.length === 0 &&
         !requestedSessionId &&
         (requestedVersionId ? (
-          <div className="review-session-create">
+          <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
             <div>
-              <span className="micro-label">PRIMARY SELECTION</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                PRIMARY SELECTION
+              </span>
               <h3>从完整 AssetVersion 建立审核会话</h3>
               <p>
                 owner 会再次核对 project、revision、hash、MIME 与 accepted
@@ -449,7 +506,7 @@ export function AssetEditReviewPage({ projectId }: Props) {
               </p>
             </div>
             {selectedVersion.isPending && (
-              <LoaderCircle className="spin" size={18} />
+              <LoaderCircle className="animate-spin" size={18} />
             )}
             {selectedVersion.error && (
               <ErrorState error={selectedVersion.error} />
@@ -460,7 +517,7 @@ export function AssetEditReviewPage({ projectId }: Props) {
                   label="PRIMARY"
                   version={{ ...selectedVersion.data } as ReviewPlan["base"]}
                 />
-                <div className="review-reference-picker">
+                <div className="mt-4 grid gap-2 rounded-md border border-border p-3">
                   <label htmlFor="review-reference-id">
                     显式 reference AssetVersion ID
                   </label>
@@ -484,10 +541,10 @@ export function AssetEditReviewPage({ projectId }: Props) {
                   </div>
                   {selectedReferences.map((reference) => (
                     <div
-                      className="review-reference-chip"
+                      className="flex items-center justify-between gap-2 rounded-md bg-muted px-2 py-1"
                       key={reference.assetVersionId}
                     >
-                      <span className="mono">
+                      <span className="font-mono text-xs text-muted-foreground">
                         {reference.assetVersionId} · rev {reference.revision} ·{" "}
                         {shortHash(reference.contentHash)}
                       </span>
@@ -511,7 +568,7 @@ export function AssetEditReviewPage({ projectId }: Props) {
                   ))}
                 </div>
                 <button
-                  className="review-command"
+                  className="mt-4 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
                   disabled={createSession.isPending}
                   onClick={() => createSession.mutate()}
                 >
@@ -521,7 +578,7 @@ export function AssetEditReviewPage({ projectId }: Props) {
             )}
           </div>
         ) : (
-          <div className="review-empty">
+          <div className="rounded-lg border border-dashed border-border bg-card p-8 text-center text-sm text-muted-foreground">
             <GitCompareArrows size={24} />
             <strong>本集没有 AssetEditSession</strong>
             <span>
@@ -533,41 +590,51 @@ export function AssetEditReviewPage({ projectId }: Props) {
 
       {session.data && (
         <>
-          <div className="review-context-strip">
+          <div className="flex flex-wrap gap-3 rounded-md bg-muted p-3 text-sm">
             <span>
               Episode <b>{session.data.episodeId}</b>
             </span>
             <span>
               Target <b>{session.data.targetId}</b>
             </span>
-            <span className="mono">
+            <span className="font-mono text-xs text-muted-foreground">
               Session {session.data.id} · rev {session.data.revision}
             </span>
           </div>
-          <div className="review-workspace">
-            <section className="review-conversation" aria-label="Agent 对话">
-              <div className="review-section-title">
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(22rem,0.8fr)]">
+            <section
+              className="rounded-lg border border-border bg-card p-5 shadow-sm"
+              aria-label="Agent 对话"
+            >
+              <div className="flex items-start gap-2">
                 <MessageSquareText size={17} />
                 <div>
-                  <span className="micro-label">CONVERSATION</span>
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    CONVERSATION
+                  </span>
                   <h3>会话轮次</h3>
                 </div>
               </div>
-              <div className="review-message-list">
+              <div className="mt-4 grid max-h-96 gap-3 overflow-y-auto pr-1">
                 {session.data.conversation.messages.map((item) => (
-                  <div className={`review-message ${item.role}`} key={item.id}>
+                  <div
+                    className={`grid gap-1 rounded-md border p-3 text-sm ${item.role === "user" ? "border-primary/30 bg-primary/5" : "border-border bg-muted/40"}`}
+                    key={item.id}
+                  >
                     <span>{item.role === "user" ? "你" : "Agent"}</span>
                     <div>
                       <strong>{item.status}</strong>
-                      <small className="mono">
+                      <small className="font-mono text-xs text-muted-foreground">
                         #{item.sequence} · {shortHash(item.contentHash)}
                       </small>
-                      <small className="mono">{item.correlationId}</small>
+                      <small className="font-mono text-xs text-muted-foreground">
+                        {item.correlationId}
+                      </small>
                     </div>
                   </div>
                 ))}
               </div>
-              <label className="review-input-label">
+              <label className="mt-4 grid gap-1 text-sm">
                 <span>追加用户消息</span>
                 <textarea
                   value={message}
@@ -576,13 +643,13 @@ export function AssetEditReviewPage({ projectId }: Props) {
                 />
               </label>
               <button
-                className="review-command secondary"
+                className="mt-3 inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
                 disabled={!message.trim() || sendMessage.isPending}
                 onClick={() => sendMessage.mutate()}
               >
                 <Send size={15} /> 发送消息
               </button>
-              <div className="review-turn-builder">
+              <div className="mt-4 grid gap-3 rounded-md border border-border p-3">
                 <label>
                   <span>已完成 Agent turn</span>
                   <select
@@ -605,7 +672,7 @@ export function AssetEditReviewPage({ projectId }: Props) {
                   />
                 </label>
                 <button
-                  className="review-command"
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
                   disabled={
                     !selectedTurnId ||
                     !planInstruction.trim() ||
@@ -619,16 +686,19 @@ export function AssetEditReviewPage({ projectId }: Props) {
                   <RefreshCw size={15} /> 从本轮生成编辑计划
                 </button>
                 {(!params.get("runId") || !params.get("nodeRunId")) && (
-                  <small className="review-field-diagnostic">
+                  <small className="text-sm text-warning-foreground">
                     缺少 runId / nodeRunId，只读恢复可用，计划生成保持禁用。
                   </small>
                 )}
               </div>
             </section>
 
-            <section className="review-stage" aria-label="计划与候选比较">
+            <section
+              className="rounded-lg border border-border bg-card p-5 shadow-sm"
+              aria-label="计划与候选比较"
+            >
               {!currentPlan && (
-                <div className="review-empty">
+                <div className="rounded-lg border border-dashed border-border bg-card p-8 text-center text-sm text-muted-foreground">
                   <GitCompareArrows size={24} />
                   <strong>尚无待审核计划</strong>
                   <span>完成 Agent reply 后，明确选择 turn 生成计划。</span>
@@ -637,7 +707,7 @@ export function AssetEditReviewPage({ projectId }: Props) {
               {currentPlan && (
                 <>
                   {session.data.plans.length > 1 && (
-                    <label className="review-plan-picker">
+                    <label className="grid gap-1 text-sm">
                       <span>审核计划</span>
                       <select
                         aria-label="审核计划"
@@ -654,20 +724,22 @@ export function AssetEditReviewPage({ projectId }: Props) {
                       </select>
                     </label>
                   )}
-                  <div className="review-plan-header">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <span className="micro-label">ASSET EDIT PLAN</span>
+                      <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        ASSET EDIT PLAN
+                      </span>
                       <h3>{currentPlan.instruction}</h3>
-                      <span className="mono">
+                      <span className="font-mono text-xs text-muted-foreground">
                         {currentPlan.id} · rev {currentPlan.revision}
                       </span>
                     </div>
-                    <span className={`status-tag ${currentPlan.status}`}>
+                    <span className="rounded-full bg-muted px-2 py-1 text-xs font-semibold text-muted-foreground">
                       {currentPlan.status}
                     </span>
                   </div>
                   <ContinuityGate continuity={currentPlan.continuity} />
-                  <div className="review-plan-facts">
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
                     <div>
                       <span>费用</span>
                       <strong>{currentPlan.cost.status}</strong>
@@ -687,7 +759,7 @@ export function AssetEditReviewPage({ projectId }: Props) {
                       <small>exact reference only</small>
                     </div>
                   </div>
-                  <div className="review-compare-grid">
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
                     <FactVersion label="BASE" version={currentPlan.base} />
                     {currentPlan.candidates[0] ? (
                       <FactVersion
@@ -695,14 +767,16 @@ export function AssetEditReviewPage({ projectId }: Props) {
                         version={currentPlan.candidates[0].assetVersion}
                       />
                     ) : (
-                      <div className="review-version-fact pending">
-                        <span className="micro-label">RESULT</span>
+                      <div className="grid gap-1 rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          RESULT
+                        </span>
                         <strong>执行后等待候选</strong>
                       </div>
                     )}
                   </div>
                   <button
-                    className="review-command execute"
+                    className="mt-4 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
                     disabled={
                       currentPlan.status !== "pending_review" ||
                       currentPlan.impact.status !== "clear" ||
@@ -722,9 +796,12 @@ export function AssetEditReviewPage({ projectId }: Props) {
                       candidate.provenance.expectedTargetRevision,
                     );
                     const canAccept =
+                      !staleRevision &&
                       candidate.status === "pending_review" &&
                       Number.isInteger(targetRevision) &&
                       targetRevision > 0 &&
+                      currentPlan.status === "pending_review" &&
+                      currentPlan.impact.status === "clear" &&
                       currentPlan.continuity.status === "accepted_current";
                     const handoff =
                       candidate.assetVersion.kind === "video"
@@ -751,11 +828,11 @@ export function AssetEditReviewPage({ projectId }: Props) {
                         : null;
                     return (
                       <div
-                        className="review-candidate-actions"
+                        className="mt-3 flex flex-wrap gap-2"
                         key={candidate.id}
                       >
                         <div>
-                          <span className="micro-label">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                             {candidate.assetVersion.kind.toUpperCase()}{" "}
                             CANDIDATE
                           </span>
@@ -778,9 +855,13 @@ export function AssetEditReviewPage({ projectId }: Props) {
                             （只影响 Timeline/preview/export）
                           </small>
                         </div>
-                        <div className="review-action-row">
+                        <div className="flex flex-wrap gap-2">
                           <button
-                            disabled={candidate.status !== "pending_review"}
+                            disabled={
+                              staleRevision ||
+                              currentPlan.status !== "pending_review" ||
+                              candidate.status !== "pending_review"
+                            }
                             onClick={() =>
                               setConfirm({
                                 kind: "reject",
@@ -792,7 +873,11 @@ export function AssetEditReviewPage({ projectId }: Props) {
                             <X size={15} /> 拒绝
                           </button>
                           <button
-                            disabled={candidate.status !== "pending_review"}
+                            disabled={
+                              staleRevision ||
+                              currentPlan.status !== "pending_review" ||
+                              candidate.status !== "pending_review"
+                            }
                             onClick={() =>
                               setConfirm({
                                 kind: "retake",
@@ -818,13 +903,13 @@ export function AssetEditReviewPage({ projectId }: Props) {
                           </button>
                           {handoff?.success ? (
                             <Link
-                              className="review-timeline-link"
+                              className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
                               to={`/projects/${handoff.data.projectId}/episodes/${handoff.data.episodeId}/timeline?handoff=${encodeURIComponent(JSON.stringify(handoff.data))}`}
                             >
                               进入 Timeline 替换确认 <ArrowRight size={14} />
                             </Link>
                           ) : (
-                            <span className="review-field-diagnostic">
+                            <span className="text-sm text-warning-foreground">
                               Timeline handoff 等待 accepted-current + matching
                               derivative ready
                             </span>
@@ -841,59 +926,58 @@ export function AssetEditReviewPage({ projectId }: Props) {
         </>
       )}
 
-      <Dialog.Root
+      <Dialog
         open={Boolean(confirm)}
         onOpenChange={(open) => !open && setConfirm(null)}
       >
-        <Dialog.Portal>
-          <Dialog.Overlay className="dialog-overlay" />
-          <Dialog.Content
-            className="dialog-content review-confirm-dialog"
-            aria-describedby="review-confirm-description"
-          >
-            <Dialog.Title>
-              {confirm?.kind === "execute"
-                ? "确认执行编辑计划"
-                : confirm?.kind === "accept"
-                  ? "确认接受候选"
-                  : confirm?.kind === "reject"
-                    ? "确认拒绝候选"
-                    : "确认生成重拍 successor"}
-            </Dialog.Title>
-            <Dialog.Description id="review-confirm-description">
-              {confirm?.kind === "execute"
-                ? "将创建可收费 operation；不会自动接受结果。"
-                : confirm?.kind === "accept"
-                  ? "将以一个 owner command 对精确 Shot revision 执行 all-or-nothing CAS；不会复制 AssetVersion 或媒体字节。"
-                  : confirm?.kind === "reject"
-                    ? "基础 AssetVersion 保持不变。"
-                    : "将使用新的 logicalOperation，旧候选保持可审计。"}
-            </Dialog.Description>
-            <div className="dialog-actions">
-              <Dialog.Close asChild>
-                <button className="dialog-secondary">取消</button>
-              </Dialog.Close>
-              <button
-                className="dialog-primary"
-                onClick={() => {
-                  if (!confirm) return;
-                  if (confirm.kind === "execute") execute.mutate(confirm.plan);
-                  else review.mutate(confirm);
-                  setConfirm(null);
-                }}
-              >
-                {confirm?.kind === "execute"
-                  ? "确认执行"
-                  : confirm?.kind === "accept"
-                    ? "确认接受"
-                    : confirm?.kind === "reject"
-                      ? "确认拒绝"
-                      : "确认重拍"}
+        <DialogContent
+          className="max-w-lg"
+          aria-describedby="review-confirm-description"
+        >
+          <DialogTitle>
+            {confirm?.kind === "execute"
+              ? "确认执行编辑计划"
+              : confirm?.kind === "accept"
+                ? "确认接受候选"
+                : confirm?.kind === "reject"
+                  ? "确认拒绝候选"
+                  : "确认生成重拍 successor"}
+          </DialogTitle>
+          <DialogDescription id="review-confirm-description">
+            {confirm?.kind === "execute"
+              ? "将创建可收费 operation；不会自动接受结果。"
+              : confirm?.kind === "accept"
+                ? "将以一个 owner command 对精确 Shot revision 执行 all-or-nothing CAS；不会复制 AssetVersion 或媒体字节。"
+                : confirm?.kind === "reject"
+                  ? "基础 AssetVersion 保持不变。"
+                  : "将使用新的 logicalOperation，旧候选保持可审计。"}
+          </DialogDescription>
+          <div className="flex flex-wrap justify-end gap-2">
+            <DialogClose asChild>
+              <button className="inline-flex h-10 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground hover:bg-accent">
+                取消
               </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+            </DialogClose>
+            <button
+              className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
+              onClick={() => {
+                if (!confirm) return;
+                if (confirm.kind === "execute") execute.mutate(confirm.plan);
+                else review.mutate(confirm);
+                setConfirm(null);
+              }}
+            >
+              {confirm?.kind === "execute"
+                ? "确认执行"
+                : confirm?.kind === "accept"
+                  ? "确认接受"
+                  : confirm?.kind === "reject"
+                    ? "确认拒绝"
+                    : "确认重拍"}
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

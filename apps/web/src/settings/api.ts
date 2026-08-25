@@ -77,6 +77,66 @@ export const settingsApi = {
         schemaVersion: "1.0.0",
       }),
     }),
+  updateModel: (
+    id: string,
+    expectedRevision: number,
+    changes: Record<string, unknown>,
+  ) =>
+    request(`/v1/catalog/models/${id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": String(expectedRevision),
+      },
+      body: JSON.stringify({
+        expectedRevision,
+        changes,
+        schemaVersion: "1.0.0",
+      }),
+    }),
+  setProviderEnabled: (
+    id: string,
+    expectedRevision: number,
+    enabled: boolean,
+  ) =>
+    request(`/v1/catalog/providers/${id}/${enabled ? "enable" : "disable"}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": String(expectedRevision),
+      },
+      body: JSON.stringify({ expectedRevision }),
+    }),
+  setProfileEnabled: (id: string, expectedRevision: number, enabled: boolean) =>
+    request(`/v1/catalog/profiles/${id}/${enabled ? "enable" : "disable"}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": String(expectedRevision),
+      },
+      body: JSON.stringify({ expectedRevision }),
+    }),
+  setModelEnabled: (id: string, expectedRevision: number, enabled: boolean) =>
+    request(`/v1/catalog/models/${id}/${enabled ? "enable" : "disable"}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": String(expectedRevision),
+      },
+      body: JSON.stringify({ expectedRevision }),
+    }),
+  setSkillEnabled: (id: string, expectedRevision: number, enabled: boolean) =>
+    request(
+      `/v1/catalog/skill-revisions/${id}/${enabled ? "enable" : "disable"}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "If-Match": String(expectedRevision),
+        },
+        body: JSON.stringify({ expectedRevision }),
+      },
+    ),
   credentialStatus: (id: string) =>
     request(`/v1/catalog/profiles/${id}/credential`),
   replaceCredential: (
@@ -87,14 +147,24 @@ export const settingsApi = {
   ) =>
     request(`/v1/catalog/profiles/${id}/credential`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": String(expectedRevision),
+      },
       body: JSON.stringify({ expectedRevision, credentialId, value }),
     }),
-  syncModels: (id: string, remoteModels: string[]) =>
+  syncModels: (id: string, expectedRevision: number, remoteModels: string[]) =>
     request(`/v1/catalog/profiles/${id}/model-syncs`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ remoteModels }),
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": String(expectedRevision),
+      },
+      body: JSON.stringify({
+        remoteModels,
+        expectedRevision,
+        source: "explicit_input",
+      }),
     }),
   decideSync: (
     id: string,
@@ -103,14 +173,20 @@ export const settingsApi = {
   ) =>
     request(`/v1/catalog/model-syncs/${id}/decision`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": String(expectedRevision),
+      },
       body: JSON.stringify({ expectedRevision, decision }),
     }),
-  probe: (id: string, operation: string) =>
+  probe: (id: string, expectedRevision: number, operation: string) =>
     request(`/v1/catalog/profiles/${id}/probe`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ operation }),
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": String(expectedRevision),
+      },
+      body: JSON.stringify({ operation, expectedRevision }),
     }),
   storage: async (profileId: string) =>
     request(`/v1/storage-profiles/${profileId}`),
