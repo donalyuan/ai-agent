@@ -572,7 +572,11 @@ async def test_storage_composition_freezes_project_profile_and_binding_without_f
 
     class StorageProfiles:
         async def resolve_upload_profile(
-            self, project_id: str, profile_id: str, expected_revision: int
+            self,
+            project_id: str,
+            profile_id: str,
+            expected_revision: int,
+            project_scope: str | None = None,
         ) -> StorageProfile:
             assert (project_id, profile_id, expected_revision) == ("project-1", profile.id, 1)
             return profile

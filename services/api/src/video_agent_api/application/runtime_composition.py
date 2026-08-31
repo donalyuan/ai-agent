@@ -442,7 +442,7 @@ class CatalogRuntimeComposition:
         if not expected_bucket_binding_id:
             raise ValidationDomainError("storage bucket binding is required")
         profile = await storage_profiles.resolve_upload_profile(
-            project_id, profile_id, expected_profile_revision
+            project_id, profile_id, expected_profile_revision, project_id
         )
         if profile.bucket_binding_id != expected_bucket_binding_id:
             raise ValidationDomainError("storage bucket binding is stale or foreign")

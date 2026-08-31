@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
-from video_agent_api.domain.errors import ProjectNotFoundError, ValidationDomainError
+from video_agent_api.domain.errors import (
+    ProjectAccessForbiddenError,
+    ProjectNotFoundError,
+    ValidationDomainError,
+)
 from video_agent_api.domain.source_material import (
     SourceMaterial,
     SourceMaterialUploadIntent,
@@ -19,6 +23,7 @@ class CreateSourceMaterialCommand:
     project_id: str
     material_type: str
     input_mode: str
+    project_scope: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +34,7 @@ class AppendSourceMaterialCommand:
     content: bytes | None = None
     content_hash: str | None = None
     asset_version_id: str | None = None
+    project_scope: str | None = None
 
 
 class SourceMaterialService:
@@ -36,6 +42,8 @@ class SourceMaterialService:
         self._uow_factory = uow_factory
 
     async def create(self, command: CreateSourceMaterialCommand) -> SourceMaterial:
+        if command.project_scope != command.project_id:
+            raise ValidationDomainError("project scope is required")
         if command.input_mode not in {"inline_text", "uploaded_file"}:
             raise ValidationDomainError("source material input mode is invalid")
         async with self._uow_factory() as uow:
@@ -53,26 +61,26 @@ class SourceMaterialService:
                 command.input_mode,  # type: ignore[arg-type]
             )
             uow.source_materials[source.id] = source
-            project.source_materials = [
-                *getattr(project, "source_materials", []),
-                _source_json(source),
-            ]
-            project.revision += 1
-            await uow.projects.save(project)
             await uow.commit()
         return source
 
     async def append(self, command: AppendSourceMaterialCommand) -> SourceMaterialVersion:
+        if not command.project_scope:
+            raise ValidationDomainError("project scope is required")
         async with self._uow_factory() as uow:
             source = uow.source_materials.get(command.source_material_id)
             if source is None:
-                project = await _project_for_source(uow, command.source_material_id)
+                project = await _project_for_source(
+                    uow, command.source_material_id, command.project_scope
+                )
                 if project is not None:
                     source = _restore_source(project, command.source_material_id)
                     if source is not None:
                         uow.source_materials[source.id] = source
             if source is None:
                 raise ValidationDomainError("source material not found")
+            if source.project_id != command.project_scope:
+                raise ProjectAccessForbiddenError(command.project_scope)
             if command.input_mode != source.input_mode:
                 raise ValidationDomainError("source material input mode is immutable")
             if command.input_mode == "uploaded_file":
@@ -109,6 +117,7 @@ class SourceMaterialService:
                     content=None,
                     content_hash=version.content_hash,
                     asset_version_id=version.id,
+                    project_scope=command.project_scope,
                 )
             version = source.append(
                 expected_revision=command.expected_revision,
@@ -117,14 +126,6 @@ class SourceMaterialService:
                 content_hash=command.content_hash,
                 asset_version_id=command.asset_version_id,
             )
-            project = await _project_for_source(uow, source.id)
-            if project is not None:
-                project.source_materials = [
-                    _source_json(source) if item.get("id") == source.id else item
-                    for item in getattr(project, "source_materials", [])
-                ]
-                project.revision += 1
-                await uow.projects.save(project)
             await uow.commit()
             return cast(SourceMaterialVersion, version)
 
@@ -134,13 +135,20 @@ class SourceMaterialService:
         reservation_id: str,
         expected_revision: int,
         content_hash: str,
+        project_scope: str | None = None,
     ) -> SourceMaterialUploadIntent:
+        if not project_scope:
+            raise ValidationDomainError("project scope is required")
         async with self._uow_factory() as uow:
             source = uow.source_materials.get(source_material_id)
             if source is None:
-                project = await _project_for_source(uow, source_material_id)
+                project = await _project_for_source(uow, source_material_id, project_scope)
                 source = _restore_source(project, source_material_id) if project else None
-            if source is None or source.revision != expected_revision:
+            if source is None:
+                raise ValidationDomainError("source material is outside the project scope")
+            if source.project_id != project_scope:
+                raise ProjectAccessForbiddenError(project_scope)
+            if source.revision != expected_revision:
                 raise ValidationDomainError("source material revision is stale")
             if source.input_mode != "uploaded_file":
                 raise ValidationDomainError("source material upload intent requires uploaded_file")
@@ -180,8 +188,12 @@ class SourceMaterialService:
             }
 
 
-async def _project_for_source(uow: Any, source_id: str) -> Any | None:
+async def _project_for_source(
+    uow: Any, source_id: str, project_scope: str | None = None
+) -> Any | None:
     for project in await uow.projects.list():
+        if project_scope is not None and project.id != project_scope:
+            continue
         if any(
             str(item.get("id")) == source_id for item in getattr(project, "source_materials", [])
         ):
@@ -212,9 +224,3 @@ def _restore_source(project: Any, source_id: str) -> SourceMaterial | None:
         str(raw["id"]),
         versions,
     )
-
-
-def _source_json(source: SourceMaterial) -> dict[str, object]:
-    from dataclasses import asdict
-
-    return asdict(source)

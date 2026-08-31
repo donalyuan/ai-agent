@@ -17,7 +17,12 @@ from video_agent_api.application.catalog import (
     SetQuotaCommand,
     UpdateCatalogCommand,
 )
-from video_agent_api.domain.errors import DatabaseUnavailableError, ValidationDomainError
+from video_agent_api.domain.errors import (
+    DatabaseUnavailableError,
+    ProjectAccessForbiddenError,
+    RevisionConflictError,
+    ValidationDomainError,
+)
 
 router = APIRouter(tags=["catalog"])
 
@@ -127,7 +132,7 @@ def _expected(body: int, header: str | None) -> int:
     except ValueError as error:
         raise ValidationDomainError("If-Match must be an integer revision") from error
     if value != body:
-        raise ValidationDomainError("If-Match and expectedRevision conflict")
+        raise RevisionConflictError("If-Match", body, value)
     return body
 
 
@@ -453,12 +458,16 @@ async def provider_calls(
     service: Annotated[CatalogService, Depends(_service)],
     node_run_id: Annotated[str | None, Query(alias="nodeRunId")] = None,
     logical_operation: Annotated[str | None, Query(alias="logicalOperation")] = None,
+    project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
 ) -> list[dict[str, object]]:
+    if project_scope != project_id:
+        raise ProjectAccessForbiddenError(project_id)
     return await service.provider_call_summaries(
         project_id,
         run_id,
         node_run_id=node_run_id,
         logical_operation=logical_operation,
+        project_scope=project_scope,
     )
 
 

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from video_agent_api.domain.errors import (
     CredentialMasterKeyUnavailableError,
+    ProjectAccessForbiddenError,
     StorageProfileNotFoundError,
     StorageProfileRevisionConflictError,
     ValidationDomainError,
@@ -100,7 +101,11 @@ class StorageProfileService:
         ):
             raise ValidationDomainError("storage profile credential is unconfigured")
 
-    async def list_upload_profiles(self, project_id: str) -> tuple[StorageProfile, ...]:
+    async def list_upload_profiles(
+        self, project_id: str, project_scope: str | None = None
+    ) -> tuple[StorageProfile, ...]:
+        if project_scope != project_id:
+            raise ValidationDomainError("project scope is required")
         async with self._uow_factory() as uow:
             if await uow.projects.get(project_id) is None:
                 raise StorageProfileNotFoundError("storage profile project not found")
@@ -115,8 +120,14 @@ class StorageProfileService:
         return tuple(profiles)
 
     async def resolve_upload_profile(
-        self, project_id: str, profile_id: str, expected_revision: int
+        self,
+        project_id: str,
+        profile_id: str,
+        expected_revision: int,
+        project_scope: str | None = None,
     ) -> StorageProfile:
+        if project_scope != project_id:
+            raise ValidationDomainError("project scope is required")
         if profile_id == "local-test-offline":
             if self._storage_mode != "local_workspace":
                 raise StorageProfileNotFoundError("local storage profile is unavailable")
@@ -125,7 +136,7 @@ class StorageProfileService:
                     raise StorageProfileNotFoundError("storage profile project not found")
             profile = self._local_profile(project_id)
         else:
-            profile = await self.get(profile_id)
+            profile = await self.get(profile_id, project_id)
             if profile.adapter_key != self._storage_mode:
                 raise ValidationDomainError("storage profile adapter is not selected")
         if profile.revision != expected_revision:
@@ -136,6 +147,8 @@ class StorageProfileService:
         return profile
 
     async def create(self, command: CreateStorageProfileCommand) -> StorageProfile:
+        if command.project_id not in command.project_scope:
+            raise ValidationDomainError("storage profile project scope is invalid")
         try:
             profile = StorageProfile(
                 str(uuid4()),
@@ -164,20 +177,39 @@ class StorageProfileService:
             await uow.commit()
         return profile
 
-    async def get(self, profile_id: str) -> StorageProfile:
+    async def get(self, profile_id: str, project_scope: str | None = None) -> StorageProfile:
+        if not project_scope:
+            raise ValidationDomainError("project scope is required")
         async with self._uow_factory() as uow:
             profile = uow.storage_profiles.get(profile_id)
             if profile is None:
                 raise StorageProfileNotFoundError("storage profile not found")
+            if profile.project_id != project_scope or project_scope not in profile.project_scope:
+                raise ProjectAccessForbiddenError(project_scope)
             return cast(StorageProfile, profile)
 
     async def update(
-        self, profile_id: str, expected_revision: int, changes: dict[str, object]
+        self,
+        profile_id: str,
+        expected_revision: int,
+        changes: dict[str, object],
+        project_scope: str | None = None,
     ) -> StorageProfile:
+        if not project_scope:
+            raise ValidationDomainError("project scope is required")
         async with self._uow_factory() as uow:
             profile = uow.storage_profiles.get(profile_id)
             if profile is None:
                 raise StorageProfileNotFoundError("storage profile not found")
+            if profile.project_id != project_scope or project_scope not in profile.project_scope:
+                raise ProjectAccessForbiddenError(project_scope)
+            if "project_scope" in changes:
+                requested_scope = changes["project_scope"]
+                if (
+                    not isinstance(requested_scope, (tuple, list))
+                    or profile.project_id not in requested_scope
+                ):
+                    raise ValidationDomainError("storage profile project scope is invalid")
             if profile.revision != expected_revision:
                 raise StorageProfileRevisionConflictError(
                     profile_id, expected_revision, profile.revision
@@ -194,13 +226,23 @@ class StorageProfileService:
             return cast(StorageProfile, profile)
 
     async def set_enabled(
-        self, profile_id: str, expected_revision: int, enabled: bool
+        self,
+        profile_id: str,
+        expected_revision: int,
+        enabled: bool,
+        project_scope: str | None = None,
     ) -> StorageProfile:
-        return await self.update(profile_id, expected_revision, {"enabled": enabled})
+        return await self.update(profile_id, expected_revision, {"enabled": enabled}, project_scope)
 
     async def connection_test(
-        self, profile_id: str, expected_revision: int, probe_correlation_id: str
+        self,
+        profile_id: str,
+        expected_revision: int,
+        probe_correlation_id: str,
+        project_scope: str | None = None,
     ) -> dict[str, object]:
+        if not project_scope:
+            raise ValidationDomainError("project scope is required")
         async with self._uow_factory() as uow:
             profile = uow.storage_profiles.get(profile_id)
             if profile is None:
@@ -209,6 +251,8 @@ class StorageProfileService:
                     "diagnostic": "storage_profile_not_found",
                     "probeCorrelationId": probe_correlation_id,
                 }
+            if profile.project_id != project_scope or project_scope not in profile.project_scope:
+                raise ProjectAccessForbiddenError(project_scope)
             if profile.revision != expected_revision:
                 raise StorageProfileRevisionConflictError(
                     profile_id, expected_revision, profile.revision

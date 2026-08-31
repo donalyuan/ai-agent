@@ -253,7 +253,29 @@ class EpisodeExportWorker:
                     command.project_id, job.id, str(error), target
                 )
                 raise
-            srt_path.write_bytes(render_srt(plan))
+            try:
+                inspection = self._renderer.inspect_output(mp4_path, workspace)
+                if (
+                    inspection.container != "mp4"
+                    or inspection.video_codec.lower() not in {"h264", "avc1"}
+                    or inspection.audio_codec.lower() not in {"aac", "none", ""}
+                    or inspection.duration_seconds <= 0
+                ):
+                    raise ValidationDomainError("rendered media inspection failed")
+            except Exception as error:
+                target = _diagnostic(job, "renderer", "render_output_inspection_failed")
+                await self._exports.record_job_failure(
+                    command.project_id, job.id, str(error), target
+                )
+                raise
+            try:
+                srt_path.write_bytes(render_srt(plan))
+            except Exception as error:
+                target = _diagnostic(job, "timeline", "srt_render_failed")
+                await self._exports.record_job_failure(
+                    command.project_id, job.id, str(error), target
+                )
+                raise
             artifacts = {item.artifact_type: item for item in job.artifacts}
             audit_facts = {
                 **snapshot.audit_facts,
@@ -264,25 +286,32 @@ class EpisodeExportWorker:
                     "measurementVersion": result.loudness.measurement_version,
                 },
             }
-            manifest = build_light_manifest(
-                plan,
-                version,
-                audit_facts,
-                artifacts["mp4"].id,
-                artifacts["srt"].id,
-                artifacts["light_manifest"].id,
-            )
-            manifest_path.write_text(
-                json.dumps(manifest, sort_keys=True, separators=(",", ":")),
-                encoding="utf-8",
-            )
-            job = await self._exports.complete_rendering(
-                command.project_id,
-                job.id,
-                job.revision,
-                plan.render_plan_hash,
-                result.stderr,
-            )
+            try:
+                manifest = build_light_manifest(
+                    plan,
+                    version,
+                    audit_facts,
+                    artifacts["mp4"].id,
+                    artifacts["srt"].id,
+                    artifacts["light_manifest"].id,
+                )
+                manifest_path.write_text(
+                    json.dumps(manifest, sort_keys=True, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                job = await self._exports.complete_rendering(
+                    command.project_id,
+                    job.id,
+                    job.revision,
+                    plan.render_plan_hash,
+                    result.stderr,
+                )
+            except Exception as error:
+                target = _diagnostic(job, "timeline", "render_finalize_failed")
+                await self._exports.record_job_failure(
+                    command.project_id, job.id, str(error), target
+                )
+                raise
 
         if job.status != "packaging":
             raise ValidationDomainError("export job did not reach packaging")

@@ -1,7 +1,7 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "reportId": "E2E-MVPA-001",
-  "date": "2026-08-26",
+  "date": "2026-08-31",
   "profile": {
     "provider": "Mock Provider",
     "storage": "explicit Local test/offline",
@@ -16,7 +16,7 @@
     "web": "http://127.0.0.1:5174",
     "postgres": "healthy",
     "temporal": "healthy",
-    "alembicHead": "0028_provider_lookup_contract",
+    "alembicHead": "0029_lookup_binding",
     "listenBoundary": "localhost-only"
   },
   "navigationEvidence": {
@@ -149,7 +149,7 @@
       "successEvidence": [
         "services/api/tests/test_workflows_runs_slice.py",
         "services/api/tests/test_workflows_runs_contracts.py",
-        "openspec/changes/implement-workflows-runs-slice/tasks.md"
+        "openspec/changes/archive/2026-08-31-implement-workflows-runs-slice/tasks.md"
       ],
       "focusedFailure": "F03a historical_snapshot_rerun_conflict",
       "noSideEffectInvariant": "历史 Run、snapshot、ProviderCall 和 current 不改写；新 Run 使用新的 run_id + logical_operation，不复用 failed-successor evidence。"
@@ -346,7 +346,7 @@
         "explicit drill fixture"
       ],
       "successEvidence": [
-        "docs/evidence/E2E-MVPA-001-resilience.json",
+        "docs/evidence/E2E-MVPA-001-runtime-gaps.json",
         "services/api/tests/test_resilience_observability.py",
         "docs/runbooks/phase-one-backup-restore.md"
       ],
@@ -375,15 +375,16 @@
   "acceptance": {
     "qualityGate": "passed",
     "pnpmCheck": "passed",
-    "apiTests": "477 passed",
+    "apiTests": "519 passed",
     "contractsTests": "78 passed",
     "webTests": "75 passed",
     "mypy": "passed",
     "compose": "seven services healthy",
     "readiness": "api/generation/media ready",
-    "migrationCycle": "0027 -> 0026 -> 0027 passed",
+    "migrationCycle": "0028 -> 0029 -> 0028 -> 0029 passed",
     "externalBoundary": "credentialed sandbox prerequisites missing; no live Provider/TOS/paid request",
-    "runtimeGapEvidence": "docs/evidence/E2E-MVPA-001-runtime-gaps.json"
+    "runtimeGapEvidence": "docs/evidence/E2E-MVPA-001-runtime-gaps.json",
+    "limitations": "Playwright 当前覆盖只读导航/投影；完整 Compose-backed owner 闭环、真实 telemetry lineage 与 credentialed resilience drill 未执行。"
   },
   "secretScan": {
     "result": "passed",
@@ -393,7 +394,7 @@
   "qualityGates": {
     "contractsTests": "78 passed",
     "webTests": "75 passed",
-    "apiTests": "477 passed",
+    "apiTests": "519 passed",
     "migrationTests": "88 passed",
     "webTypecheck": "passed",
     "apiMypy": "passed",
@@ -401,7 +402,7 @@
     "format": "passed",
     "e2e": "pnpm run test:e2e: Chrome 1 passed, Edge 1 passed",
     "localhostPerformance": "4 routes x 100 samples, max P95 38.859ms < 500ms",
-    "openspecStrict": "20/20 passed",
+    "openspecStrict": "21/21 passed",
     "composeHealth": "all services healthy",
     "externalBoundaries": "live Provider/TOS/FFmpeg remain unconfigured; renderer probe is 503 renderer_unconfigured"
   }

@@ -244,14 +244,14 @@ def build_light_manifest(
             "revision": clip["assetVersionRevision"],
             "hash": clip["assetVersionHash"],
             "authorization": {
-                "status": clip.get("authorizationStatus", "authorized"),
+                "status": clip.get("authorizationStatus", "verified"),
                 "source": "asset-owner",
-                "recordId": str(clip.get("authorizationRecordId", f"auth:{asset_id}")),
+                "recordId": str(clip.get("authorizationRecordId") or asset_id),
             },
             "license": {
                 "status": clip.get("licenseStatus", "approved"),
                 "source": "asset-owner",
-                "recordId": str(clip.get("licenseRecordId", f"license:{asset_id}")),
+                "recordId": str(clip.get("licenseRecordId") or asset_id),
             },
         }
     for cue in plan.cues:
@@ -263,12 +263,12 @@ def build_light_manifest(
             "authorization": {
                 "status": cue["authorizationStatus"],
                 "source": "asset-owner",
-                "recordId": f"auth:{asset_id}",
+                "recordId": str(cue.get("authorizationRecordId") or asset_id),
             },
             "license": {
                 "status": cue["licenseStatus"],
                 "source": "asset-owner",
-                "recordId": f"license:{asset_id}",
+                "recordId": str(cue.get("licenseRecordId") or asset_id),
             },
         }
     return {

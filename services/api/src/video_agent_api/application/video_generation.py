@@ -161,6 +161,53 @@ class AgnesVideoService:
             raise ValidationDomainError("video live provider adapter is incompatible")
         return composed.port, composed.identity.selection(parameters)
 
+    async def _resolve_operation_provider(self, operation: VideoOperation) -> VideoGenerationPort:
+        """Rebuild a live adapter from the operation's frozen Run selection.
+
+        Poll/reconcile happen after the submit activity may have restarted.  The
+        process-global provider is intentionally unusable for live traffic, so
+        the persisted selection snapshot is the only authority for composing the
+        adapter.  Expected revisions make catalog drift fail closed instead of
+        silently polling a different account or capability.
+        """
+        if self._live_composition is None:
+            return self._provider
+        async with self._uow_factory() as uow:
+            run = uow.workflow_runs.get(operation.run_id)
+            selection = run.selection_snapshot if run is not None else None
+        if not isinstance(selection, dict):
+            raise ValidationDomainError("video frozen selection unavailable")
+        if (
+            selection.get("providerId") != operation.provider_id
+            or selection.get("profileId") != operation.profile_id
+            or selection.get("modelId") != operation.model_id
+        ):
+            raise ValidationDomainError("video frozen selection mismatch")
+        raw_profile_revision = selection.get("profileRevision")
+        snapshots = selection.get("capabilitySnapshots")
+        capability = snapshots.get("video.submit") if isinstance(snapshots, dict) else None
+        raw_capability_revision = (
+            capability.get("revision") if isinstance(capability, dict) else None
+        )
+        if (
+            isinstance(raw_profile_revision, bool)
+            or not isinstance(raw_profile_revision, int)
+            or isinstance(raw_capability_revision, bool)
+            or not isinstance(raw_capability_revision, int)
+            or not isinstance(capability, dict)
+            or capability.get("id") != operation.capability_snapshot_id
+        ):
+            raise ValidationDomainError("video frozen capability unavailable")
+        provider, _selection = await self._resolve_provider(
+            project_id=operation.project_id,
+            profile_id=operation.profile_id,
+            model_id=operation.model_id,
+            capability_snapshot_id=operation.capability_snapshot_id,
+            capability_revision=raw_capability_revision,
+            profile_revision=raw_profile_revision,
+        )
+        return provider
+
     async def submit(
         self,
         command: SubmitVideoCommand,
@@ -643,9 +690,10 @@ class AgnesVideoService:
             provider_request_id = operation.provider_request_id
             operation.cancel()
             await uow.commit()
-        if provider_request_id:
+        if provider_request_id and operation.outbound_correlation:
             try:
-                self._provider.cancel_video(provider_request_id, run_id)
+                provider = await self._resolve_operation_provider(operation)
+                provider.cancel_video(provider_request_id, operation.outbound_correlation)
                 await self._catalog.finalize_provider_call(
                     run_id,
                     logical_operation,
@@ -674,8 +722,14 @@ class AgnesVideoService:
                 await uow.commit()
                 return operation
             request_id = operation.provider_request_id
+            correlation = operation.outbound_correlation
+            if not correlation:
+                operation.transition("submission_unknown")
+                await uow.commit()
+                return operation
+        provider = await self._resolve_operation_provider(operation)
         try:
-            result = self._provider.get_video_status(request_id, command.run_id)
+            result = provider.get_video_status(request_id, correlation)
         except Exception:
             async with self._uow_factory() as uow:
                 operation = cast(
@@ -742,17 +796,12 @@ class AgnesVideoService:
                     raise ValidationDomainError(
                         frozen.diagnostic or "video_resource_admission_blocked"
                     )
-            if self._live_composition is not None:
-                # VideoOperation predates durable catalog revision fields. A
-                # reconcile must never reconstruct a live port from mutable
-                # catalog state; retain the owner-specific unknown terminal.
-                return operation
-            provider = self._provider
             correlation = operation.outbound_correlation
             if not correlation:
                 # An ambiguous operation without the frozen external identity
                 # cannot be safely looked up or resubmitted after restart.
                 return operation
+        provider = await self._resolve_operation_provider(operation)
         try:
             result = provider.get_video_status(provider_request_id, correlation)
         except Exception:
@@ -825,9 +874,10 @@ class AgnesVideoService:
         if media_bytes is not None:
             if self._storage is None or self._assets is None:
                 raise ValidationDomainError("video_storage_unconfigured")
-            if not isinstance(self._provider, AgnesVideoProvider):
+            provider = await self._resolve_operation_provider(operation)
+            if not isinstance(provider, AgnesVideoProvider):
                 raise ValidationDomainError("video_media_validator_unconfigured")
-            _, checksum = self._provider.validate_video_media(
+            _, checksum = provider.validate_video_media(
                 media_bytes,
                 mime_type,
                 duration_seconds=operation.duration_seconds,

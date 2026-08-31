@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
+from collections.abc import AsyncIterator
 from typing import Annotated, Literal, cast
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from video_agent_api.application.agent_edit import AgentEditService
@@ -331,6 +335,45 @@ async def append_reply(
         project_scope=project_scope(request),
     )
     return {"id": message.id, "sequence": message.sequence, "status": message.status}
+
+
+@router.get("/v1/asset-edit-sessions/{session_id}/events")
+async def session_events(
+    session_id: str,
+    service: Annotated[AgentEditService, Depends(_service)],
+    request: Request,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+    accept: Annotated[str | None, Header()] = None,
+) -> StreamingResponse:
+    project_id = project_scope(request)
+    try:
+        cursor = int(last_event_id or "0")
+    except ValueError as error:
+        raise ValidationDomainError("Last-Event-ID must be a non-negative integer") from error
+    async def replay() -> AsyncIterator[str]:
+        nonlocal cursor
+        continuous = accept is not None and "text/event-stream" in accept
+        while True:
+            projection = await service.get_session_projection(project_id, session_id)
+            conversation = projection.get("conversation") if isinstance(projection, dict) else None
+            messages = conversation.get("messages", []) if isinstance(conversation, dict) else []
+            for message in messages:
+                sequence = int(message.get("sequence", 0)) if isinstance(message, dict) else 0
+                if sequence <= cursor:
+                    continue
+                payload = json.dumps({"sessionId": session_id, **message}, separators=(",", ":"))
+                yield f"id: {sequence}\nevent: asset_edit.message\ndata: {payload}\n\n"
+                cursor = sequence
+            if not continuous or await request.is_disconnected():
+                return
+            yield ": keepalive\n\n"
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        replay(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post(

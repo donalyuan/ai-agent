@@ -3,7 +3,8 @@
   "owner": "implement-operations-resilience",
   "profile": "Mock Provider + explicit Local test/offline (local_workspace)",
   "prerequisites": ["S01-S10 owner facts", "versioned manual runbook", "explicit drill fixture"],
-  "successEvidence": "/tmp/phase-one-resilience-evidence.json",
+  "successEvidence": "docs/evidence/E2E-MVPA-001-runtime-gaps.json",
+  "evidenceStatus": "runtime-gaps report is the reproducible current evidence; credentialed resilience drill was not executed",
   "focusedFailures": [
     "F11 resilience_capacity_or_restore_failed",
     "resource_probe_unavailable",

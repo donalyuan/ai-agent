@@ -43,6 +43,10 @@ def test_projects_episodes_http_contract_and_if_match() -> None:
     )
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["type"] == "revision_conflict"
+    assert conflict.json()["error_code"] == "revision_conflict"
+    assert "message" in conflict.json()
+    assert "trace_id" in conflict.json()
+    assert "details" in conflict.json()
 
 
 def test_http_validation_not_found_and_database_unavailable(monkeypatch) -> None:
@@ -51,11 +55,13 @@ def test_http_validation_not_found_and_database_unavailable(monkeypatch) -> None
     missing = client.post("/v1/projects/missing/episodes", json={"number": 1, "title": "Opening"})
     assert missing.status_code == 404
     assert missing.json()["detail"]["type"] == "project_not_found"
+    assert missing.json()["error_code"] == "project_not_found"
 
     unavailable = TestClient(create_app(readiness_probe=lambda: True))
     response = unavailable.get("/v1/projects")
     assert response.status_code == 503
     assert response.json()["detail"]["type"] == "database_unavailable"
+    assert response.json()["error_code"] == "database_unavailable"
 
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://x:x@127.0.0.1:1/unavailable")
     unreachable = TestClient(create_app(readiness_probe=lambda: True))

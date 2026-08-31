@@ -120,10 +120,12 @@ async def test_adaptation_binding_and_handoff_are_atomic_and_idempotent(services
     }
     brief = await creative.save_brief(SaveCreativeBriefCommand(project.id, "adaptation", fields, 1))
     source = await SourceMaterialService(creative._uow_factory).create(
-        CreateSourceMaterialCommand(project.id, "novel", "inline_text")
+        CreateSourceMaterialCommand(project.id, "novel", "inline_text", project.id)
     )
     version = await SourceMaterialService(creative._uow_factory).append(
-        AppendSourceMaterialCommand(source.id, source.revision, "inline_text", content=b"source")
+        AppendSourceMaterialCommand(
+            source.id, source.revision, "inline_text", content=b"source", project_scope=project.id
+        )
     )
     project_after_source = await projects.get_project(project.id)
     snapshot = CreativeBriefSourceBindingSnapshot(

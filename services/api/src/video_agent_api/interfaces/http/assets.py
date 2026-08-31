@@ -412,7 +412,7 @@ async def _resolve_upload_profile(
     profile_revision: int,
 ) -> tuple[Any, Any, str]:
     profile = await _storage_profiles(request).resolve_upload_profile(
-        project_id, profile_id, profile_revision
+        project_id, profile_id, profile_revision, project_scope(request)
     )
     composition = getattr(request.app.state, "runtime_composition", None)
     if composition is not None:
@@ -580,7 +580,9 @@ async def list_upload_profiles(
     project_id: Annotated[str, Path(alias="projectId")], request: Request
 ) -> list[UploadProfileResponse]:
     try:
-        profiles = await _storage_profiles(request).list_upload_profiles(project_id)
+        profiles = await _storage_profiles(request).list_upload_profiles(
+            project_id, project_scope(request)
+        )
         return [
             UploadProfileResponse.model_validate(
                 {

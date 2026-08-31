@@ -3,6 +3,8 @@
 记录日期：2026-08-17
 架构状态：个人本地原型；首版技术选型已确定，近期不进入生产环境。标准启动方式为 Docker Compose，仅支持桌面 Chrome/Edge，不开发手机端。
 
+阶段二架构范围以 [阶段二产品需求](video-agent-phase-two-product-requirements.md) 和 [OpenSpec 规划](../openspec/changes/plan-phase-two-mvp-b/) 为准。本文的 MVP-B 段落是技术背景，不代表相关能力已实现；当前代码和可执行配置优先。
+
 ## 产品组成
 
 产品包含两个主要工作区：

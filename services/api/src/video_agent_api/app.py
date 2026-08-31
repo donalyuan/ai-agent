@@ -296,18 +296,39 @@ def create_app(
         }:
             status_code = 409
         trace_id = getattr(getattr(request.state, "trace_context", None), "trace_id", None)
+        details = {"type": error.code}
         return JSONResponse(
             status_code=status_code,
-            content={"detail": {"type": error.code, "message": str(error), "traceId": trace_id}},
+            content={
+                "error_code": error.code,
+                "message": str(error),
+                "trace_id": trace_id,
+                "details": details,
+                "detail": {"type": error.code, "message": str(error), "traceId": trace_id},
+            },
         )
 
     @app.exception_handler(RequestValidationError)
     async def handle_request_validation(
         request: Request, error: RequestValidationError
     ) -> JSONResponse:
+        safe_errors = [
+            {
+                "type": item.get("type"),
+                "loc": item.get("loc"),
+                "msg": item.get("msg"),
+            }
+            for item in error.errors()
+        ]
         return JSONResponse(
             status_code=422,
             content={
+                "error_code": "validation",
+                "message": "request validation failed",
+                "trace_id": getattr(
+                    getattr(request.state, "trace_context", None), "trace_id", None
+                ),
+                "details": safe_errors,
                 "detail": {
                     "type": "validation",
                     "message": "request validation failed",
@@ -315,7 +336,36 @@ def create_app(
                     "traceId": getattr(
                         getattr(request.state, "trace_context", None), "trace_id", None
                     ),
-                }
+                },
+            },
+        )
+
+    @app.exception_handler(HTTPException)
+    async def handle_http_exception(request: Request, error: HTTPException) -> JSONResponse:
+        """Normalize adapter-raised HTTP errors without breaking legacy ``detail`` clients."""
+        raw_detail = error.detail
+        if isinstance(raw_detail, dict):
+            error_code = str(raw_detail.get("type") or raw_detail.get("error_code") or "http_error")
+            message = str(raw_detail.get("message") or error_code)
+            details: object = {
+                key: value
+                for key, value in raw_detail.items()
+                if key not in {"message", "traceId", "trace_id"}
+            }
+        else:
+            error_code = "http_error"
+            message = str(raw_detail or "HTTP request failed")
+            details = {"type": error_code}
+        trace_id = getattr(getattr(request.state, "trace_context", None), "trace_id", None)
+        return JSONResponse(
+            status_code=error.status_code,
+            headers=error.headers,
+            content={
+                "error_code": error_code,
+                "message": message,
+                "trace_id": trace_id,
+                "details": details,
+                "detail": raw_detail,
             },
         )
 

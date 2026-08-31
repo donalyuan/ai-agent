@@ -18,8 +18,10 @@ from video_agent_api.domain.catalog import (
 )
 from video_agent_api.domain.errors import (
     CredentialMasterKeyUnavailableError,
+    ProjectAccessForbiddenError,
     RevisionConflictError,
     ValidationDomainError,
+    WorkflowRunNotFoundError,
 )
 from video_agent_api.domain.provider_ops import (
     CostConfirmation,
@@ -48,6 +50,18 @@ _SAFE_USAGE_KEYS = {
     "count",
     "unit",
 }
+
+
+def _capability_revision(uow: Any, call: ProviderCall) -> int | None:
+    if not call.capability_snapshot_id:
+        return None
+    profile = uow.profiles.get(call.profile_id)
+    if profile is None:
+        return None
+    for snapshot in getattr(profile, "capability_snapshots", {}).values():
+        if getattr(snapshot, "id", None) == call.capability_snapshot_id:
+            return getattr(snapshot, "revision", None)
+    return None
 
 
 def _safe_native_usage(value: dict[str, object] | None) -> dict[str, object] | None:
@@ -1224,8 +1238,17 @@ class CatalogService:
         *,
         node_run_id: str | None = None,
         logical_operation: str | None = None,
+        project_scope: str | None = None,
     ) -> list[dict[str, object]]:
         async with self._uow_factory() as uow:
+            if project_scope is not None and project_scope != project_id:
+                raise ProjectAccessForbiddenError(project_id)
+            run = uow.workflow_runs.get(run_id)
+            if project_scope is not None:
+                if run is None:
+                    raise WorkflowRunNotFoundError(run_id)
+                if getattr(run, "project_id", None) != project_id:
+                    raise ProjectAccessForbiddenError(project_id)
             calls = [
                 item
                 for item in uow.provider_calls.values()
@@ -1236,6 +1259,7 @@ class CatalogService:
             ]
             return [
                 {
+                    "schemaVersion": "1.0.0",
                     "id": item.id,
                     "revision": item.revision,
                     "runId": item.run_id,
@@ -1243,9 +1267,15 @@ class CatalogService:
                     "logicalOperation": item.logical_operation,
                     "operation": item.operation,
                     "providerId": item.provider_id,
+                    "providerRevision": getattr(
+                        uow.providers.get(item.provider_id), "revision", None
+                    ),
                     "profileId": item.profile_id,
+                    "profileRevision": getattr(uow.profiles.get(item.profile_id), "revision", None),
                     "modelId": item.model_id,
+                    "modelRevision": getattr(uow.models.get(item.model_id), "revision", None),
                     "capabilitySnapshotId": item.capability_snapshot_id,
+                    "capabilitySnapshotRevision": _capability_revision(uow, item),
                     "status": item.status,
                     "nativeUsage": _safe_native_usage(item.native_usage),
                     "cost": {

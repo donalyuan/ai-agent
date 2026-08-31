@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Annotated, Any, cast
@@ -283,6 +284,26 @@ class StorageProfileRequest(DTO):
     presign_max_ttl_seconds: int = Field(alias="presignMaxTtlSeconds", default=900, ge=1)
     project_scope: list[str] = Field(alias="projectScope", default_factory=list)
     expected_revision: int | None = Field(alias="expectedRevision", default=None, ge=1)
+
+
+class StorageProfilePatchRequest(DTO):
+    """PATCH only changes fields present in the JSON body."""
+
+    name: str | None = None
+    endpoint: str | None = None
+    bucket: str | None = None
+    region: str | None = None
+    adapter_key: str | None = Field(alias="adapterKey", default=None)
+    private_bucket: bool | None = Field(alias="privateBucket", default=None)
+    bucket_binding_id: str | None = Field(alias="bucketBindingId", default=None)
+    credential_ref: str | None = Field(alias="credentialRef", default=None)
+    enabled: bool | None = None
+    connect_timeout_ms: int | None = Field(alias="connectTimeoutMs", default=None, ge=1)
+    read_timeout_ms: int | None = Field(alias="readTimeoutMs", default=None, ge=1)
+    write_timeout_ms: int | None = Field(alias="writeTimeoutMs", default=None, ge=1)
+    presign_max_ttl_seconds: int | None = Field(alias="presignMaxTtlSeconds", default=None, ge=1)
+    project_scope: list[str] | None = Field(alias="projectScope", default=None)
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
 class GlobalStorageProfileRequest(StorageProfileRequest):
@@ -765,22 +786,37 @@ async def confirm_budget(
 async def run_events(
     run_id: str,
     service: Annotated[RunsService, Depends(runs)],
+    request: Request,
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
+    accept: Annotated[str | None, Header()] = None,
 ) -> StreamingResponse:
     _require_project_scope(project_scope)
     try:
         cursor = int(last_event_id or "0")
     except ValueError as error:
         raise ValidationDomainError("Last-Event-ID must be a non-negative integer") from error
-    events = await service.events(run_id, cursor, project_scope)
-
     async def replay() -> AsyncIterator[str]:
-        for event in events:
-            payload = json.dumps(_owner_response(event), separators=(",", ":"))
-            yield f"id: {event.sequence}\nevent: {event.event_type}\ndata: {payload}\n\n"
+        nonlocal cursor
+        continuous = accept is not None and "text/event-stream" in accept
+        while True:
+            events = await service.events(run_id, cursor, project_scope)
+            for event in events:
+                payload = json.dumps(_owner_response(event), separators=(",", ":"))
+                yield f"id: {event.sequence}\nevent: {event.event_type}\ndata: {payload}\n\n"
+                cursor = event.sequence
+            if not continuous or await request.is_disconnected():
+                return
+            # The database remains the event source; the heartbeat only keeps
+            # intermediaries and clients aware that the subscription is alive.
+            yield ": keepalive\n\n"
+            await asyncio.sleep(1)
 
-    return StreamingResponse(replay(), media_type="text/event-stream")
+    return StreamingResponse(
+        replay(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/v1/projects/{project_id}/workflow/mutations")
@@ -1011,9 +1047,11 @@ async def create_source_material(
     project_id: str,
     body: SourceCreateRequest,
     service: Annotated[SourceMaterialService, Depends(source_material)],
+    project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
 ) -> object:
+    _project_access(project_id, project_scope)
     return await service.create(
-        CreateSourceMaterialCommand(project_id, body.material_type, body.input_mode)
+        CreateSourceMaterialCommand(project_id, body.material_type, body.input_mode, project_scope)
     )
 
 
@@ -1022,7 +1060,9 @@ async def append_source_material(
     source_material_id: str,
     body: SourceAppendRequest,
     service: Annotated[SourceMaterialService, Depends(source_material)],
+    project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
 ) -> object:
+    _require_project_scope(project_scope)
     return await service.append(
         AppendSourceMaterialCommand(
             source_material_id,
@@ -1031,6 +1071,7 @@ async def append_source_material(
             body.content.encode() if body.content is not None else None,
             body.content_hash,
             body.asset_version_id,
+            project_scope,
         )
     )
 
@@ -1228,7 +1269,9 @@ async def create_storage_profile(
     project_id: str,
     body: StorageProfileRequest,
     service: Annotated[StorageProfileService, Depends(storage_profiles)],
+    project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
 ) -> object:
+    _project_access(project_id, project_scope)
     if body.adapter_key != "tos":
         raise ValidationDomainError("unsupported storage adapter")
     profile = await service.create(
@@ -1257,8 +1300,9 @@ async def create_storage_profile(
 async def create_global_storage_profile(
     body: GlobalStorageProfileRequest,
     service: Annotated[StorageProfileService, Depends(storage_profiles)],
+    project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
 ) -> object:
-    return await create_storage_profile(body.project_id, body, service)
+    return await create_storage_profile(body.project_id, body, service, project_scope)
 
 
 def _storage_profile_response(profile: object) -> object:
@@ -1275,25 +1319,28 @@ def _storage_profile_response(profile: object) -> object:
 
 @router.get("/v1/storage-profiles/{profile_id}")
 async def get_storage_profile(
-    profile_id: str, service: Annotated[StorageProfileService, Depends(storage_profiles)]
+    profile_id: str,
+    service: Annotated[StorageProfileService, Depends(storage_profiles)],
+    project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
 ) -> object:
-    return _storage_profile_response(await service.get(profile_id))
+    return _storage_profile_response(
+        await service.get(profile_id, _require_project_scope(project_scope))
+    )
 
 
 @router.patch("/v1/storage-profiles/{profile_id}")
 async def update_storage_profile(
     profile_id: str,
-    body: StorageProfileRequest,
+    body: StorageProfilePatchRequest,
     service: Annotated[StorageProfileService, Depends(storage_profiles)],
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
 ) -> object:
-    if body.expected_revision is None:
-        raise ValidationDomainError("expectedRevision is required")
     _if_match(body.expected_revision, if_match)
-    profile = await service.update(
-        profile_id,
-        body.expected_revision,
-        {
+    project_scope = _require_project_scope(project_scope)
+    changes = {
+        key: value
+        for key, value in {
             "name": body.name,
             "adapter_key": body.adapter_key,
             "endpoint": body.endpoint,
@@ -1307,8 +1354,15 @@ async def update_storage_profile(
             "read_timeout_ms": body.read_timeout_ms,
             "write_timeout_ms": body.write_timeout_ms,
             "presign_max_ttl_seconds": body.presign_max_ttl_seconds,
-            "project_scope": tuple(body.project_scope),
-        },
+            "project_scope": tuple(body.project_scope) if body.project_scope is not None else None,
+        }.items()
+        if key in body.model_fields_set
+    }
+    profile = await service.update(
+        profile_id,
+        body.expected_revision,
+        cast(dict[str, object], changes),
+        project_scope,
     )
     return _storage_profile_response(profile)
 
@@ -1319,10 +1373,13 @@ async def enable_storage_profile(
     body: StorageProfileMutationRequest,
     service: Annotated[StorageProfileService, Depends(storage_profiles)],
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
 ) -> object:
     _if_match(body.expected_revision, if_match)
     return _storage_profile_response(
-        await service.set_enabled(profile_id, body.expected_revision, True)
+        await service.set_enabled(
+            profile_id, body.expected_revision, True, _require_project_scope(project_scope)
+        )
     )
 
 
@@ -1332,10 +1389,13 @@ async def disable_storage_profile(
     body: StorageProfileMutationRequest,
     service: Annotated[StorageProfileService, Depends(storage_profiles)],
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
 ) -> object:
     _if_match(body.expected_revision, if_match)
     return _storage_profile_response(
-        await service.set_enabled(profile_id, body.expected_revision, False)
+        await service.set_enabled(
+            profile_id, body.expected_revision, False, _require_project_scope(project_scope)
+        )
     )
 
 
@@ -1344,9 +1404,11 @@ async def storage_connection_test(
     profile_id: str,
     body: StorageConnectionTestRequest,
     service: Annotated[StorageProfileService, Depends(storage_profiles)],
+    project_scope: Annotated[str | None, Header(alias="X-Project-Scope")] = None,
 ) -> object:
+    _require_project_scope(project_scope)
     return await service.connection_test(
-        profile_id, body.expected_revision, body.probe_correlation_id
+        profile_id, body.expected_revision, body.probe_correlation_id, project_scope
     )
 
 

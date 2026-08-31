@@ -31,6 +31,7 @@ from video_agent_api.application.text_generation import (
 )
 from video_agent_api.application.video_generation import (
     AgnesVideoService,
+    PollVideoCommand,
     ReconcileVideoCommand,
     SubmitVideoCommand,
     video_request_fingerprint,
@@ -428,8 +429,9 @@ async def test_video_reconcile_uses_frozen_owner_correlation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_live_video_reconcile_never_recomposes_from_mutable_catalog() -> None:
+async def test_live_video_poll_and_reconcile_use_frozen_composition_and_correlation() -> None:
     uow = InMemoryUnitOfWork()
+    observed: list[tuple[str, str]] = []
     operation = VideoOperation(
         "project",
         "run",
@@ -452,22 +454,81 @@ async def test_live_video_reconcile_never_recomposes_from_mutable_catalog() -> N
     )
     uow.video_operations[(operation.run_id, operation.logical_operation)] = operation
 
-    class MutableCatalogComposition:
-        async def resolve_provider(self, *_args: object, **_kwargs: object) -> object:
-            raise AssertionError("reconcile must not resolve the current catalog")
+    uow.workflow_runs[operation.run_id] = WorkflowRun(
+        "project",
+        "workflow",
+        id=operation.run_id,
+        selection_snapshot={
+            "providerId": operation.provider_id,
+            "profileId": operation.profile_id,
+            "modelId": operation.model_id,
+            "profileRevision": 1,
+            "capabilitySnapshots": {
+                "video.submit": {"id": operation.capability_snapshot_id, "revision": 1}
+            },
+        },
+    )
+
+    def transport(
+        action: str, payload: dict[str, object], _selection: ModelSelection, correlation: str
+    ) -> PortResult:
+        observed.append((action, correlation))
+        assert payload["providerRequestId"] == "remote-video"
+        return PortResult(
+            "remote-video",
+            correlation,
+            {
+                "providerRequestId": "remote-video",
+                "status": "running",
+                "pollCount": len(observed),
+            },
+        )
+
+    live_provider = AgnesVideoProvider(
+        configured=True,
+        operations={"poll": {}},
+        transport=transport,
+    )
+
+    class FrozenIdentity:
+        def selection(self, parameters: dict[str, object] | None = None) -> ModelSelection:
+            return ModelSelection("provider", "profile", "model", "agnes", parameters or {})
+
+    class FrozenComposition:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def resolve_provider(self, *args: object, **kwargs: object) -> object:
+            self.calls.append({"args": args, "kwargs": kwargs})
+            return type(
+                "ComposedProvider",
+                (),
+                {"port": live_provider, "identity": FrozenIdentity()},
+            )()
+
+    composition = FrozenComposition()
 
     service = AgnesVideoService(
         lambda: uow,
         object(),
         CatalogService(lambda: uow),
-        live_composition=MutableCatalogComposition(),
+        live_composition=composition,
     )
 
     result = await service.reconcile(
         ReconcileVideoCommand(operation.run_id, operation.logical_operation, "remote-video")
     )
 
-    assert result.status == "submission_unknown"
+    assert result.status == "running"
+    assert observed == [("poll", "frozen-video-correlation")]
+    assert composition.calls[0]["args"] == ("profile", "model", "video.submit")
+    operation.status = "submitted"
+    polled = await service.poll(PollVideoCommand(operation.run_id, operation.logical_operation))
+    assert polled.status == "running"
+    assert observed == [
+        ("poll", "frozen-video-correlation"),
+        ("poll", "frozen-video-correlation"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -869,6 +930,43 @@ async def test_image_generation_continuity_gate_and_unreferenced_candidate(tmp_p
     assert not uow.run_events
     assert (await service.execute(command)).id == candidate.id
 
+    class FinalizeFailsOnceCatalog(CatalogService):
+        def __init__(self, uow_factory: object) -> None:
+            super().__init__(uow_factory)
+            self.fail_next_finalize = True
+
+        async def finalize_provider_call(
+            self, run_id: str, logical_operation: str, **kwargs: object
+        ) -> object:
+            if self.fail_next_finalize and kwargs.get("status") == "succeeded":
+                self.fail_next_finalize = False
+                raise RuntimeError("provider call finalize interrupted")
+            return await super().finalize_provider_call(  # type: ignore[arg-type]
+                run_id, logical_operation, **kwargs
+            )
+
+    retry_catalog = FinalizeFailsOnceCatalog(lambda: uow)
+    retry_service = ImageGenerationService(
+        lambda: uow,
+        DeterministicMockProvider(),
+        LocalWorkspaceAdapter(tmp_path / "finalize-retry-workspace"),
+        retry_catalog,
+        AssetsService(lambda: uow),
+    )
+    retry_command = replace(command, logical_operation="image.generate:finalize-retry")
+    with pytest.raises(RuntimeError, match="finalize interrupted"):
+        await retry_service.execute(retry_command)
+    retry_key = (retry_command.run_id, retry_command.logical_operation)
+    interrupted_call = uow.provider_calls[uow.provider_call_keys[retry_key]]
+    interrupted_candidate = uow.image_generation_candidates[retry_key]
+    assert interrupted_call.status == "unknown"
+    versions_after_interruption = len(uow.state.asset_versions)
+
+    recovered = await retry_service.execute(retry_command)
+    assert recovered.id == interrupted_candidate.id
+    assert len(uow.state.asset_versions) == versions_after_interruption
+    assert uow.provider_calls[uow.provider_call_keys[retry_key]].status == "succeeded"
+
     healthy_resource = RuntimeResourceSnapshot(
         cpu_count=4,
         available_concurrency=4,
@@ -905,7 +1003,7 @@ async def test_image_generation_continuity_gate_and_unreferenced_candidate(tmp_p
         ),
     )
     assert await GenerationCommandConsumer(lambda: uow, restarted_service).dispatch_pending() == {
-        "dispatched": 0,
+        "dispatched": 1,
         "failed": 1,
     }
     assert (

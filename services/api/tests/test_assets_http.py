@@ -552,6 +552,10 @@ def test_assets_http_without_service_returns_503_and_openapi_has_owner_routes() 
     response = client.get("/v1/assets/missing", headers={"X-Project-Scope": "unknown-project"})
     assert response.status_code == 503
     assert response.json()["detail"]["type"] == "database_unavailable"
+    assert response.json()["error_code"] == "database_unavailable"
+    assert "message" in response.json()
+    assert "trace_id" in response.json()
+    assert "details" in response.json()
 
     owner_client, _ = _client()
     paths = owner_client.get("/openapi.json").json()["paths"]
@@ -616,10 +620,10 @@ def test_upload_admission_resolves_profile_and_rejects_invalid_snapshot_before_w
         bucket_binding_id="local-workspace",
         project_scope=(foreign["id"],),
     )
-    for profile_id in ("disabled", "foreign"):
+    for profile_id, expected_status in (("disabled", 422), ("foreign", 403)):
         response = client.post(path, json={**payload, "storageProfileId": profile_id})
-        assert response.status_code == 422, response.text
-        assert len(uow.state.asset_reservations) == before
+        assert response.status_code == expected_status, response.text
+    assert len(uow.state.asset_reservations) == before
 
 
 def test_upload_resource_admission_rejects_before_reservation_or_outbox() -> None:

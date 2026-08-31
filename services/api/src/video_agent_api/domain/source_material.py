@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 from uuid import uuid4
@@ -30,7 +31,10 @@ class SourceMaterialVersion:
             raise ValidationDomainError("source material type is invalid")
         if self.input_mode not in {"inline_text", "uploaded_file"}:
             raise ValidationDomainError("source material input mode is invalid")
-        if len(self.content_hash) != 64:
+        if (
+            not isinstance(self.content_hash, str)
+            or re.fullmatch(r"[0-9a-fA-F]{64}", self.content_hash) is None
+        ):
             raise ValidationDomainError("source material content hash is invalid")
         if self.input_mode == "inline_text" and self.asset_version_id is not None:
             raise ValidationDomainError("inline source must not reference AssetVersion")
@@ -71,9 +75,11 @@ class SourceMaterial:
             raise RevisionConflictError(self.id, expected_revision, self.revision)
         if input_mode != self.input_mode:
             raise ValidationDomainError("source material input mode is immutable")
+        if input_mode == "inline_text" and content is None:
+            raise ValidationDomainError("inline source content is required")
         if content is not None and content_hash is not None:
             raise ValidationDomainError("provide content or content_hash, not both")
-        digest = content_hash or hashlib.sha256(content or b"").hexdigest()
+        digest = content_hash or hashlib.sha256(content).hexdigest()  # type: ignore[arg-type]
         version = SourceMaterialVersion(
             self.project_id,
             self.material_type,

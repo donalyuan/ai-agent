@@ -421,6 +421,7 @@ def test_storage_profile_http_lifecycle_is_masked_and_uses_if_match() -> None:
     project = client.post("/v1/projects", json={"name": "Storage"}).json()
     created = client.post(
         "/v1/storage-profiles",
+        headers={"X-Project-Scope": project["id"]},
         json={
             "projectId": project["id"],
             "name": "TOS private",
@@ -439,23 +440,26 @@ def test_storage_profile_http_lifecycle_is_masked_and_uses_if_match() -> None:
     assert "secret" not in str(profile).lower()
     profile_id = profile["storageProfileId"]
     missing_match = client.post(
-        f"/v1/storage-profiles/{profile_id}/enable", json={"expectedRevision": 1}
+        f"/v1/storage-profiles/{profile_id}/enable",
+        headers={"X-Project-Scope": project["id"]},
+        json={"expectedRevision": 1},
     )
     assert missing_match.status_code == 409
     enabled = client.post(
         f"/v1/storage-profiles/{profile_id}/enable",
-        headers={"If-Match": "1"},
+        headers={"If-Match": "1", "X-Project-Scope": project["id"]},
         json={"expectedRevision": 1},
     )
     assert enabled.status_code == 200 and enabled.json()["revision"] == 2
     stale = client.post(
         f"/v1/storage-profiles/{profile_id}/disable",
-        headers={"If-Match": "1"},
+        headers={"If-Match": "1", "X-Project-Scope": project["id"]},
         json={"expectedRevision": 1},
     )
     assert stale.status_code == 409
     probe = client.post(
         f"/v1/storage-profiles/{profile_id}/connection-test",
+        headers={"X-Project-Scope": project["id"]},
         json={"expectedRevision": 2, "probeCorrelationId": "probe-1"},
     )
     assert probe.json() == {
@@ -488,7 +492,7 @@ async def test_storage_connection_probe_preserves_safe_transport_status(status: 
         lambda _profile, _correlation: {"status": status, "providerCode": "safe-code"},
     )
     before = profile.revision
-    result = await service.connection_test(profile.id, before, "probe-status")
+    result = await service.connection_test(profile.id, before, "probe-status", project.id)
     assert result == {
         "status": status,
         "providerCode": "safe-code",

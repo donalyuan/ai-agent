@@ -246,6 +246,34 @@ class ImageGenerationService:
             raise ValidationDomainError("image live provider adapter is incompatible")
         return composed.port, composed.identity.selection(command.parameters)
 
+    async def _finalize_existing_candidate(
+        self,
+        command: GenerateImageCommand,
+        call: Any,
+        candidate: ImageCandidate,
+    ) -> str:
+        """Converge a candidate whose ProviderCall finalize was interrupted.
+
+        Candidate persistence happens before ProviderCall finalization so a process
+        crash cannot lose the generated AssetVersion.  On retry the candidate is
+        authoritative: finalize the existing call and never invoke the provider or
+        storage again.  A terminal non-success call indicates contradictory owner
+        facts and must remain visible to the caller.
+        """
+        if call.status == "succeeded":
+            return str(call.status)
+        if call.status in {"failed", "cancelled"}:
+            raise ValidationDomainError("image candidate provider operation terminal conflict")
+        request_id = candidate.provenance.get("requestId")
+        return (
+            await self._catalog.finalize_provider_call(
+                command.run_id,
+                command.logical_operation,
+                status="succeeded",
+                provider_request_id=request_id if isinstance(request_id, str) else None,
+            )
+        ).status
+
     async def enqueue(
         self,
         command: GenerateImageCommand,
@@ -257,7 +285,6 @@ class ImageGenerationService:
             raise ValidationDomainError("image operation is invalid")
         if isinstance(command.profile_revision, bool) or command.profile_revision < 1:
             raise ValidationDomainError("image profile revision is required")
-        self._storage_identity()
         request_fingerprint = _request_fingerprint(command)
         event_id = _event_id(command, request_fingerprint)
         # Existing owner ledger is authoritative on retry; mutable catalog/provider state
@@ -295,7 +322,9 @@ class ImageGenerationService:
                 )
                 if actual != expected:
                     raise ValidationDomainError("image provider operation fingerprint conflict")
-                if existing_candidate is not None or existing_call.status != "pending":
+                if existing_candidate is not None:
+                    call_id = existing_call.id
+                elif existing_call.status != "pending":
                     return ImageGenerationOperation(
                         existing_call.id,
                         command.run_id,
@@ -307,14 +336,20 @@ class ImageGenerationService:
                             else None
                         ),
                     )
-                if existing_call.admission_refs is not None and self._resilience is not None:
+                if (
+                    existing_candidate is None
+                    and existing_call.admission_refs is not None
+                    and self._resilience is not None
+                ):
                     frozen = frozen_admission_from_payload(existing_call.admission_refs)
                     revalidated = self._resilience.revalidate(frozen)
                     if not revalidated.allowed:
                         raise ValidationDomainError(
                             revalidated.diagnostic or "image_resource_admission_blocked"
                         )
-                if not any(item.get("eventId") == event_id for item in uow.outbox_events):
+                if existing_candidate is None and not any(
+                    item.get("eventId") == event_id for item in uow.outbox_events
+                ):
                     retry_frozen = (
                         frozen_admission_from_payload(existing_call.admission_refs)
                         if existing_call.admission_refs is not None
@@ -324,13 +359,26 @@ class ImageGenerationService:
                         self._outbox_event(command, request_fingerprint, retry_frozen)
                     )
                     await uow.commit()
-                return ImageGenerationOperation(
-                    existing_call.id,
-                    command.run_id,
-                    command.logical_operation,
-                    existing_call.status,
-                )
+                if existing_candidate is None:
+                    return ImageGenerationOperation(
+                        existing_call.id,
+                        command.run_id,
+                        command.logical_operation,
+                        existing_call.status,
+                    )
+        if existing_candidate is not None and existing_call is not None:
+            status = await self._finalize_existing_candidate(
+                command, existing_call, cast(ImageCandidate, existing_candidate)
+            )
+            return ImageGenerationOperation(
+                call_id,
+                command.run_id,
+                command.logical_operation,
+                status,
+                cast(ImageCandidate, existing_candidate),
+            )
         # The live runnable/capability gate precedes every ProviderCall and outbox write.
+        self._storage_identity()
         await self._resolve_provider(command)
         if len(command.references) > 8:
             raise ValidationDomainError("image_reference_limit_exceeded")
@@ -719,29 +767,37 @@ class ImageGenerationService:
                 provider_request_id=result.request_id,
             )
             raise
+        candidate = ImageCandidate(
+            command.project_id,
+            command.episode_id,
+            command.target_id,
+            asset.id,
+            command.operation,  # type: ignore[arg-type]
+            command.run_id,
+            command.logical_operation,
+            version.id,
+            version.revision,
+            version.content_hash or checksum,
+            command.continuity_snapshot_id,
+            command.continuity_snapshot_revision,
+            command.continuity_snapshot_hash,
+            {"requestId": result.request_id, "correlationId": result.correlation_id},
+        )
+        # Commit the candidate in its own transaction.  Finalization is deliberately
+        # a second transaction so a failure there cannot roll back the durable asset
+        # candidate and leave the uploaded version orphaned from its owner fact.
         async with self._uow_factory() as uow:
-            candidate = ImageCandidate(
-                command.project_id,
-                command.episode_id,
-                command.target_id,
-                asset.id,
-                command.operation,  # type: ignore[arg-type]
-                command.run_id,
-                command.logical_operation,
-                version.id,
-                version.revision,
-                version.content_hash or checksum,
-                command.continuity_snapshot_id,
-                command.continuity_snapshot_revision,
-                command.continuity_snapshot_hash,
-                {"requestId": result.request_id, "correlationId": result.correlation_id},
-            )
             uow.image_generation_candidates[(command.run_id, command.logical_operation)] = candidate
             await uow.commit()
+        try:
             await self._catalog.finalize_provider_call(
                 command.run_id,
                 command.logical_operation,
                 status="succeeded",
                 provider_request_id=result.request_id,
             )
-            return candidate
+        except Exception:
+            # The candidate is durable and retry will converge the ProviderCall
+            # without invoking the provider or writing another asset version.
+            raise
+        return candidate

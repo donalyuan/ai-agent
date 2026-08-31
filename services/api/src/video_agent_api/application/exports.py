@@ -26,6 +26,16 @@ from video_agent_api.ports.rendering import FfmpegRenderPort
 from video_agent_api.resilience import OperationsResilienceCoordinator, admission_refs
 
 
+def _capability_revision(uow: Any, profile_id: str, snapshot_id: str) -> int | None:
+    profile = uow.profiles.get(profile_id)
+    if profile is None:
+        return None
+    for snapshot in getattr(profile, "capability_snapshots", {}).values():
+        if getattr(snapshot, "id", None) == snapshot_id:
+            return getattr(snapshot, "revision", None)
+    return None
+
+
 class ExportService:
     def __init__(
         self,
@@ -506,7 +516,7 @@ class ExportService:
 
         models: dict[tuple[str, str, str, str], dict[str, object]] = {}
         skills: dict[tuple[str, str], dict[str, object]] = {}
-        calls: list[Any] = []
+        calls_by_id: dict[str, Any] = {}
         for input_snapshot in inputs:
             candidate = next(
                 (
@@ -547,9 +557,13 @@ class ExportService:
             )
             models[model_key] = {
                 "providerId": model_key[0],
+                "providerRevision": getattr(uow.providers.get(model_key[0]), "revision", None),
                 "profileId": model_key[1],
+                "profileRevision": getattr(uow.profiles.get(model_key[1]), "revision", None),
                 "modelId": model_key[2],
+                "modelRevision": getattr(uow.models.get(model_key[2]), "revision", None),
                 "capabilitySnapshotId": model_key[3],
+                "capabilityRevision": _capability_revision(uow, model_key[1], model_key[3]),
             }
             revision_ids = run.selection_snapshot.get("skillRevisionIds")
             digests = run.selection_snapshot.get("skillDigests")
@@ -592,9 +606,14 @@ class ExportService:
                     "revision": 1,
                     "digest": digest,
                 }
-            calls.append(provider_call)
+            calls_by_id[provider_call.id] = provider_call
 
-        if not models or not skills:
+        calls = list(calls_by_id.values())
+
+        has_generated_inputs = any(
+            assets[item.asset_version_id].source_type == "provider_generated" for item in inputs
+        )
+        if has_generated_inputs and (not models or not skills):
             raise ValidationDomainError("export generation provenance is required")
 
         if calls and any(call.native_usage is None for call in calls):

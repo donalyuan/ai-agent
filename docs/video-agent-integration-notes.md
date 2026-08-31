@@ -5,6 +5,8 @@
 
 项目边界：个人、本地优先，近期不进入生产环境；当前只做剧情短剧与小说改编，不包含商品 TikTok 视频。
 
+阶段二（MVP-B）的产品范围、优先级、验收和非目标以 [阶段二产品需求](video-agent-phase-two-product-requirements.md) 及其 [OpenSpec 规划](../openspec/changes/plan-phase-two-mvp-b/) 为准；本文仅保留 Provider/Skill 的接入细节。两者冲突时，以当前代码、Schema 和 OpenSpec 规格为准。
+
 系统技术选型和无限画布、剪辑工作台设计见 [视频 Agent 平台技术架构](video-agent-technical-architecture.md)。
 
 ## 当前技术方向

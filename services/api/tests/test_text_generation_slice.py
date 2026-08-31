@@ -601,9 +601,13 @@ async def test_adaptation_generation_freezes_current_inline_source_binding() -> 
         SaveCreativeBriefCommand(project.id, "adaptation", _brief_fields(), project.revision)
     )
     sources = SourceMaterialService(lambda: uow)
-    source = await sources.create(CreateSourceMaterialCommand(project.id, "novel", "inline_text"))
+    source = await sources.create(
+        CreateSourceMaterialCommand(project.id, "novel", "inline_text", project.id)
+    )
     version = await sources.append(
-        AppendSourceMaterialCommand(source.id, source.revision, "inline_text", content=b"source")
+        AppendSourceMaterialCommand(
+            source.id, source.revision, "inline_text", content=b"source", project_scope=project.id
+        )
     )
     snapshot = CreativeBriefSourceBindingSnapshot(
         project.id,
@@ -742,9 +746,13 @@ async def test_source_material_inline_and_uploaded_asset_ownership() -> None:
         SaveCreativeBriefCommand(first.id, "adaptation", _brief_fields(), first.revision)
     )
     service = SourceMaterialService(lambda: uow)
-    source = await service.create(CreateSourceMaterialCommand(first.id, "novel", "inline_text"))
+    source = await service.create(
+        CreateSourceMaterialCommand(first.id, "novel", "inline_text", first.id)
+    )
     inline = await service.append(
-        AppendSourceMaterialCommand(source.id, 1, "inline_text", content=b"source")
+        AppendSourceMaterialCommand(
+            source.id, 1, "inline_text", content=b"source", project_scope=first.id
+        )
     )
     assert inline.asset_version_id is None
     with pytest.raises(ValidationDomainError, match="immutable"):
@@ -755,6 +763,7 @@ async def test_source_material_inline_and_uploaded_asset_ownership() -> None:
                 "uploaded_file",
                 content_hash="0" * 64,
                 asset_version_id="unverified",
+                project_scope=first.id,
             )
         )
 
@@ -763,7 +772,9 @@ async def test_source_material_inline_and_uploaded_asset_ownership() -> None:
         SaveCreativeBriefCommand(original.id, "original", _brief_fields(), original.revision)
     )
     with pytest.raises(ValidationDomainError, match="adaptation"):
-        await service.create(CreateSourceMaterialCommand(original.id, "novel", "inline_text"))
+        await service.create(
+            CreateSourceMaterialCommand(original.id, "novel", "inline_text", original.id)
+        )
 
     foreign_asset = Asset(second.id, "video", "foreign")
     uow.state.assets[foreign_asset.id] = foreign_asset
@@ -783,7 +794,7 @@ async def test_source_material_inline_and_uploaded_asset_ownership() -> None:
     )
     uow.state.asset_versions[foreign_version.id] = foreign_version
     upload_source = await service.create(
-        CreateSourceMaterialCommand(first.id, "novel", "uploaded_file")
+        CreateSourceMaterialCommand(first.id, "novel", "uploaded_file", first.id)
     )
     with pytest.raises(ValidationDomainError, match="unverified or foreign"):
         await service.append(
@@ -793,6 +804,7 @@ async def test_source_material_inline_and_uploaded_asset_ownership() -> None:
                 "uploaded_file",
                 content_hash="0" * 64,
                 asset_version_id=foreign_version.id,
+                project_scope=first.id,
             )
         )
 
@@ -823,7 +835,9 @@ async def test_uploaded_source_derives_hash_and_verified_status_from_asset_versi
     )
     uow.state.asset_versions[asset_version.id] = asset_version
     service = SourceMaterialService(lambda: uow)
-    source = await service.create(CreateSourceMaterialCommand(project.id, "novel", "uploaded_file"))
+    source = await service.create(
+        CreateSourceMaterialCommand(project.id, "novel", "uploaded_file", project.id)
+    )
 
     version = await service.append(
         AppendSourceMaterialCommand(
@@ -831,6 +845,7 @@ async def test_uploaded_source_derives_hash_and_verified_status_from_asset_versi
             source.revision,
             "uploaded_file",
             asset_version_id=asset_version.id,
+            project_scope=project.id,
         )
     )
 
