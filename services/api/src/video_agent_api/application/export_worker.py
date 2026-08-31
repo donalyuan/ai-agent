@@ -19,11 +19,16 @@ from video_agent_api.domain.errors import ValidationDomainError
 from video_agent_api.domain.exports import ExportDiagnosticTarget, ExportJob
 from video_agent_api.ports.contracts import (
     PartReceipt,
+    StorageCapability,
     StorageRetryableError,
     StorageWriteIntent,
     StoredObjectRef,
 )
 from video_agent_api.ports.rendering import FfmpegRenderPort, RenderRequest
+from video_agent_api.resilience import (
+    OperationsResilienceCoordinator,
+    admission_from_refs,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,11 +47,31 @@ class EpisodeExportWorker:
         uow_factory: Any,
         renderer: FfmpegRenderPort,
         storage: Any,
+        *,
+        resilience: OperationsResilienceCoordinator | None = None,
+        renderer_identity: dict[str, object] | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._renderer = renderer
         self._storage = storage
-        self._exports = ExportService(uow_factory, renderer)
+        if renderer_identity is not None:
+            self._renderer_identity = dict(renderer_identity)
+        elif renderer.__class__.__name__ in {"MockFfmpegRenderAdapter", "CountingRenderer"}:
+            self._renderer_identity = {
+                "profileId": "local-test-renderer",
+                "profileRevision": 1,
+                "capabilitySnapshotId": "local-test-capability",
+                "capabilityRevision": 1,
+            }
+        else:
+            self._renderer_identity = {}
+        self._resilience = resilience
+        self._exports = ExportService(
+            uow_factory,
+            renderer,
+            resilience=resilience,
+            renderer_identity=self._renderer_identity,
+        )
 
     async def execute(self, command: ExecuteExportJobCommand) -> dict[str, object]:
         workspace = command.workspace.resolve()
@@ -70,8 +95,60 @@ class EpisodeExportWorker:
                 or snapshot.timeline_version_id != job.timeline_version_id
             ):
                 raise ValidationDomainError("export execution snapshot scope is invalid")
+            if self._resilience is not None:
+                frozen = admission_from_refs(snapshot.admission_refs)
+                if frozen.scope != command.project_id or frozen.operation != "export.render":
+                    raise ValidationDomainError("export_resource_admission_mismatch")
+                admission = self._resilience.revalidate(frozen)
+                if not admission.allowed:
+                    raise ValidationDomainError(
+                        admission.diagnostic or "export_resource_admission_blocked"
+                    )
         except Exception as error:
             target = _diagnostic(job, "timeline", "execution_snapshot_invalid")
+            await self._exports.record_job_failure(command.project_id, job.id, str(error), target)
+            raise
+        # Resolve and validate the complete frozen storage identity before reading
+        # any source bytes.  A stale adapter must not even perform a storage read.
+        try:
+            if getattr(self._storage, "adapter_key", None) != snapshot.storage_profile_snapshot.get(
+                "adapterKey"
+            ):
+                raise ValidationDomainError("storage adapter changed after export submission")
+            required_storage_attrs = (
+                "profile_id",
+                "profile_revision",
+                "bucket_binding_id",
+                "bucket",
+                "endpoint",
+                "region",
+            )
+            if self._storage is None or any(
+                getattr(self._storage, name, None) is None for name in required_storage_attrs
+            ):
+                raise ValidationDomainError("export storage identity is incomplete")
+            current_storage_capability = self._storage.capability(snapshot.storage_profile_revision)
+            if (
+                _storage_capability_payload(current_storage_capability)
+                != snapshot.storage_capability
+            ):
+                raise ValidationDomainError("storage capability changed after export submission")
+            if not _storage_profile_matches_snapshot(
+                getattr(self._storage, "adapter_key", None),
+                snapshot.storage_profile_snapshot,
+                snapshot.storage_capability,
+                bucket=getattr(self._storage, "bucket", None),
+                profile_id=getattr(self._storage, "profile_id", None),
+                profile_revision=getattr(self._storage, "profile_revision", None),
+                endpoint=getattr(self._storage, "endpoint", None),
+                region=getattr(self._storage, "region", None),
+                bucket_binding_id=getattr(self._storage, "bucket_binding_id", None),
+            ):
+                raise ValidationDomainError(
+                    "storage profile snapshot changed after export submission"
+                )
+        except Exception as error:
+            target = _diagnostic(job, "storage", "storage_preflight_failed")
             await self._exports.record_job_failure(command.project_id, job.id, str(error), target)
             raise
         try:
@@ -83,6 +160,8 @@ class EpisodeExportWorker:
             await self._exports.record_job_failure(command.project_id, job.id, str(error), target)
             raise
         try:
+            if not self._renderer_identity or self._storage is None:
+                raise ValidationDomainError("export runtime composition is unconfigured")
             capability = self._renderer.probe()
         except Exception as error:
             target = _diagnostic(job, "renderer", "renderer_probe_failed")
@@ -91,23 +170,28 @@ class EpisodeExportWorker:
         try:
             if _renderer_capability_payload(capability) != snapshot.renderer_capability:
                 raise ValidationDomainError("renderer capability changed after export submission")
+            renderer_base = {
+                key: value
+                for key, value in self._renderer_identity.items()
+                if key not in {"snapshotId", "capability"}
+            }
+            expected_renderer_identity = {
+                **renderer_base,
+                "snapshotId": hashlib.sha256(
+                    json.dumps(
+                        {
+                            **renderer_base,
+                            "capability": _renderer_capability_payload(capability),
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest(),
+            }
+            if expected_renderer_identity != snapshot.renderer_identity:
+                raise ValidationDomainError("renderer identity changed after export submission")
         except Exception as error:
             target = _diagnostic(job, "renderer", "renderer_capability_changed")
-            await self._exports.record_job_failure(command.project_id, job.id, str(error), target)
-            raise
-        try:
-            if getattr(self._storage, "adapter_key", None) != snapshot.storage_profile_snapshot.get(
-                "adapterKey"
-            ):
-                raise ValidationDomainError("storage adapter changed after export submission")
-            current_storage_capability = self._storage.capability(snapshot.storage_profile_revision)
-            if (
-                _storage_capability_payload(current_storage_capability)
-                != snapshot.storage_capability
-            ):
-                raise ValidationDomainError("storage capability changed after export submission")
-        except Exception as error:
-            target = _diagnostic(job, "storage", "storage_preflight_failed")
             await self._exports.record_job_failure(command.project_id, job.id, str(error), target)
             raise
         try:
@@ -356,7 +440,7 @@ def _file_checksum(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _select_part_size(size_bytes: int, capability: Any) -> int:
+def _select_part_size(size_bytes: int, capability: StorageCapability) -> int:
     required = max(1, (size_bytes + capability.max_part_count - 1) // capability.max_part_count)
     preferred = 8 * 1024 * 1024
     part_size = max(capability.min_part_size_bytes, required)
@@ -366,9 +450,7 @@ def _select_part_size(size_bytes: int, capability: Any) -> int:
     return part_size
 
 
-def _capability_from_snapshot(value: dict[str, int]) -> Any:
-    from video_agent_api.ports.contracts import StorageCapability
-
+def _capability_from_snapshot(value: dict[str, int]) -> StorageCapability:
     return StorageCapability(
         value["profileRevision"],
         value["minPartSizeBytes"],
@@ -386,6 +468,60 @@ def _storage_capability_payload(value: Any) -> dict[str, int]:
         "maxPartCount": value.max_part_count,
         "maxObjectSizeBytes": value.max_object_size_bytes,
     }
+
+
+def _storage_profile_matches_snapshot(
+    adapter_key: str | None,
+    snapshot: dict[str, object],
+    capability: dict[str, int],
+    *,
+    bucket: str | None,
+    profile_id: str | None = None,
+    profile_revision: int | None = None,
+    endpoint: str | None = None,
+    region: str | None = None,
+    bucket_binding_id: str | None = None,
+) -> bool:
+    """Require the running adapter to retain every persisted storage identity fact."""
+    expected_bucket = snapshot.get("bucket")
+    expected_adapter = snapshot.get("adapterKey")
+    expected_revision = snapshot.get("revision")
+    expected_profile_id = snapshot.get("profileId")
+    expected_project_id = snapshot.get("projectId")
+    expected_endpoint = snapshot.get("endpoint")
+    expected_region = snapshot.get("region")
+    expected_binding = snapshot.get("bucketBindingId")
+    return (
+        isinstance(adapter_key, str)
+        and adapter_key == expected_adapter
+        and (
+            expected_bucket is None
+            or (isinstance(expected_bucket, str) and bucket == expected_bucket)
+        )
+        and expected_revision == capability.get("profileRevision")
+        and (
+            expected_profile_id == "local-test-offline"
+            or (isinstance(expected_profile_id, str) and profile_id == expected_profile_id)
+        )
+        and (
+            expected_revision == capability.get("profileRevision")
+            and (profile_revision is None or profile_revision == expected_revision)
+        )
+        and (
+            expected_endpoint == "workspace://local"
+            or (isinstance(expected_endpoint, str) and endpoint == expected_endpoint)
+        )
+        and (
+            expected_region == "local"
+            or (isinstance(expected_region, str) and region == expected_region)
+        )
+        and (
+            expected_binding == "local-workspace"
+            or (isinstance(expected_binding, str) and bucket_binding_id == expected_binding)
+        )
+        and isinstance(expected_project_id, str)
+        and bool(expected_project_id)
+    )
 
 
 def _renderer_capability_payload(value: Any) -> dict[str, object]:

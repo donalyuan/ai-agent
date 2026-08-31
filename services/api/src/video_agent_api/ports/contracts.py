@@ -63,6 +63,36 @@ class PortResult:
     payload: dict[str, object]
 
 
+class RemoteLookupPort(Protocol):
+    """Lookup is permitted only through a preselected provider port."""
+
+    def lookup_provider_request(self, correlation_id: str, protocol: str) -> object: ...
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenRemoteLookup:
+    """Bind a lookup port to the exact capability that admitted the call."""
+
+    capability_snapshot_id: str
+    operation: str
+    protocol: str
+    port: RemoteLookupPort
+    profile_id: str
+    model_id: str
+    profile_revision: int
+    capability_revision: int
+
+    def __post_init__(self) -> None:
+        if not self.capability_snapshot_id or not self.operation or not self.protocol:
+            raise ValueError("frozen_remote_lookup_identity_incomplete")
+        for identity_value in (self.profile_id, self.model_id):
+            if not identity_value:
+                raise ValueError("frozen_remote_lookup_identity_incomplete")
+        for revision_value in (self.profile_revision, self.capability_revision):
+            if isinstance(revision_value, bool) or revision_value < 1:
+                raise ValueError("frozen_remote_lookup_revision_invalid")
+
+
 @dataclass(frozen=True, slots=True)
 class StoredObject:
     object_ref: str
@@ -130,6 +160,18 @@ class UploadSessionRef:
     expected_checksum: str | None = None
     expected_mime_type: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.status not in {"active", "completed", "aborted", "unknown", "failed"}:
+            raise StorageValidationError("upload session status is invalid")
+        if not self.session_id or not self.operation_key or not self.project_id:
+            raise StorageValidationError("upload session identity is incomplete")
+        if not self.profile_id or not self.object_key:
+            raise StorageValidationError("upload session storage binding is incomplete")
+        if self.expected_size_bytes is not None and self.expected_size_bytes < 0:
+            raise StorageMediaValidationError("upload session expected size is invalid")
+        if self.expected_checksum is not None and len(self.expected_checksum) != 64:
+            raise StorageMediaValidationError("upload session expected checksum is invalid")
+
 
 @dataclass(frozen=True, slots=True)
 class PartReceipt:
@@ -161,6 +203,8 @@ class StoredObjectRef:
             raise StorageMediaValidationError("stored object metadata is invalid")
         if "/" not in self.mime_type or not self.operation_key:
             raise StorageValidationError("stored object metadata is incomplete")
+        if not self.verified:
+            raise StorageValidationError("stored object reference must be verified")
 
 
 @dataclass(frozen=True, slots=True)

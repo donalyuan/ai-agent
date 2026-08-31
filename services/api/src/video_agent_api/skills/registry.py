@@ -198,7 +198,7 @@ class SkillRegistry:
                 _string_set(raw, "allowedTools"),
                 access,
                 scripts_allowed,
-                cast(int, priority),
+                priority,
                 content_path,
                 self._root,
             )

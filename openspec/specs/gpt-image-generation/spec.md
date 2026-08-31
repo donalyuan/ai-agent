@@ -97,3 +97,10 @@ TBD - created by archiving change integrate-gpt-image-provider. Update Purpose a
 #### Scenario:Success has no implicit storyboard acceptance
 - **WHEN** GPT Image result 被持久化
 - **THEN** 它不是 current storyboard reference，且在精确 eligibility CAS acceptance 前不执行 video submission。
+
+### Requirement:GPT Image runnable feature gate 与 result version 唯一 append
+GPT Image 首次 connection-test/probe SHALL 仅在 `adapterInstalled=true`、catalog `approval=approved`、`featureGate=MVP-A`、explicit live opt-in、已选 profile、可解析 credential 与 timeout 齐备时执行，成功后冻结 capability snapshot，MUST NOT 要求既有 snapshot 或 `runnable=true`；explicit live invocation SHALL 额外要求该成功 snapshot 与 `runnable=true`。MVP-B candidate 可展示/保存但 MUST 零外部调用，默认测试 MUST 使用 `Mock Provider +` 显式 Local test/offline profile（adapter identity=`local_workspace`），运行开始后 Adapter/Profile MUST 冻结。verified Provider terminal success SHALL 是 result AssetVersion 唯一 append 时点，retry/reconcile MUST 返回同一 version/candidate。后续 AssetEdit accept 只可追加 AcceptDecision/audit 和同一 version 的 scenes exact eligibility CAS，MUST NOT 复制 bytes/object/ref 或 append 第二 AssetVersion；reject/stale/foreign accept 零 AssetVersion/current/Timeline mutation。
+
+#### Scenario:未 runnable 的 image operation 不产生 result version
+- **WHEN** GPT Image operation 未通过 feature gate，或既有 candidate 被接受/拒绝
+- **THEN** 前者零网络/零 AssetVersion；后者仅复用 terminal success 的同一 version 并遵循 exact CAS

@@ -152,11 +152,13 @@ async def test_asset_metadata_and_reservation_survive_fresh_uow() -> None:
                 "local-test-offline",
                 1,
                 "c" * 64,
+                admission_refs={"reference": "resilience:asset-reservation"},
             )
         )
         after_restart = await assets.get_reservation(project.id, reservation.id)
         assert after_restart.operation_key == reservation.operation_key
         assert after_restart.upload_key.endswith("/original.wav")
+        assert after_restart.admission_refs == {"reference": "resilience:asset-reservation"}
         same = await assets.create_reservation(
             CreateReservationCommand(
                 project.id,

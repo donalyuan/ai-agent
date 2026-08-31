@@ -12,7 +12,7 @@ from typing import Any
 
 from temporalio import activity
 from temporalio.client import Client
-from temporalio.worker import Worker
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 from video_agent_api.logging import log_event
 from video_agent_api.observability import child_context, parse_traceparent
 from video_agent_api.runtime import RuntimeComponents, build_runtime_from_env
@@ -83,6 +83,7 @@ async def serve(
         task_queue=task_queue,
         workflows=list(workflows),
         activities=[phase_zero_health_activity, *activities],
+        workflow_runner=UnsandboxedWorkflowRunner(),
     )
     if not background_services:
         await worker.run()

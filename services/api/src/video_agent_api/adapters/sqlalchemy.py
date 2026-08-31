@@ -373,6 +373,13 @@ def _provider_from_model(value: ProviderModel) -> Provider:
 
 
 def _profile_from_model(value: ProviderProfileModel) -> ProviderProfile:
+    settings = getattr(value, "settings", {}) or {}
+    raw_scope = settings.get("projectScope", ()) if isinstance(settings, dict) else ()
+    project_scope = (
+        tuple(item for item in raw_scope if isinstance(item, str))
+        if isinstance(raw_scope, (list, tuple))
+        else ()
+    )
     return ProviderProfile(
         provider_id=value.provider_id,
         name=value.name,
@@ -380,8 +387,12 @@ def _profile_from_model(value: ProviderProfileModel) -> ProviderProfile:
         enabled=bool(value.enabled),
         explicit_live_opt_in=bool(getattr(value, "explicit_live_opt_in", False)),
         credential_status=getattr(value, "credential_status", "unconfigured"),
+        base_url=getattr(value, "base_url", None),
+        credential_ref=getattr(value, "credential_metadata_id", None),
+        timeout_ms=int(getattr(value, "timeout_ms", 30_000)),
         revision=int(getattr(value, "revision", 1)),
         id=value.id,
+        project_scope=project_scope,
     )
 
 
@@ -390,6 +401,7 @@ def _model_from_model(value: CatalogModel) -> CatalogDomainModel:
         profile_id=value.profile_id,
         model_key=value.model_key,
         enabled=bool(value.enabled),
+        default_parameters=dict(getattr(value, "default_parameters", {}) or {}),
         revision=int(getattr(value, "revision", 1)),
         id=value.id,
     )
@@ -432,6 +444,15 @@ def _provider_call_from_model(value: ProviderCallModel) -> ProviderCall:
         provider_request_id=value.provider_request_id,
         native_usage=dict(value.native_usage) if isinstance(value.native_usage, dict) else None,
         failure_code=value.failure_code,
+        outbound_correlation=value.outbound_correlation,
+        lookup_outcome=value.lookup_outcome,
+        remote_lookup_protocol=value.remote_lookup_protocol,
+        remote_lookup_binding=(
+            {str(key): item for key, item in value.remote_lookup_binding.items()}
+            if isinstance(value.remote_lookup_binding, dict)
+            else None
+        ),
+        admission_refs=(dict(value.admission_refs) if value.admission_refs else None),
         id=value.id,
         revision=value.revision,
         retention_policy=value.retention_policy,
@@ -461,6 +482,9 @@ def _video_operation_from_model(value: VideoOperationModel) -> VideoOperation:
         aspect_ratio=value.aspect_ratio,
         status=cast(Any, value.status),
         provider_request_id=value.provider_request_id,
+        outbound_correlation=value.outbound_correlation,
+        lookup_outcome=value.lookup_outcome,
+        admission_refs=(dict(value.admission_refs) if value.admission_refs else None),
         revision=value.revision,
         id=value.id,
         cancel_requested=bool(value.cancel_requested),
@@ -1170,6 +1194,7 @@ class SQLAlchemyUnitOfWork:
                 storage_profile_id=row.storage_profile_id,
                 storage_profile_revision=row.storage_profile_revision,
                 storage_profile_snapshot_hash=row.storage_profile_snapshot_hash,
+                admission_refs=dict(row.admission_refs or {}),
                 upload_key=row.upload_key,
                 diagnostic=row.diagnostic,
                 schema_version=row.schema_version,
@@ -1576,6 +1601,9 @@ class SQLAlchemyUnitOfWork:
                 credential_profile = self.profiles.get(profile_id)
                 if credential_profile is not None:
                     credential_profile.credential_status = "configured"
+                    # The relation stores metadata row identity; adapter composition
+                    # must instead use the envelope's profile-bound credential ID.
+                    credential_profile.credential_ref = credential_row.credential_id
                 self._loaded_catalog_credential_by_profile[profile_id] = credential_row.id
         self._loaded_catalog_credential_ids = {row.id for row in credential_rows}
         self._loaded_catalog_sync_revisions = {row.id: row.revision for row in sync_rows}
@@ -1740,6 +1768,7 @@ class SQLAlchemyUnitOfWork:
         node_rows = list((await self.session.execute(select(WorkflowNodeRunModel))).scalars())
         nodes_by_run: dict[str, list[NodeRun]] = {}
         for node_row in node_rows:
+            operation_snapshot = getattr(node_row, "operation_snapshot", None)
             node = NodeRun(
                 run_id=node_row.run_id,
                 node_key=node_row.node_key,
@@ -1748,11 +1777,16 @@ class SQLAlchemyUnitOfWork:
                 id=node_row.id,
                 logical_operation=node_row.logical_operation,
                 scope_refs=tuple(node_row.scope_refs),
+                admission_refs=(dict(node_row.admission_refs) if node_row.admission_refs else None),
                 output_evidence=(
                     dict(node_row.output_evidence) if node_row.output_evidence else None
                 ),
                 failure=(dict(node_row.failure) if node_row.failure else None),
                 submission_state=cast(Any, node_row.submission_state),
+                execution_route=cast(Any, getattr(node_row, "execution_route", "legacy")),
+                workflow_type=getattr(node_row, "workflow_type", "phase_one_run"),
+                task_queue=getattr(node_row, "task_queue", "agent-tasks"),
+                operation_snapshot=(dict(operation_snapshot) if operation_snapshot else None),
             )
             nodes_by_run.setdefault(node.run_id, []).append(node)
             self._loaded_workflow_node_revisions[node.id] = node.revision
@@ -2652,9 +2686,16 @@ class SQLAlchemyUnitOfWork:
                     "status": node.status,
                     "logical_operation": node.logical_operation,
                     "scope_refs": cast(Any, _json_value(list(node.scope_refs))),
+                    "admission_refs": cast(Any, _json_value(node.admission_refs)),
                     "output_evidence": cast(Any, _json_value(node.output_evidence)),
                     "failure": cast(Any, _json_value(node.failure)),
                     "submission_state": node.submission_state,
+                    "execution_route": node.execution_route,
+                    "workflow_type": node.workflow_type,
+                    "task_queue": node.task_queue,
+                    "operation_snapshot": _json_value(node.operation_snapshot)
+                    if node.operation_snapshot is not None
+                    else None,
                 }
                 if node_original is None:
                     self.session.add(WorkflowNodeRunModel(id=node.id, **node_values))
@@ -2917,6 +2958,10 @@ class SQLAlchemyUnitOfWork:
                 "adapter_identity": profile.adapter_identity,
                 "explicit_live_opt_in": profile.explicit_live_opt_in,
                 "credential_status": profile.credential_status,
+                "base_url": profile.base_url,
+                "credential_metadata_id": profile.credential_ref,
+                "timeout_ms": profile.timeout_ms,
+                "settings": {"projectScope": list(profile.project_scope)},
             }
             original = self._loaded_catalog_profile_revisions.get(profile.id)
             if original is None:
@@ -3030,6 +3075,7 @@ class SQLAlchemyUnitOfWork:
                 "enabled": model.enabled,
                 "revision": model.revision,
                 "schema_version": "1.0.0",
+                "default_parameters": _json_value(model.default_parameters),
             }
             original = self._loaded_catalog_model_revisions.get(model.id)
             if original is None:
@@ -3089,6 +3135,13 @@ class SQLAlchemyUnitOfWork:
                             provider_request_id=call.provider_request_id,
                             native_usage=cast(Any, _json_value(call.native_usage)),
                             failure_code=call.failure_code,
+                            outbound_correlation=call.outbound_correlation,
+                            lookup_outcome=call.lookup_outcome,
+                            remote_lookup_protocol=call.remote_lookup_protocol,
+                            remote_lookup_binding=cast(
+                                Any, _json_value(call.remote_lookup_binding)
+                            ),
+                            admission_refs=cast(Any, _json_value(call.admission_refs)),
                         )
                     ),
                 )
@@ -3121,6 +3174,11 @@ class SQLAlchemyUnitOfWork:
                     provider_request_id=call.provider_request_id,
                     native_usage=cast(Any, _json_value(call.native_usage)),
                     failure_code=call.failure_code,
+                    outbound_correlation=call.outbound_correlation,
+                    lookup_outcome=call.lookup_outcome,
+                    remote_lookup_protocol=call.remote_lookup_protocol,
+                    remote_lookup_binding=cast(Any, _json_value(call.remote_lookup_binding)),
+                    admission_refs=cast(Any, _json_value(call.admission_refs)),
                     retention_policy=call.retention_policy,
                     retention_version=call.retention_version,
                     hold=call.hold,
@@ -3364,6 +3422,7 @@ class SQLAlchemyUnitOfWork:
                 "storage_profile_id": reservation.storage_profile_id,
                 "storage_profile_revision": reservation.storage_profile_revision,
                 "storage_profile_snapshot_hash": reservation.storage_profile_snapshot_hash,
+                "admission_refs": dict(reservation.admission_refs),
                 "upload_key": reservation.upload_key,
                 "diagnostic": reservation.diagnostic,
                 "schema_version": reservation.schema_version,
@@ -3751,6 +3810,9 @@ class SQLAlchemyUnitOfWork:
                 "aspect_ratio": operation.aspect_ratio,
                 "status": operation.status,
                 "provider_request_id": operation.provider_request_id,
+                "outbound_correlation": operation.outbound_correlation,
+                "lookup_outcome": operation.lookup_outcome,
+                "admission_refs": cast(Any, _json_value(operation.admission_refs)),
                 "cancel_requested": operation.cancel_requested,
                 "observation_fingerprints": list(operation.observation_fingerprints),
                 "retention_policy": "long-term-audit",

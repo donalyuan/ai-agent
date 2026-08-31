@@ -54,6 +54,15 @@ class RunDispatchService:
                     current,
                     dict(run.selection_snapshot),
                 )
+                node = next((item for item in run.nodes if item.id == current.node_run_id), None)
+                if node is not None and node.execution_route == "generation":
+                    # Generation owns this route.  Mark the legacy start as drained so
+                    # an old Agent dispatcher cannot claim it after a restart.
+                    uow.temporal_starts[current.workflow_id] = replace(
+                        current, status="reconciled", revision=current.revision + 1
+                    )
+                    await uow.commit()
+                    continue
             try:
                 await starter.start(launch)
             except Exception:

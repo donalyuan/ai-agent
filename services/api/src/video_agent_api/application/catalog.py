@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
+from inspect import isawaitable
 from typing import Any, cast
 from uuid import uuid4
 
@@ -24,7 +25,9 @@ from video_agent_api.domain.provider_ops import (
     CostConfirmation,
     ProviderCall,
     ProviderQuotaSnapshot,
+    derive_outbound_correlation,
 )
+from video_agent_api.ports.contracts import FrozenRemoteLookup
 from video_agent_api.ports.credentials import (
     CredentialKeyring,
     CredentialMasterKeyUnavailable,
@@ -102,6 +105,9 @@ class RecordProviderCallCommand:
     cost_source: str | None = None
     provider_request_id: str | None = None
     native_usage: dict[str, object] | None = None
+    outbound_correlation: str | None = None
+    lookup_outcome: str = "not_attempted"
+    admission_refs: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +176,58 @@ class CatalogService:
     def __init__(self, uow_factory: Any, keyring: CredentialKeyring | None = None) -> None:
         self._uow_factory = uow_factory
         self._keyring = keyring or CredentialKeyring()
+
+    async def resolve_credential(self, credential_ref: str, profile_id: str) -> str:
+        """Open a catalog-owned envelope only at the live adapter boundary."""
+        async with self._uow_factory() as uow:
+            envelope = uow.credential_envelopes.get(profile_id)
+            if envelope is None or envelope.credential_id != credential_ref:
+                raise ValidationDomainError("live_provider_unconfigured")
+            try:
+                return self._keyring.open(
+                    envelope, profile_id=profile_id, credential_id=credential_ref
+                )
+            except CredentialMasterKeyUnavailable as error:
+                raise CredentialMasterKeyUnavailableError() from error
+            except Exception as error:
+                raise ValidationDomainError("live_provider_unconfigured") from error
+
+    async def remote_lookup_bindings(self) -> tuple[dict[str, object], ...]:
+        """Return only persisted runnable lookup contracts; this performs no I/O."""
+        async with self._uow_factory() as uow:
+            bindings: list[dict[str, object]] = []
+            for profile in uow.profiles.values():
+                provider = uow.providers.get(profile.provider_id)
+                if (
+                    provider is None
+                    or not provider.enabled
+                    or not profile.enabled
+                    or not profile.explicit_live_opt_in
+                    or profile.credential_status != "configured"
+                ):
+                    continue
+                for operation, snapshot in profile.capability_snapshots.items():
+                    protocol = snapshot.remote_lookup_protocol
+                    if (
+                        not snapshot.runnable
+                        or not protocol
+                        or protocol == "unsupported"
+                        or not snapshot.id
+                        or not snapshot.model_id
+                    ):
+                        continue
+                    bindings.append(
+                        {
+                            "profileId": profile.id,
+                            "modelId": snapshot.model_id,
+                            "profileRevision": profile.revision,
+                            "capabilitySnapshotId": snapshot.id,
+                            "capabilityRevision": snapshot.revision,
+                            "operation": operation,
+                            "protocol": protocol,
+                        }
+                    )
+            return tuple(bindings)
 
     async def bootstrap(self) -> None:
         # Persist dependency owners in stages. SQLAlchemy cannot infer flush ordering
@@ -340,6 +398,13 @@ class CatalogService:
 
     async def record_provider_call(self, command: RecordProviderCallCommand) -> ProviderCall:
         key = (command.run_id, command.logical_operation)
+        outbound_correlation = command.outbound_correlation or derive_outbound_correlation(
+            command.project_id,
+            command.run_id,
+            command.logical_operation,
+            command.operation,
+            command.request_fingerprint,
+        )
         async with self._uow_factory() as uow:
             existing_id = uow.provider_call_keys.get(key)
             if existing_id:
@@ -355,6 +420,8 @@ class CatalogService:
                     command.model_id,
                     command.capability_snapshot_id,
                     command.request_fingerprint,
+                    outbound_correlation,
+                    command.admission_refs,
                 )
                 actual_binding = (
                     existing.project_id,
@@ -367,10 +434,53 @@ class CatalogService:
                     existing.model_id,
                     existing.capability_snapshot_id,
                     existing.request_fingerprint,
+                    existing.outbound_correlation,
+                    existing.admission_refs,
                 )
                 if actual_binding != expected_binding:
                     raise ValidationDomainError("provider operation fingerprint conflict")
                 return cast(ProviderCall, existing)
+            profile = uow.profiles.get(command.profile_id)
+            provider = uow.providers.get(command.provider_id)
+            remote_lookup_protocol: str | None = None
+            remote_lookup_binding: dict[str, object] | None = None
+            if profile is not None and provider is not None:
+                if profile.provider_id != provider.id:
+                    raise ValidationDomainError("provider call catalog binding unavailable")
+                # Reserve policy capacity in the same transaction as the durable
+                # attempt. A rejected policy must not leave a ProviderCall behind.
+                active = sum(
+                    1
+                    for value in uow.provider_calls.values()
+                    if value.profile_id == profile.id
+                    and value.operation == command.operation
+                    and value.status
+                    in (
+                        {"pending", "unknown"}
+                        if profile.adapter_identity != "local_workspace"
+                        else {"pending"}
+                    )
+                    and value.outbound_correlation is not None
+                )
+                if active:
+                    profile.active_operations[command.operation] = active
+                else:
+                    profile.active_operations.pop(command.operation, None)
+                if profile.adapter_identity != "local_workspace":
+                    profile.admit(command.operation, time.time(), live=True)
+                snapshot = profile.capability_snapshots.get(command.operation)
+                if snapshot is not None and snapshot.id == command.capability_snapshot_id:
+                    remote_lookup_protocol = snapshot.remote_lookup_protocol
+                    if snapshot.remote_lookup_protocol:
+                        remote_lookup_binding = {
+                            "profileId": profile.id,
+                            "modelId": snapshot.model_id or command.model_id,
+                            "profileRevision": profile.revision,
+                            "capabilitySnapshotId": snapshot.id,
+                            "capabilityRevision": snapshot.revision,
+                            "operation": command.operation,
+                            "protocol": snapshot.remote_lookup_protocol,
+                        }
             call = ProviderCall(
                 project_id=command.project_id,
                 run_id=command.run_id,
@@ -389,6 +499,11 @@ class CatalogService:
                 cost_source=command.cost_source,
                 provider_request_id=command.provider_request_id,
                 native_usage=command.native_usage,
+                outbound_correlation=outbound_correlation,
+                lookup_outcome=command.lookup_outcome,
+                remote_lookup_protocol=remote_lookup_protocol,
+                remote_lookup_binding=remote_lookup_binding,
+                admission_refs=(dict(command.admission_refs) if command.admission_refs else None),
             )
             uow.provider_calls[call.id] = call
             uow.provider_call_keys[key] = call.id
@@ -417,6 +532,7 @@ class CatalogService:
         model_id: str,
         capability_snapshot_id: str | None,
         request_fingerprint: str,
+        admission_refs: dict[str, object] | None = None,
     ) -> ProviderCall:
         """Expose a narrow recorder contract without coupling Text to catalog commands."""
         return await self.record_provider_call(
@@ -431,20 +547,32 @@ class CatalogService:
                 model_id=model_id,
                 capability_snapshot_id=capability_snapshot_id,
                 request_fingerprint=request_fingerprint,
+                admission_refs=admission_refs,
             )
         )
 
     async def claim_text_provider_call(
         self, run_id: str, logical_operation: str
     ) -> tuple[ProviderCall, bool]:
-        """Atomically claim one durable text intent before the external side effect."""
+        """Keep the text-facing port narrow while sharing the durable claim rule."""
+        return await self.claim_provider_call(
+            run_id, logical_operation, expected_operation="text.generate"
+        )
+
+    async def claim_provider_call(
+        self, run_id: str, logical_operation: str, *, expected_operation: str
+    ) -> tuple[ProviderCall, bool]:
+        """Mark a prepared owner call unknown before an external side effect can occur."""
         async with self._uow_factory() as uow:
             call_id = uow.provider_call_keys.get((run_id, logical_operation))
             if call_id is None:
                 raise ValidationDomainError("provider call not found")
             call = uow.provider_calls[call_id]
-            if call.operation != "text.generate" or call.status != "pending":
+            if call.operation != expected_operation:
+                raise ValidationDomainError("provider call operation mismatch")
+            if call.status != "pending":
                 return cast(ProviderCall, call), False
+
             claimed = replace(call, revision=call.revision + 1, status="unknown")
             uow.provider_calls[call_id] = claimed
             await uow.commit()
@@ -489,6 +617,7 @@ class CatalogService:
         failure_code: str | None = None,
         provider_request_id: str | None = None,
         native_usage: dict[str, object] | None = None,
+        lookup_outcome: str | None = None,
     ) -> ProviderCall:
         if status not in {"pending", "succeeded", "failed", "unknown", "cancelled"}:
             raise ValidationDomainError("provider call status is invalid")
@@ -500,6 +629,9 @@ class CatalogService:
             safe_usage = _safe_native_usage(native_usage)
             next_provider_request_id = provider_request_id or call.provider_request_id
             next_usage = safe_usage if safe_usage is not None else call.native_usage
+            next_lookup_outcome = lookup_outcome or call.lookup_outcome
+            if not isinstance(next_lookup_outcome, str) or not next_lookup_outcome:
+                raise ValidationDomainError("provider lookup outcome is invalid")
             if call.status in {"succeeded", "failed", "cancelled"} and status != call.status:
                 raise ValidationDomainError("provider call terminal status conflict")
             if (
@@ -507,6 +639,7 @@ class CatalogService:
                 and call.failure_code == failure_code
                 and call.provider_request_id == next_provider_request_id
                 and call.native_usage == next_usage
+                and call.lookup_outcome == next_lookup_outcome
             ):
                 return cast(ProviderCall, call)
             updated = replace(
@@ -516,10 +649,103 @@ class CatalogService:
                 failure_code=failure_code,
                 provider_request_id=next_provider_request_id,
                 native_usage=next_usage,
+                lookup_outcome=next_lookup_outcome,
             )
             uow.provider_calls[call_id] = updated
+            if call.status in {"pending", "unknown"} and status in {
+                "succeeded",
+                "failed",
+                "cancelled",
+            }:
+                profile = uow.profiles.get(call.profile_id)
+                if profile is not None:
+                    profile.release(call.operation)
             await uow.commit()
             return cast(ProviderCall, updated)
+
+    async def reconcile_provider_call(
+        self,
+        run_id: str,
+        logical_operation: str,
+        *,
+        lookups: tuple[FrozenRemoteLookup, ...] = (),
+    ) -> ProviderCall:
+        """Reconcile an ambiguous call without ever submitting it again."""
+        unsupported = False
+        async with self._uow_factory() as uow:
+            call_id = uow.provider_call_keys.get((run_id, logical_operation))
+            if call_id is None:
+                raise ValidationDomainError("provider call not found")
+            call = cast(ProviderCall, uow.provider_calls[call_id])
+            if call.status != "unknown":
+                return call
+            # Recovery is executable only with the complete persisted seven-field
+            # binding.  The former field-only path allowed a mutable catalog
+            # lookup to authorize a retry after restart, so missing/legacy
+            # bindings now remain owner-specific ``unknown``.
+            persisted_binding = call.remote_lookup_binding
+            required_binding = {
+                "profileId",
+                "modelId",
+                "profileRevision",
+                "capabilitySnapshotId",
+                "capabilityRevision",
+                "operation",
+                "protocol",
+            }
+            binding_complete = (
+                isinstance(persisted_binding, dict) and set(persisted_binding) == required_binding
+            )
+            persisted = cast(dict[str, object], persisted_binding) if binding_complete else None
+            persisted_values = persisted or {}
+            matches = tuple(
+                candidate
+                for candidate in lookups
+                if binding_complete
+                and candidate.profile_id == persisted_values.get("profileId")
+                and candidate.model_id == persisted_values.get("modelId")
+                and candidate.profile_revision == persisted_values.get("profileRevision")
+                and candidate.capability_snapshot_id == persisted_values.get("capabilitySnapshotId")
+                and candidate.capability_revision == persisted_values.get("capabilityRevision")
+                and candidate.operation == persisted_values.get("operation")
+                and candidate.protocol == persisted_values.get("protocol")
+            )
+            lookup = matches[0] if len(matches) == 1 else None
+            if not binding_complete or (
+                persisted is not None and persisted.get("protocol") == "unsupported"
+            ):
+                unsupported = True
+            correlation = call.outbound_correlation or call.provider_request_id
+            if lookup is None or not correlation:
+                unsupported = True
+        if unsupported or lookup is None or correlation is None:
+            return await self.finalize_provider_call(
+                run_id,
+                logical_operation,
+                status="unknown",
+                lookup_outcome="unsupported",
+            )
+        result = lookup.port.lookup_provider_request(correlation, lookup.protocol)
+        if isawaitable(result):
+            result = await result
+        if result is None:
+            return await self.finalize_provider_call(
+                run_id,
+                logical_operation,
+                status="unknown",
+                lookup_outcome="not_found",
+            )
+        request_id = getattr(result, "request_id", None)
+        payload = getattr(result, "payload", None)
+        usage = payload.get("usage") if isinstance(payload, dict) else None
+        return await self.finalize_provider_call(
+            run_id,
+            logical_operation,
+            status="succeeded",
+            provider_request_id=request_id if isinstance(request_id, str) else None,
+            native_usage=usage if isinstance(usage, dict) else None,
+            lookup_outcome="found",
+        )
 
     async def update_provider(self, command: UpdateCatalogCommand) -> Provider:
         async with self._uow_factory() as uow:
@@ -694,7 +920,7 @@ class CatalogService:
             # SkillRevision rows are immutable; a lifecycle toggle is a new owner revision.
             uow.skills.append(updated)
             await uow.commit()
-            return updated
+            return cast(SkillRevisionRecord, updated)
 
     async def disable_model(self, entity_id: str, expected_revision: int) -> Model:
         async with self._uow_factory() as uow:

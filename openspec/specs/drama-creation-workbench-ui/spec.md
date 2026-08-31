@@ -246,3 +246,17 @@ Workbench SHALL 以 `projectId + episodeId` 为 key 隔离保存 storyboard/work
 #### Scenario:桌面 Chrome 与 Edge 均完成关键闭环
 - **WHEN** 维护者运行阶段一浏览器兼容验收
 - **THEN** Chrome 与 Edge 分别完成项目入口、工作台、审核、资产、Timeline 和设置导航及关键操作，并保存各自版本与失败证据；缺少任一浏览器结果时该验收失败
+
+### Requirement:阶段一共享 UI 基线
+系统 SHALL 由本 change 在 `shared/ui` 建立 shadcn/Radix 源码组件、Tailwind/CSS Variables 语义 tokens 和 Lucide 图标基线；Dialog、Tabs、Tooltip、Command、Toaster、有限可调面板、DataTable/Form 与 VirtualList 等共享能力 MUST 由其他阶段一页面复用。业务页面 MUST NOT 引入第二套组件库、页面级手写 CSS 或复制基础变体。
+
+#### Scenario:正式页面复用共享组件
+- **WHEN** Review、Timeline、Provider/Model/Skill 或 Assets 页面渲染基础控件
+- **THEN** 页面引用同一 `shared/ui` 导出，具备稳定尺寸、键盘/ARIA 状态和语义 token，且没有页面专用基础变体
+
+### Requirement:300 节点工作流只读投影
+系统 SHALL 以固定 published WorkflowVersion 投影 300 个节点和冻结 scope；React Flow 只能展示节点、边和运行状态，MUST 禁止移动、连线、删除、保存、发布和版本升级。该领域实现 MUST NOT 导出为 `shared/ui`，通用 graph authoring MUST 保持 MVP-B。
+
+#### Scenario:浏览固定工作流投影
+- **WHEN** 用户加载、筛选、选择或查看 300-node 工作流投影
+- **THEN** 节点信息和详情可读且虚拟化 DOM 有界，所有 graph mutation 请求被拒绝并保持零 owner 写入

@@ -147,3 +147,14 @@ Review UI SHALL 以 `projectId + episodeId` 隔离 active session ID 和 present
 #### Scenario:过期或跨集会话不会恢复
 - **WHEN** 保存的 active session 不存在、属于其他 project/Episode、revision 已过期或 selection fingerprint 不匹配
 - **THEN** UI 清除目标 Episode 的无效引用并显示 owner diagnostic，不借用其他会话、不提交任何业务 mutation
+
+### Requirement:候选审查复用共享基础控件
+Review UI SHALL 使用 `shared/ui` 提供的选择器、确认 `Dialog`、`Tabs`、`Tooltip`、`Command` 和 `Toaster`/通知；MUST NOT 再造基础变体、页面级手写 CSS 或第二套组件库。共享控件只承载候选审查领域交互，不改变 owner facts。
+
+#### Scenario:确认候选操作
+- **WHEN** 用户比较候选并显式确认 accept、reject 或 retake
+- **THEN** 确认 dialog、差异 tabs、诊断 tooltip、命令入口和结果通知均来自共享 UI，且只提交一次 owner command
+
+#### Scenario:页面读取不触发副作用
+- **WHEN** 用户打开 Review、切换 tab、使用命令或刷新候选
+- **THEN** 共享控件只更新读取/展示状态，不创建 Plan、ProviderCall、Timeline reference 或其他 owner mutation

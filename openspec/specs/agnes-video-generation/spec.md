@@ -130,3 +130,12 @@ Agnes Provider MUST 只拥有 capability probe/snapshot、submit/poll/cancel/res
 #### Scenario:Preflight mismatch has zero external side effect
 - **WHEN** 任一必需输入未接受、stale、foreign 或不匹配
 - **THEN** 在 ProviderCall 持久化或 provider submission 前拒绝 request。
+
+### Requirement:Agnes runnable gate、terminal candidate 与 video review 顺序
+Agnes 首次 connection-test/probe SHALL 仅在 `adapterInstalled=true`、catalog `approval=approved`、`featureGate=MVP-A`、explicit live opt-in、已选 profile、可解析 credential 与 timeout 齐备时执行，成功后冻结 capability snapshot，MUST NOT 要求既有 snapshot 或 `runnable=true`；explicit live invocation SHALL 额外要求该成功 snapshot 与 `runnable=true`。未选中 Agnes mode、MVP-B candidate、TTS/ASR、MiniMax H3、Seedance 2.5 MUST 不可运行且零外部调用，默认测试 MUST 使用 `Mock Provider +` 显式 Local test/offline profile（adapter identity=`local_workspace`）。verified Provider terminal success SHALL 是 result `AssetVersion` 唯一 append 时点，retry/reconcile MUST 返回同一 version/candidate。
+
+流程 SHALL 为 Provider terminal result candidate -> 人工以 exact candidate/source/ShotSpec facts `accept` -> scenes exact current CAS -> MediaInspect/derivatives -> Timeline handoff。review Schema/Signal/HTTP DTO/audit event 仅允许 `accept|reject|retake`；legacy/unknown `approve` MUST validation 且零 current/retake/AssetVersion/Timeline mutation，`accept` 仅可一次触发 scenes exact CAS。derivative `pending|failed|stale` SHALL 仅阻断 Timeline/preview/export，MUST NOT 撤销 accepted/current。
+
+#### Scenario:terminal candidate 不绕过 scenes 或 derivative gate
+- **WHEN** Agnes 返回 terminal result，或 review/derivative 输入无效
+- **THEN** 只有一次有效 accept 可进入 scenes CAS，之后才检查 derivatives；无效输入零 version/current/Timeline mutation

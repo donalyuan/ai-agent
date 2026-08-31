@@ -1,0 +1,202 @@
+{
+  "schemaVersion": "1.0.0",
+  "change": "repair-runtime-closure-contracts",
+  "recordedAt": "2026-08-28",
+  "environment": {
+    "os": "Ubuntu 22.04 WSL2",
+    "providerMode": "mock",
+    "storageMode": "local_workspace",
+    "network": "no credentialed Provider/TOS requests"
+  },
+  "verification": {
+    "rcx11": {
+      "implementation": {
+        ".env.example": "fe353b317c1f2065553e7f0a66f3f0578a14e866e17bdd193e1d4361e61bead5",
+        "services/api/src/video_agent_api/application/runtime_composition.py": "52a75a1d70d8667daf51bcf143d4c3a57f279f5ff993091122a69bc36269158d",
+        "services/api/src/video_agent_api/application/exports.py": "2c57931e831038fd94a086a615b0cca05cf584335300ab591ebe344f000a8bc5",
+        "services/api/src/video_agent_api/app.py": "b0e9cb167e844da043cfa313fb3fa7cc72674e535e5b854507e9b31a5138bed8",
+        "workers/media/main.py": "054b49fbe022f0719e4d371ff18f404ca9168f303f11cde854584f2b1bc9467f",
+        "services/api/tests/test_runtime_composition.py": "8dc97ff1f9bda4aaebf51e10559060aebd7e30d9d9a6c2763a79ca0d732ac6ea"
+      },
+      "sourceFingerprint": {
+        "algorithm": "sha256sum ordered implementation entries | sha256sum",
+        "value": "554aa3e4f47a83d96ba6e71b5ed983202b7beca58976d5d18878d65078f1e558"
+      },
+      "changes": [
+        "renderer composition requires an approved, enabled ffmpeg Provider/Profile and runnable media.render CapabilitySnapshot",
+        "Export identity freezes catalog capability snapshot ID and revision in addition to the probed capability fingerprint",
+        "API composes renderer after catalog bootstrap; Media Worker awaits the same durable composition",
+        "default Mock/Local Compose explicitly leaves renderer optional and declares an empty RENDERER_PROFILE_ID"
+      ],
+      "focusedTests": "runtime composition plus media/export worker: 61 passed, 9 warnings",
+      "fullApi": "514 passed; JUnit report errors=0, failures=0, skipped=0; duration=65.502s",
+      "ruff": "changed files linted and formatted",
+      "compose": "config --quiet passed; current images up --wait with postgres, temporal, api, web, agent, generation, and media healthy; API readiness returned {\"status\":\"ready\"}; Generation and Media --health passed"
+    },
+    "rcx11Replacement": {
+      "recordedAt": "2026-08-31",
+      "scope": [
+        "canonical renderer identity across API/Media composition, ExportService, ExportExecutionSnapshot, and worker replay",
+        "fail-closed readiness for non-empty RENDERER_PROFILE_ID regardless of RENDERER_REQUIRED"
+      ],
+      "implementationFiles": {
+        "services/api/src/video_agent_api/application/exports.py": "f478577c8abb18c937c0340a4b387d3c5cc06042919b768e1949187d9f168f90",
+        "services/api/src/video_agent_api/application/export_worker.py": "d812fcdd667c90964c36f07b495ad5762989fe497e412055300a45343cdbd1bd",
+        "services/api/src/video_agent_api/domain/exports.py": "78f41facc01bdd60a195dad328986e94f854356b3e2c9ff9b1e3d359a572c023",
+        "services/api/src/video_agent_api/app.py": "f32cf3206b74329b0b97346574bc0ab363ce44ef2047d101cf14aa20a14934d5",
+        "services/api/src/video_agent_api/db.py": "26ca2d1273ff1a68e5e7788b923e722ec1586c9f68cad4d78dae554968136409",
+        "workers/media/main.py": "a5690145d9e041c80f676c6e8218fb4dc202e02f8cc22c429058c15e3b5cf255"
+      },
+      "testFiles": {
+        "services/api/tests/test_runtime_composition.py": "6fbfbb41623d837553a57c43c81a38d91538ff306c7aacfc71e1a5954ae921c7",
+        "services/api/tests/test_media_export_worker.py": "2cde0f8747045adc1a25899db4256a0ca886db3fc543ea21a17c06beec3358cb"
+      },
+      "verification": {
+        "focused": "uv run pytest tests/test_runtime_composition.py tests/test_media_export_worker.py -q: 63 passed, 9 warnings",
+        "exportAndTimeline": "uv run pytest tests/test_timeline_export_slice.py tests/test_export_dispatch.py tests/test_timeline_export_migrations.py -q: 30 passed, 8 warnings",
+        "ruff": "ruff check passed; ruff format --check passed (8 files)",
+        "gitDiffCheck": "passed"
+      },
+      "rawErrors": [
+        "Initial focused command used duplicated services/api path and returned pytest: file or directory not found; no tests ran.",
+        "Initial export extension command named absent tests/test_export_worker.py and returned pytest: file or directory not found; no tests ran.",
+        "Initial ruff command used an incorrect ../workers path; corrected to ../../workers/media/main.py.",
+        "JSON verification command `python -m json.tool ...` returned /bin/bash: python: command not found; reran the same check with python3 successfully."
+      ],
+      "composeRefresh": {
+        "observedAt": "2026-08-31T11:35:25+08:00",
+        "commands": [
+          "docker compose --env-file .env.example -f infra/compose/compose.yaml config --quiet",
+          "docker compose --env-file .env.example -f infra/compose/compose.yaml up --build -d --wait",
+          "docker compose --env-file .env.example -f infra/compose/compose.yaml ps",
+          "curl --fail --silent --show-error http://127.0.0.1:8000/v1/health/ready"
+        ],
+        "healthyServices": ["postgres", "temporal", "api", "web", "agent", "generation", "media"],
+        "apiReadiness": "{\"status\":\"ready\"}",
+        "rendererSelection": "RENDERER_PROFILE_ID is empty and RENDERER_REQUIRED=false under .env.example; no renderer was selected.",
+        "refreshedContainers": {
+          "api": {
+            "createdAt": "2026-08-31T03:34:47.555301379Z",
+            "imageId": "sha256:26907c5f87b946bf2187365f5a78f146946a6f46f5402204de631902eb682067",
+            "health": "healthy"
+          },
+          "generation": {
+            "createdAt": "2026-08-31T03:34:47.136197055Z",
+            "imageId": "sha256:342ddbba5585c586d15b815d1eb1e8e2ffa2e82ba7414b2c56e19cc5c415b2fd",
+            "health": "healthy"
+          },
+          "media": {
+            "createdAt": "2026-08-31T03:34:47.134905659Z",
+            "imageId": "sha256:b36a8a34de3feec54543e68cfbd5fe8eec0a2318a6eaba8f61f7b38ac407963a",
+            "health": "healthy"
+          }
+        },
+        "workerHealth": {
+          "generation": "healthy",
+          "media": "healthy"
+        }
+      },
+      "externalBoundary": "No real Provider/TOS/FFmpeg/paid calls and no credentialed E2E were executed. This Compose refresh used only the default Mock/Local configuration; no migration command, volume/image deletion, or external request was invoked.",
+      "residualRisk": [
+        "Mock/Local tests do not prove real renderer compatibility.",
+        "Existing deprecation warnings remain outside this repair scope."
+      ]
+    },
+    "rcx10": {
+      "implementation": {
+        "services/api/src/video_agent_api/application/catalog.py": "fe9a3c65c10ad683d604ae613c1e51cfc6313c3f8e575228686ff0d639ff60ef",
+        "services/api/src/video_agent_api/application/image_generation.py": "1c3d8b43ea4716b77c862e3f3ff01d0918772daf78120e31135aff9552325995",
+        "services/api/src/video_agent_api/application/export_worker.py": "40ef59161e10fecb9be6e100361c4c22234b15b06540fe3dbe0d6ccc8d0dcb64",
+        "services/api/src/video_agent_api/adapters/media_temporal.py": "544ef4c09811b4df11a47582906eb176a2b03c517bf568524c0ce1a72b7ce9f9",
+        "services/api/src/video_agent_api/interfaces/http/image_generation.py": "130631ae0d2cddc867ba6323da429438a63d0d84b566ce1448be7153121ec91a"
+      },
+      "sourceFingerprint": "f1592300a5eeeef12fffbee9035f08b15148959bdd63290d1d6be8f3c4ddc6de",
+      "changes": [
+        "strict seven-field lookup binding; executable field-only fallback removed",
+        "Image profileRevision required before provider intent",
+        "Export storage identity gate precedes source reads",
+        "Media storage identity gate precedes stat/multipart side effects"
+      ],
+      "fullApi": "510 passed, 3 failed (legacy tests intentionally assert removed fallback or omit required Image profileRevision)",
+      "ruffMypy": "passed for five changed source files",
+      "openSpecStrict": "22 passed, 0 failed",
+      "gitDiffCheck": "passed",
+      "compose": "0029_lookup_binding head; seven services healthy; API ready/live"
+    },
+    "rcx8Repair": {
+      "scope": [
+        "API/Generation/Media/Export explicit StorageProfile/BucketBinding composition",
+        "renderer profileId/revision/snapshotId/capability freeze",
+        "FrozenRemoteLookup and ProviderCall seven-field binding exact match"
+      ],
+      "focusedTests": "services/api runtime composition, generation worker, catalog, timeline/export, media export: 110 passed",
+      "lookupBinding": "profileId/modelId/profileRevision/capabilitySnapshotId/capabilityRevision/operation/protocol; stale or incomplete binding remains unknown",
+      "storageComposition": "live/TOS runtime.storage placeholder is not injected; explicit local mode only, missing profile/binding/capability fails closed",
+      "rendererComposition": "renderer identity freezes profileId/revision/snapshotId and capability; no fabricated production renderer"
+    },
+    "rcx6Repair": {
+      "scope": [
+        "ProviderCall.remote_lookup_binding",
+        "ResolvedStorageIdentity frozen bucket/endpoint/region/capability",
+        "Export storage profile snapshot validation",
+        "API/Media renderer environment fallback removal"
+      ],
+      "focusedTests": "services/api pytest catalog, generation, runtime composition, media export: 162 passed; full API suite was started but its final summary was not retained by the execution wrapper and is not claimed as passed",
+      "migration": "0028_provider_lookup_contract preserves remote_lookup_protocol; 0029_lookup_binding additively adds remote_lookup_binding JSON column"
+    },
+    "pnpmCheck": {
+      "result": "passed",
+      "contracts": 78,
+      "web": 75,
+      "api": 510,
+      "lintErrors": 0,
+      "lintWarnings": 10,
+      "mypySourceFiles": 99,
+      "formattedFiles": 183,
+      "lintQualification": "根 `pnpm run lint` 与 `pnpm run format:check` 在按根 Ruff 格式重排 workers/media/main.py 后通过；Web lint 保留 10 条 warning、0 error。"
+    },
+    "focused": {
+      "generationWorkerAndRuntimeComposition": "37 passed"
+    },
+    "openSpecStrict": "passed",
+    "uvLockCheck": "passed",
+    "gitDiffCheck": "passed",
+    "migration": {
+      "result": "passed",
+      "composePostgresCycle": "0028_provider_lookup_contract -> 0029_lookup_binding -> 0028_provider_lookup_contract -> 0029_lookup_binding (head)",
+      "safety": "当前源码首次启动在缺列时 fail-closed；随后使用当前 Compose image 执行 migration cycle。未调用真实 Provider/TOS。",
+      "current": "0029_lookup_binding (head)",
+      "heads": "0029_lookup_binding (head)",
+      "remoteLookupBindingColumn": "present",
+      "providerCallsWithRemoteLookupProtocol": 0
+    },
+    "compose": {
+      "result": "passed",
+      "config": "passed; default .env.example explicitly declares empty RENDERER_PROFILE_ID",
+      "buildAndUpWait": "passed",
+      "healthyServices": ["postgres", "temporal", "api", "web", "agent", "generation", "media"],
+      "apiReadiness": "{\"status\":\"ready\"}",
+      "generationHealth": "passed",
+      "mediaHealth": "passed"
+    }
+  },
+  "externalBoundary": {
+    "credentialedE2E": "not_executed",
+    "result": "unconfigured",
+    "readiness": "not_ready",
+    "externalAcceptCount": 0,
+    "realProviderTosOrPaidRequest": "not_executed",
+    "mvpAExitClosure": "not_executed"
+  },
+  "residualRisk": [
+    "本地 Mock/Local 不能证明真实 Provider、TOS 或 credentialed sandbox 的兼容性。",
+    "Mock/Local Compose readiness 仅证明本地 wiring，不证明真实 Provider、TOS 或 credentialed sandbox。",
+    "现有 Web lint 有 10 条非阻断 warning。",
+    "FastAPI startup hook 与 Starlette HTTP 422 的现有 deprecation warnings 未在本 change 范围内处理。",
+    "真实 renderer 未配置；默认 Mock/Local 未选择 renderer 且 readiness healthy。显式选择 renderer 但缺少 approved/runnable catalog identity 时仍 fail-closed。"
+  ],
+  "writeLockAudit": {
+    "result": "deviation_recorded",
+    "detail": "历史已有一次对 services/api/tests/test_phase_one_contracts.py 的无锁 patch。RCX6 本轮另一次 renderer 回归测试 patch 先于 acquire 发生，随后立即 acquire/release 最小锁并保留测试；未发生并发冲突或外部副作用。其余本轮写入均使用最小路径锁 acquire/release。"
+  }
+}

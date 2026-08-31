@@ -127,11 +127,18 @@ class NodeRun:
     id: str = field(default_factory=lambda: str(uuid4()))
     logical_operation: str = ""
     scope_refs: tuple[dict[str, object], ...] = ()
+    admission_refs: dict[str, object] | None = None
     output_evidence: dict[str, object] | None = None
     failure: dict[str, object] | None = None
     submission_state: Literal["not_submitted", "submitted", "submission_unknown", "reconciled"] = (
         "not_submitted"
     )
+    # These values are frozen with the NodeRun so a restart or rollback cannot
+    # move an accepted operation to another worker/schema route.
+    execution_route: Literal["legacy", "generation"] = "legacy"
+    workflow_type: str = "phase_one_run"
+    task_queue: str = "agent-tasks"
+    operation_snapshot: dict[str, object] | None = None
 
     def transition(self, target: NodeRunStatus) -> None:
         validate_node_transition(self.status, target)

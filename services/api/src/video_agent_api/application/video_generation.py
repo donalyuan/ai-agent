@@ -9,9 +9,11 @@ from typing import Any, cast
 
 from video_agent_api.application.assets import AppendAssetVersionCommand, AssetsService
 from video_agent_api.application.catalog import CatalogService, RecordProviderCallCommand
+from video_agent_api.application.runtime_composition import CatalogRuntimeComposition
 from video_agent_api.application.storage_handoffs import upload_verified_bytes
 from video_agent_api.domain.assets import StorageObject
 from video_agent_api.domain.errors import ProjectAccessForbiddenError, ValidationDomainError
+from video_agent_api.domain.provider_ops import derive_outbound_correlation
 from video_agent_api.domain.video_generation import VideoOperation, VideoTakeCandidate
 from video_agent_api.ports.contracts import (
     ModelSelection,
@@ -20,6 +22,12 @@ from video_agent_api.ports.contracts import (
     VideoGenerationPort,
 )
 from video_agent_api.providers.agnes import AgnesVideoProvider
+from video_agent_api.resilience import (
+    FrozenOperationAdmission,
+    OperationsResilienceCoordinator,
+    admission_from_refs,
+    admission_refs,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +72,19 @@ class ReconcileVideoCommand:
     provider_request_id: str | None
 
 
+def _command_payload(command: SubmitVideoCommand) -> dict[str, object]:
+    return asdict(command)
+
+
+def command_from_payload(payload: object) -> SubmitVideoCommand:
+    if not isinstance(payload, dict):
+        raise ValidationDomainError("video generation outbox command is invalid")
+    try:
+        return SubmitVideoCommand(**payload)
+    except (TypeError, ValueError) as error:
+        raise ValidationDomainError("video generation outbox command is invalid") from error
+
+
 @dataclass(frozen=True, slots=True)
 class ReviewVideoCandidateCommand:
     candidate_id: str
@@ -98,14 +119,55 @@ class AgnesVideoService:
         catalog: CatalogService,
         storage: StoragePort | None = None,
         assets: AssetsService | None = None,
+        *,
+        resilience: OperationsResilienceCoordinator | None = None,
+        live_composition: CatalogRuntimeComposition | None = None,
+        media_owner: Any | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._provider = provider
         self._catalog = catalog
         self._storage = storage
         self._assets = assets
+        self._resilience = resilience
+        self._live_composition = live_composition
+        self._media_owner = media_owner
 
-    async def submit(self, command: SubmitVideoCommand) -> VideoOperation:
+    async def _resolve_provider(
+        self,
+        *,
+        project_id: str,
+        profile_id: str,
+        model_id: str,
+        capability_snapshot_id: str | None,
+        capability_revision: int | None = None,
+        profile_revision: int | None = None,
+        parameters: dict[str, object] | None = None,
+    ) -> tuple[VideoGenerationPort, ModelSelection]:
+        if self._live_composition is None:
+            return self._provider, ModelSelection(
+                "", profile_id, model_id, "catalog", parameters or {}
+            )
+        composed = await self._live_composition.resolve_provider(
+            profile_id,
+            model_id,
+            "video.submit",
+            project_id=project_id,
+            expected_profile_revision=profile_revision,
+            expected_capability_snapshot_id=capability_snapshot_id,
+            expected_capability_revision=capability_revision,
+        )
+        if not isinstance(composed.port, AgnesVideoProvider):
+            raise ValidationDomainError("video live provider adapter is incompatible")
+        return composed.port, composed.identity.selection(parameters)
+
+    async def submit(
+        self,
+        command: SubmitVideoCommand,
+        *,
+        execute_provider: bool = True,
+        frozen_admission: FrozenOperationAdmission | None = None,
+    ) -> VideoOperation:
         if command.duration_seconds <= 0 or not command.aspect_ratio:
             raise ValidationDomainError("video_duration_or_aspect_missing")
         if (
@@ -114,12 +176,8 @@ class AgnesVideoService:
             and command.source_schema_version != command.schema_version
         ):
             raise ValidationDomainError("schema_version_conflict")
-        if isinstance(self._provider, AgnesVideoProvider):
-            # Capability validation is deliberately before intent/ProviderCall writes.
-            self._provider.validate_capability("submit", command.parameters)
         request_fingerprint = video_request_fingerprint(command)
-        node_run_id: str
-        adapter_key: str
+        # Retries must consult the durable owner ledger before mutable catalog/provider gates.
         async with self._uow_factory() as uow:
             existing = uow.video_operations.get((command.run_id, command.logical_operation))
             if existing is not None:
@@ -127,7 +185,17 @@ class AgnesVideoService:
                 call = uow.provider_calls.get(call_id) if call_id is not None else None
                 if call is None or call.request_fingerprint != request_fingerprint:
                     raise ValidationDomainError("agnes_video_operation_fingerprint_conflict")
+                if frozen_admission is not None and self._resilience is not None:
+                    admission = self._resilience.revalidate(frozen_admission)
+                    if not admission.allowed:
+                        raise ValidationDomainError(
+                            admission.diagnostic or "video_resource_admission_blocked"
+                        )
                 return cast(VideoOperation, existing)
+        frozen_profile_revision: int | None = None
+        node_run_id: str
+        adapter_key: str
+        async with self._uow_factory() as uow:
             run = uow.workflow_runs.get(command.run_id)
             node = (
                 next(
@@ -151,6 +219,10 @@ class AgnesVideoService:
             ):
                 raise ValidationDomainError("agnes_video_run_scope_or_node_invalid")
             frozen = run.selection_snapshot
+            raw_profile_revision = frozen.get("profileRevision")
+            if isinstance(raw_profile_revision, bool) or not isinstance(raw_profile_revision, int):
+                raise ValidationDomainError("agnes_video_frozen_profile_revision_invalid")
+            frozen_profile_revision = raw_profile_revision
             frozen_capabilities = frozen.get("capabilitySnapshots")
             frozen_video_capability = (
                 frozen_capabilities.get("video.submit")
@@ -218,6 +290,35 @@ class AgnesVideoService:
                 or (capability.model_id is not None and capability.model_id != command.model_id)
             ):
                 raise ValidationDomainError("agnes_video_capability_snapshot_invalid")
+            # The durable ProviderCall performs the authoritative reservation below,
+            # but a rejected policy must not leave a VideoOperation intent behind.
+            self._preflight_policy(uow, profile, "video.submit")
+            admission_payload: dict[str, object] | None = None
+            if self._resilience is not None:
+                if frozen_admission is not None:
+                    try:
+                        admission = frozen_admission
+                        if (
+                            admission.scope != command.project_id
+                            or admission.operation != "video.submit"
+                            or admission.operation_key
+                            != f"{command.run_id}:{command.logical_operation}"
+                        ):
+                            raise ValidationDomainError("video_resource_admission_mismatch")
+                        admission = self._resilience.revalidate(admission)
+                    except (TypeError, AttributeError) as error:
+                        raise ValidationDomainError("video_resource_admission_invalid") from error
+                else:
+                    admission = self._resilience.freeze(
+                        command.project_id,
+                        "video.submit",
+                        f"{command.run_id}:{command.logical_operation}",
+                    )
+                if not admission.allowed:
+                    raise ValidationDomainError(
+                        admission.diagnostic or "video_resource_admission_blocked"
+                    )
+                admission_payload = admission_refs(admission)
             shot = uow.shots.get(command.shot_id)
             if (
                 shot is None
@@ -286,17 +387,36 @@ class AgnesVideoService:
                 asset_id=command.source_asset_version_id,
                 source_candidate_id=command.source_candidate_id,
                 source_provenance=command.source_provenance,
+                outbound_correlation=derive_outbound_correlation(
+                    command.project_id,
+                    command.run_id,
+                    command.logical_operation,
+                    "video.submit",
+                    request_fingerprint,
+                ),
+                admission_refs=admission_payload,
             )
-            uow.video_operations[(command.run_id, command.logical_operation)] = operation
-            await uow.commit()
-
+        port, selection = await self._resolve_provider(
+            project_id=command.project_id,
+            profile_id=command.profile_id,
+            model_id=command.model_id,
+            capability_snapshot_id=command.capability_snapshot_id,
+            capability_revision=command.capability_revision,
+            profile_revision=frozen_profile_revision,
+            parameters=command.parameters,
+        )
+        if isinstance(port, AgnesVideoProvider):
+            port.validate_capability("submit", command.parameters)
         selection = ModelSelection(
             command.provider_id,
-            command.profile_id,
-            command.model_id,
-            adapter_key,
-            dict(command.parameters),
+            selection.profile_id,
+            selection.model_id,
+            adapter_key if self._live_composition is None else selection.adapter_key,
+            selection.default_parameters,
         )
+        # ProviderOperationPolicy admission is authoritative and must happen
+        # before the VideoOperation intent is persisted.  A rejected policy must
+        # therefore leave neither owner fact behind.
         await self._catalog.record_provider_call(
             RecordProviderCallCommand(
                 command.project_id,
@@ -309,11 +429,31 @@ class AgnesVideoService:
                 command.model_id,
                 request_fingerprint,
                 capability_snapshot_id=command.capability_snapshot_id,
+                admission_refs=admission_payload,
             )
         )
+        async with self._uow_factory() as uow:
+            existing = uow.video_operations.get((command.run_id, command.logical_operation))
+            if existing is not None:
+                return cast(VideoOperation, existing)
+            uow.video_operations[(command.run_id, command.logical_operation)] = operation
+            await uow.commit()
+        if not execute_provider:
+            return operation
+        provider_call, acquired = await self._catalog.claim_provider_call(
+            command.run_id,
+            command.logical_operation,
+            expected_operation="video.submit",
+        )
+        if not acquired:
+            # A prior ambiguous claim can only be reconciled through the existing
+            # VideoOperation owner; submitting again could duplicate a paid request.
+            raise ValidationDomainError("video provider operation requires reconciliation")
+        if not provider_call.outbound_correlation:
+            raise ValidationDomainError("video provider correlation is unavailable")
         try:
-            result: PortResult = self._provider.submit_video(
-                command.prompt, selection, command.run_id
+            result: PortResult = port.submit_video(
+                command.prompt, selection, provider_call.outbound_correlation
             )
         except Exception as error:
             await self._catalog.finalize_provider_call(
@@ -340,6 +480,149 @@ class AgnesVideoService:
             operation.transition("submitted")
             await uow.commit()
             return operation
+
+    async def enqueue(
+        self, command: SubmitVideoCommand, *, project_scope: str | None = None
+    ) -> VideoOperation:
+        if project_scope is not None and project_scope != command.project_id:
+            raise ProjectAccessForbiddenError(project_scope)
+        operation = await self.submit(command, execute_provider=False)
+        fingerprint = video_request_fingerprint(command)
+        async with self._uow_factory() as uow:
+            if not any(
+                event.get("type") == "video.generation.requested"
+                and event.get("runId") == command.run_id
+                and event.get("logicalOperation") == command.logical_operation
+                for event in uow.outbox_events
+            ):
+                uow.outbox_events.append(
+                    {
+                        "type": "video.generation.requested",
+                        "eventId": sha256(
+                            f"video.generation.requested:{command.run_id}:{command.logical_operation}:{fingerprint}".encode()
+                        ).hexdigest(),
+                        "status": "pending",
+                        "projectId": command.project_id,
+                        "runId": command.run_id,
+                        "logicalOperation": command.logical_operation,
+                        "requestFingerprint": fingerprint,
+                        "executionRoute": "generation",
+                        "workflowType": "video-generation",
+                        "taskQueue": "generation-tasks",
+                        "schemaVersion": "1.0.0",
+                        # Carry the exact frozen resource/capacity admission from
+                        # the owner operation into Temporal; dispatcher must not
+                        # recompute mutable runtime state.
+                        "resourceAdmission": (
+                            dict(operation.admission_refs)
+                            if operation.admission_refs is not None
+                            else None
+                        ),
+                        "command": _command_payload(command),
+                        "action": "submit",
+                    }
+                )
+                await uow.commit()
+        return operation
+
+    async def execute(
+        self,
+        command: SubmitVideoCommand,
+        *,
+        frozen_admission: FrozenOperationAdmission | None = None,
+    ) -> VideoOperation:
+        operation = await self.submit(
+            command, execute_provider=False, frozen_admission=frozen_admission
+        )
+        if operation.status in {"submitted", "running", "succeeded", "failed", "cancelled"}:
+            return operation
+        provider_call, acquired = await self._catalog.claim_provider_call(
+            command.run_id, command.logical_operation, expected_operation="video.submit"
+        )
+        if not acquired:
+            raise ValidationDomainError("video provider operation requires reconciliation")
+        if not provider_call.outbound_correlation:
+            raise ValidationDomainError("video provider correlation is unavailable")
+        # The durable claim is authoritative on retries; only after claiming may
+        # mutable catalog/provider state be resolved for the external side effect.
+        async with self._uow_factory() as uow:
+            run = uow.workflow_runs.get(command.run_id)
+            frozen_profile_revision = (
+                run.selection_snapshot.get("profileRevision") if run is not None else None
+            )
+        if isinstance(frozen_profile_revision, bool) or not isinstance(
+            frozen_profile_revision, int
+        ):
+            raise ValidationDomainError("agnes_video_frozen_profile_revision_invalid")
+        port, selection = await self._resolve_provider(
+            project_id=command.project_id,
+            profile_id=command.profile_id,
+            model_id=command.model_id,
+            capability_snapshot_id=command.capability_snapshot_id,
+            capability_revision=command.capability_revision,
+            profile_revision=frozen_profile_revision,
+            parameters=command.parameters,
+        )
+        if isinstance(port, AgnesVideoProvider):
+            port.validate_capability("submit", command.parameters)
+        try:
+            result: PortResult = port.submit_video(
+                command.prompt, selection, provider_call.outbound_correlation
+            )
+        except Exception as error:
+            await self._catalog.finalize_provider_call(
+                command.run_id,
+                command.logical_operation,
+                status="unknown",
+                failure_code=type(error).__name__,
+            )
+            async with self._uow_factory() as uow:
+                current = cast(
+                    VideoOperation,
+                    uow.video_operations[(command.run_id, command.logical_operation)],
+                )
+                current.transition("submission_unknown")
+                await uow.commit()
+            raise
+        provider_request_id = result.payload.get("providerRequestId") or result.request_id
+        async with self._uow_factory() as uow:
+            current = cast(
+                VideoOperation,
+                uow.video_operations[(command.run_id, command.logical_operation)],
+            )
+            current.provider_request_id = str(provider_request_id)
+            current.transition("submitted")
+            await uow.commit()
+            return current
+
+    @staticmethod
+    def _preflight_policy(uow: Any, profile: Any, operation: str) -> None:
+        if profile.adapter_identity == "local_workspace":
+            return
+        policy = profile.operation_policies.get(operation, {})
+        max_concurrency = int(str(policy.get("maxConcurrency", 1)))
+        active = sum(
+            1
+            for value in uow.provider_calls.values()
+            if value.profile_id == profile.id
+            and value.operation == operation
+            and value.status
+            in (
+                {"pending", "unknown"}
+                if profile.adapter_identity != "local_workspace"
+                else {"pending"}
+            )
+            and value.outbound_correlation is not None
+        )
+        if active >= max_concurrency:
+            raise ValidationDomainError("provider_operation_concurrency_exhausted")
+        rate_limit = int(str(policy.get("rateLimit", 60)))
+        previous_count, _started = profile.request_windows.get(operation, (0, 0.0))
+        if previous_count >= rate_limit:
+            raise ValidationDomainError("provider_operation_rate_limited")
+        quota = profile.quota_snapshots.get(operation)
+        if quota is not None and quota.status == "exhausted":
+            raise ValidationDomainError("provider_quota_exhausted")
 
     async def cancel(
         self,
@@ -444,8 +727,34 @@ class AgnesVideoService:
             provider_request_id = operation.provider_request_id
             if provider_request_id is None:
                 return operation
+            # Reconciliation starts from the frozen owner ledger/admission.  A
+            # stale runtime snapshot blocks the lookup without mutating state.
+            if self._resilience is not None and operation.admission_refs is None:
+                raise ValidationDomainError("video_resource_admission_missing")
+            if self._resilience is not None and operation.admission_refs is not None:
+                try:
+                    frozen = self._resilience.revalidate(
+                        admission_from_refs(operation.admission_refs)
+                    )
+                except (KeyError, TypeError, ValueError) as error:
+                    raise ValidationDomainError("video_resource_admission_invalid") from error
+                if not frozen.allowed:
+                    raise ValidationDomainError(
+                        frozen.diagnostic or "video_resource_admission_blocked"
+                    )
+            if self._live_composition is not None:
+                # VideoOperation predates durable catalog revision fields. A
+                # reconcile must never reconstruct a live port from mutable
+                # catalog state; retain the owner-specific unknown terminal.
+                return operation
+            provider = self._provider
+            correlation = operation.outbound_correlation
+            if not correlation:
+                # An ambiguous operation without the frozen external identity
+                # cannot be safely looked up or resubmitted after restart.
+                return operation
         try:
-            result = self._provider.get_video_status(provider_request_id, command.run_id)
+            result = provider.get_video_status(provider_request_id, correlation)
         except Exception:
             async with self._uow_factory() as uow:
                 return cast(
@@ -684,6 +993,9 @@ class AgnesVideoService:
                 if expected_shot_revision is not None and expected_shot_revision != shot_revision:
                     raise ValidationDomainError("video candidate shot is stale")
 
+                # The accepted owner fact must be visible to the producer before
+                # it appends the same-transaction Media dispatch outbox event.
+                uow.video_take_candidates[candidate.id] = updated
                 await _accept_current_media(
                     uow,
                     project_id=candidate.project_id,
@@ -691,7 +1003,7 @@ class AgnesVideoService:
                     shot_id=candidate.target_id,
                     candidate={
                         "candidateId": candidate.id,
-                        "candidateRevision": candidate.revision,
+                        "candidateRevision": updated.revision,
                         "projectId": candidate.project_id,
                         "episodeId": candidate.episode_id,
                         "targetId": candidate.target_id,
@@ -706,6 +1018,7 @@ class AgnesVideoService:
                         "aspectRatio": candidate.aspect_ratio,
                     },
                     expected_shot_revision=shot_revision,
+                    media_owner=self._media_owner,
                 )
             uow.video_take_candidates[candidate.id] = updated
             await uow.commit()

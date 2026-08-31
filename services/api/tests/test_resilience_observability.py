@@ -18,6 +18,7 @@ from video_agent_api.observability import (
 )
 from video_agent_api.resilience import (
     CapacitySnapshot,
+    OperationsResilienceCoordinator,
     RuntimeResourceSnapshot,
     admit,
     aggregate_capacity,
@@ -71,6 +72,39 @@ def test_admission_distinguishes_capability_soft_and_hard_limits() -> None:
     hard = admit(_snapshot(disk_free_bytes=400), required_bytes=1)
     assert hard.allowed is False
     assert hard.diagnostic == "resource_capacity_hard_limit"
+
+
+def test_operations_resilience_freezes_deterministic_revalidatable_admission() -> None:
+    resource = _snapshot(revision=7, config_revision=3)
+    capacity = capacity_snapshot(resource, "project-1")
+    coordinator = OperationsResilienceCoordinator(resource, capacity)
+
+    accepted = coordinator.freeze("project-1", "image.generate", "op-1", required_bytes=10)
+    assert accepted.allowed is True
+    assert accepted.reference.startswith("resilience:")
+    assert accepted.resource_hash == coordinator.resource_hash
+    assert accepted.capacity_hash == coordinator.capacity_hash
+    assert coordinator.revalidate(accepted).allowed is True
+
+    changed = OperationsResilienceCoordinator(_snapshot(revision=8), capacity)
+    stale = changed.revalidate(accepted)
+    assert stale.allowed is False
+    assert stale.diagnostic == "resource_snapshot_stale"
+
+
+def test_admission_revalidates_across_api_worker_reprobe_with_new_capture_time() -> None:
+    api_resource = _snapshot(captured_at="2026-08-26T00:00:00+00:00", revision=7)
+    api_capacity = capacity_snapshot(api_resource, "project-1")
+    api = OperationsResilienceCoordinator(api_resource, api_capacity)
+    frozen = api.freeze("project-1", "media.dispatch", "media:source:1")
+
+    worker_resource = _snapshot(captured_at="2026-08-26T00:01:00+00:00", revision=7)
+    worker_capacity = capacity_snapshot(worker_resource, "project-1")
+    worker = OperationsResilienceCoordinator(worker_resource, worker_capacity)
+
+    assert worker.resource_hash == api.resource_hash
+    assert worker.capacity_hash == api.capacity_hash
+    assert worker.revalidate(frozen).allowed is True
 
 
 def test_capacity_aggregation_and_recovery_are_owner_safe() -> None:

@@ -105,7 +105,7 @@ class SoundCue:
                 raise ValidationDomainError("continuityRef is incomplete")
             if item["ownerType"] not in {"asset_bible", "scene", "shot", "shot_spec"}:
                 raise ValidationDomainError("continuityRef ownerType is invalid")
-            if not isinstance(item["revision"], int) or cast(int, item["revision"]) < 1:
+            if not isinstance(item["revision"], int) or item["revision"] < 1:
                 raise ValidationDomainError("continuityRef revision is invalid")
             _hex64(item["hash"], "continuityRef hash")
             keys.append((item["ownerType"], item["id"], item["revision"]))

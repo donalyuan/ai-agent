@@ -78,3 +78,10 @@ When `STORAGE_MODE=local_workspace`, API and Media Worker SHALL mount the same n
 #### Scenario: Worker reads API upload
 - **WHEN** API writes a Local workspace object and Media Worker materializes the same reference
 - **THEN** both containers resolve the same bytes and checksum
+
+### Requirement:Storage uses the shared credential boundary
+TOS MUST 消费 catalog CredentialResolver，且 MUST NOT 持久化第二套 cipher/keyring。real profile 缺少 master key 时返回 503 `credential_master_key_unavailable`；`Mock Provider +` 显式 Local test/offline profile（adapter identity=`local_workspace`）保持可用。
+
+#### Scenario:Credential failure does not leak storage secrets
+- **WHEN** resolution 或 re-encryption 失败
+- **THEN** 不暴露或用于 fallback 的 key material、objectKey 或 workspace URI。

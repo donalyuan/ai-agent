@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,15 @@ from video_agent_api.adapters.ffmpeg import (
     SubprocessFfmpegRenderAdapter,
 )
 from video_agent_api.adapters.in_memory import InMemoryUnitOfWork
+from video_agent_api.adapters.media_temporal import (
+    MediaActivityDependencies,
+    TemporalMediaStarter,
+    configure_media_activities,
+    media_derivative,
+    media_render,
+    media_storage_terminal_handoff,
+    media_storage_upload,
+)
 from video_agent_api.adapters.sqlalchemy import make_sqlalchemy_uow_factory
 from video_agent_api.application.assets import (
     AppendAssetVersionCommand,
@@ -24,9 +34,16 @@ from video_agent_api.application.assets import (
 from video_agent_api.application.export_worker import (
     EpisodeExportWorker,
     ExecuteExportJobCommand,
+    _storage_profile_matches_snapshot,
 )
 from video_agent_api.application.exports import ExportService
 from video_agent_api.application.media import (
+    MEDIA_ROUTE,
+    MEDIA_SCHEMA_VERSION,
+    MEDIA_TASK_QUEUE,
+    MEDIA_WORKFLOW_TYPE,
+    MediaDispatchAdmission,
+    MediaDispatchService,
     MediaOwnerService,
     RecordDerivativeCommand,
     RecordInspectionCommand,
@@ -39,21 +56,40 @@ from video_agent_api.application.rendering import (
     render_srt,
     verify_parity,
 )
+from video_agent_api.application.scenes import _accept_current_media
 from video_agent_api.domain.assets import StorageObject
 from video_agent_api.domain.catalog import default_skill_revisions
 from video_agent_api.domain.errors import (
     RendererCapabilityUnsupportedError,
     RendererUnconfiguredError,
+    RevisionConflictError,
     ValidationDomainError,
 )
 from video_agent_api.domain.media import PreviewArtifact
 from video_agent_api.domain.provider_ops import ProviderCall
 from video_agent_api.domain.runs import WorkflowRun
+from video_agent_api.domain.scenes import ImmutableOwnerRef, Shot
 from video_agent_api.domain.timeline import TimelineCut, TimelineVersion
 from video_agent_api.domain.video_generation import VideoOperation, VideoTakeCandidate
-from video_agent_api.ports.contracts import StorageCapability, StorageRetryableError
-from video_agent_api.ports.rendering import RenderRequest
+from video_agent_api.ports.contracts import (
+    StorageCapability,
+    StorageRetryableError,
+    StorageValidationError,
+    StoredObjectRef,
+)
+from video_agent_api.ports.rendering import (
+    LoudnessMeasurement,
+    RenderOutputInspection,
+    RenderRequest,
+    RenderResult,
+)
 from video_agent_api.ports.storage import LocalWorkspaceAdapter
+from video_agent_api.resilience import (
+    OperationsResilienceCoordinator,
+    RuntimeResourceSnapshot,
+    admission_refs,
+    capacity_snapshot,
+)
 
 
 def _metadata(checksum: str) -> dict[str, object]:
@@ -74,6 +110,39 @@ def _metadata(checksum: str) -> dict[str, object]:
         "sampleRate": 48000,
         "channels": 2,
     }
+
+
+def test_media_storage_preflight_rejects_bucket_or_profile_snapshot_drift() -> None:
+    snapshot = {
+        "adapterKey": "local_workspace",
+        "profileId": "local-test-offline",
+        "projectId": "project-1",
+        "bucket": "workspace",
+        "bucketBindingId": "local-workspace",
+        "endpoint": "workspace://local",
+        "region": "local",
+        "revision": 1,
+    }
+    capability = {
+        "profileRevision": 1,
+        "minPartSizeBytes": 1,
+        "maxPartSizeBytes": 64 * 1024 * 1024,
+        "maxPartCount": 10_000,
+        "maxObjectSizeBytes": 8 * 1024**4,
+    }
+
+    assert (
+        _storage_profile_matches_snapshot(
+            "local_workspace", snapshot, capability, bucket="workspace"
+        )
+        is True
+    )
+    assert (
+        _storage_profile_matches_snapshot(
+            "local_workspace", snapshot, capability, bucket="foreign-bucket"
+        )
+        is False
+    )
 
 
 async def _asset_owner(
@@ -181,7 +250,6 @@ async def _asset_owner(
 async def test_media_owner_is_exact_idempotent_bounded_and_preview_stales() -> None:
     uow = InMemoryUnitOfWork()
     project, episode, version = await _asset_owner(uow)
-    service = MediaOwnerService(lambda: uow)
     command_value = RecordInspectionCommand(
         project.id,
         version.id,
@@ -192,7 +260,40 @@ async def test_media_owner_is_exact_idempotent_bounded_and_preview_stales() -> N
         "ffprobe",
         "7.1",
     )
+    unavailable = RuntimeResourceSnapshot(
+        cpu_count=4,
+        available_concurrency=4,
+        memory_available_bytes=1024,
+        memory_limit_bytes=2048,
+        disk_free_bytes=None,
+        disk_total_bytes=None,
+        captured_at="2026-08-26T00:00:00+00:00",
+        error="resource probe unavailable",
+    )
+    blocked_service = MediaOwnerService(
+        lambda: uow,
+        resilience=OperationsResilienceCoordinator(
+            unavailable, capacity_snapshot(unavailable, project.id)
+        ),
+    )
+    with pytest.raises(ValidationDomainError, match="resource_probe_unavailable"):
+        await blocked_service.record_inspection(command_value)
+    assert not uow.media_inspections and not uow.media_derivatives and not uow.preview_artifacts
+    healthy = RuntimeResourceSnapshot(
+        cpu_count=4,
+        available_concurrency=4,
+        memory_available_bytes=2048,
+        memory_limit_bytes=4096,
+        disk_free_bytes=8 * 1024 * 1024,
+        disk_total_bytes=16 * 1024 * 1024,
+        captured_at="2026-08-26T00:00:00+00:00",
+    )
+    service = MediaOwnerService(
+        lambda: uow,
+        resilience=OperationsResilienceCoordinator(healthy, capacity_snapshot(healthy, project.id)),
+    )
     inspection = await service.record_inspection(command_value)
+    assert inspection.admission_refs["operation"] == "media.inspect"
     assert (await service.record_inspection(command_value)).id == inspection.id
     with pytest.raises(ValidationDomainError, match="operation conflict"):
         await service.record_inspection(
@@ -207,6 +308,7 @@ async def test_media_owner_is_exact_idempotent_bounded_and_preview_stales() -> N
                 "7.1",
             )
         )
+
     derivative = await service.record_derivative(
         RecordDerivativeCommand(
             project.id,
@@ -226,6 +328,7 @@ async def test_media_owner_is_exact_idempotent_bounded_and_preview_stales() -> N
             size_bytes=512,
         )
     )
+    assert derivative.admission_refs["operation"] == "media.derivative"
     ready = await service.ready_derivatives(
         project.id, version.id, version.revision, version.content_hash
     )
@@ -242,7 +345,8 @@ async def test_media_owner_is_exact_idempotent_bounded_and_preview_stales() -> N
         "ready",
         (derivative.id,),
     )
-    await service.record_preview(preview)
+    preview = await service.record_preview(preview)
+    assert preview.admission_refs["operation"] == "media.preview"
     assert preview.matches(cut.revision, cut.fingerprint(), "d" * 64)
     cut.revision += 1
     assert not preview.matches(cut.revision, cut.fingerprint(), "d" * 64)
@@ -259,6 +363,650 @@ async def test_media_owner_is_exact_idempotent_bounded_and_preview_stales() -> N
                 "7.1",
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_media_dispatch_admission_source_and_generated_zero_side_effect() -> None:
+    uow = InMemoryUnitOfWork()
+    project, _episode, version = await _asset_owner(uow)
+    asset = await uow.assets.get(version.asset_id)
+    assert asset is not None
+    asset.source_type = "user_upload"
+    asset.authorization_status = "verified"
+    ref = StoredObjectRef(
+        project.id,
+        "local",
+        "workspace",
+        version.storage_object.object_key,
+        version.storage_object.size_bytes,
+        version.storage_object.checksum,
+        version.storage_object.mime_type,
+        version.storage_object.e_tag,
+        "media:source:1",
+    )
+    service = MediaOwnerService(lambda: uow)
+    source = MediaDispatchAdmission(
+        project.id,
+        "uploaded_source",
+        version.id,
+        version.revision,
+        version.content_hash,
+        ref,
+        "media:source:1",
+    )
+    event = await service.enqueue_dispatch(source)
+    assert event["discriminator"] == "uploaded_source"
+    assert await service.enqueue_dispatch(source) == event
+    before = len(uow.outbox_events)
+    with pytest.raises(ValidationDomainError, match="accepted/current"):
+        await service.enqueue_dispatch(
+            MediaDispatchAdmission(
+                project.id,
+                "generated_candidate",
+                version.id,
+                version.revision,
+                version.content_hash,
+                replace(ref, operation_key="media:generated:rejected"),
+                "media:generated:rejected",
+                episode_id="episode-foreign",
+                shot_id="shot-foreign",
+                candidate_id="candidate-missing",
+            )
+        )
+    assert len(uow.outbox_events) == before
+
+
+@pytest.mark.asyncio
+async def test_media_activity_requires_the_durable_dispatch_admission() -> None:
+    """Activities may revalidate an owner ledger but must not create one after dispatch."""
+    uow = InMemoryUnitOfWork()
+    project, _episode, version = await _asset_owner(uow)
+    asset = await uow.assets.get(version.asset_id)
+    assert asset is not None
+    asset.source_type, asset.authorization_status = "user_upload", "verified"
+    resource = RuntimeResourceSnapshot(2, 2, 1024, 2048, 4096, 8192, "now")
+    resilience = OperationsResilienceCoordinator(resource, capacity_snapshot(resource, "*"))
+    owner = MediaOwnerService(lambda: uow, resilience=resilience)
+    operation_key = "media:durable:1"
+    event = await owner.enqueue_dispatch(
+        MediaDispatchAdmission(
+            project.id,
+            "uploaded_source",
+            version.id,
+            version.revision,
+            version.content_hash,
+            StoredObjectRef(
+                project.id,
+                "local",
+                "workspace",
+                version.storage_object.object_key,
+                version.storage_object.size_bytes,
+                version.storage_object.checksum,
+                version.storage_object.mime_type,
+                version.storage_object.e_tag,
+                operation_key,
+            ),
+            operation_key,
+        )
+    )
+
+    with pytest.raises(ValidationDomainError, match="dispatch admission is required"):
+        owner.admit_activity(project.id, "media.inspect", operation_key)
+
+    assert (
+        owner.admit_activity(
+            project.id,
+            "media.inspect",
+            operation_key,
+            event["resourceAdmission"],
+        )
+        == event["resourceAdmission"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_generated_candidate_producer_uses_one_canonical_media_operation_key() -> None:
+    uow = InMemoryUnitOfWork()
+    _project, _episode, version = await _asset_owner(uow)
+    candidate = next(iter(uow.video_take_candidates.values()))
+    candidate = replace(candidate, status="accepted", revision=candidate.revision + 1)
+    uow.video_take_candidates[candidate.id] = candidate
+    owner = MediaOwnerService(lambda: uow)
+
+    event = await owner.produce_generated_candidate(uow, candidate=candidate, asset_version=version)
+    duplicate = await owner.produce_generated_candidate(
+        uow, candidate=candidate, asset_version=version
+    )
+
+    expected_key = (
+        f"media:generated:{candidate.id}:{candidate.revision}:{version.id}:"
+        f"{version.revision}:{version.content_hash}"
+    )
+    assert event is duplicate
+    assert event["operationKey"] == expected_key
+    assert event["storedObjectRef"]["operationKey"] == expected_key
+    assert event["discriminator"] == "generated_candidate"
+    assert (
+        len([item for item in uow.outbox_events if item.get("type") == "media.dispatch.requested"])
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_generated_candidate_producer_accepts_scene_projection_dict() -> None:
+    """Scenes owner hands the producer a canonical projection, not a domain object."""
+    uow = InMemoryUnitOfWork()
+    _project, _episode, version = await _asset_owner(uow)
+    candidate = next(iter(uow.video_take_candidates.values()))
+    candidate = replace(candidate, status="accepted", revision=candidate.revision + 1)
+    projection = {
+        "id": candidate.id,
+        "projectId": candidate.project_id,
+        "episodeId": candidate.episode_id,
+        "targetId": candidate.target_id,
+        "revision": candidate.revision,
+        "status": candidate.status,
+        "assetVersionId": candidate.asset_version_id,
+        "assetVersionRevision": candidate.asset_version_revision,
+        "assetVersionHash": candidate.asset_version_hash,
+        "provenance": "media_review",
+        "mediaKind": "image",
+    }
+    owner = MediaOwnerService(lambda: uow)
+
+    event = await owner.produce_generated_candidate(
+        uow, candidate=projection, asset_version=version
+    )
+
+    assert event["candidateId"] == candidate.id
+    assert event["candidateRevision"] == candidate.revision
+    assert event["assetVersionId"] == version.id
+
+
+@pytest.mark.asyncio
+async def test_scene_accept_produces_media_event() -> None:
+    """The review projection carries its accepted state without mutating client input."""
+    uow = InMemoryUnitOfWork()
+    project, episode, version = await _asset_owner(uow)
+    candidate = next(iter(uow.video_take_candidates.values()))
+    shot = Shot("scene", project.id, episode.id, 1)
+    shot.continuity_snapshot = ImmutableOwnerRef("continuity", 1, "a" * 64)
+    uow.shots[shot.id] = shot
+    projection = {
+        "candidateId": candidate.id,
+        "candidateRevision": candidate.revision,
+        "projectId": project.id,
+        "episodeId": episode.id,
+        "targetId": shot.id,
+        "assetVersionId": version.id,
+        "assetVersionRevision": version.revision,
+        "assetVersionHash": version.content_hash,
+        "provenance": "media_review",
+        "mediaKind": "image",
+        "shotSpecRevision": None,
+        "shotSpecHash": None,
+    }
+    owner = MediaOwnerService(lambda: uow)
+
+    await _accept_current_media(
+        uow,
+        project_id=project.id,
+        episode_id=episode.id,
+        shot_id=shot.id,
+        candidate=projection,
+        expected_shot_revision=shot.revision,
+        media_owner=owner,
+    )
+
+    event = next(
+        item for item in uow.outbox_events if item.get("type") == "media.dispatch.requested"
+    )
+    assert event["candidateId"] == candidate.id
+    assert event["operationKey"] == (
+        f"media:generated:{candidate.id}:{candidate.revision}:{version.id}:"
+        f"{version.revision}:{version.content_hash}"
+    )
+    assert "status" not in projection
+
+
+@pytest.mark.asyncio
+async def test_media_dispatch_freezes_route_and_fails_closed_before_temporal_start() -> None:
+    class Starter:
+        def __init__(self, unavailable: bool = False) -> None:
+            self.calls: list[dict[str, object]] = []
+            self.unavailable = unavailable
+
+        async def start(self, payload: dict[str, object]) -> str:
+            self.calls.append(payload)
+            if self.unavailable:
+                raise RuntimeError("media queue is unreachable")
+            return "started"
+
+    uow = InMemoryUnitOfWork()
+    project, _episode, version = await _asset_owner(uow)
+    asset = await uow.assets.get(version.asset_id)
+    assert asset is not None
+    asset.source_type, asset.authorization_status = "user_upload", "verified"
+    ref = StoredObjectRef(
+        project.id,
+        "local",
+        "workspace",
+        version.storage_object.object_key,
+        version.storage_object.size_bytes,
+        version.storage_object.checksum,
+        version.storage_object.mime_type,
+        version.storage_object.e_tag,
+        "media:route:1",
+    )
+    owner = MediaOwnerService(lambda: uow)
+    with pytest.raises(StorageValidationError, match="must be verified"):
+        await owner.enqueue_dispatch(
+            MediaDispatchAdmission(
+                project.id,
+                "uploaded_source",
+                version.id,
+                version.revision,
+                version.content_hash,
+                {
+                    "projectId": ref.project_id,
+                    "profileId": ref.profile_id,
+                    "bucket": ref.bucket,
+                    "objectKey": ref.object_key,
+                    "sizeBytes": ref.size_bytes,
+                    "checksum": ref.checksum,
+                    "mimeType": ref.mime_type,
+                    "etag": ref.etag,
+                    "operationKey": ref.operation_key,
+                    "verified": False,
+                },
+                "media:route:1",
+            )
+        )
+    event = await owner.enqueue_dispatch(
+        MediaDispatchAdmission(
+            project.id,
+            "uploaded_source",
+            version.id,
+            version.revision,
+            version.content_hash,
+            ref,
+            "media:route:1",
+        )
+    )
+    assert {
+        "executionRoute": event["executionRoute"],
+        "workflowType": event["workflowType"],
+        "taskQueue": event["taskQueue"],
+        "schemaVersion": event["schemaVersion"],
+    } == {
+        "executionRoute": MEDIA_ROUTE,
+        "workflowType": MEDIA_WORKFLOW_TYPE,
+        "taskQueue": MEDIA_TASK_QUEUE,
+        "schemaVersion": MEDIA_SCHEMA_VERSION,
+    }
+
+    starter = Starter()
+    assert await MediaDispatchService(lambda: uow).dispatch_pending(starter) == {
+        "dispatched": 1,
+        "failed": 0,
+    }
+    assert len(starter.calls) == 1
+    assert starter.calls[0]["workflowId"] == "media-" + hashlib.sha256(b"media:route:1").hexdigest()
+    event_index = next(
+        index
+        for index, item in enumerate(uow.outbox_events)
+        if item.get("operationKey") == "media:route:1"
+    )
+    assert uow.outbox_events[event_index]["status"] == "dispatched"
+
+    # A restarted dispatcher must re-check source owner state before starting
+    # a workflow; changing authorization leaves the durable event pending.
+    asset.authorization_status = "pending"
+    uow.outbox_events[event_index] = {**event, "status": "pending"}
+    before = list(starter.calls)
+    assert await MediaDispatchService(lambda: uow).dispatch_pending(starter) == {
+        "dispatched": 0,
+        "failed": 1,
+    }
+    assert starter.calls == before
+    assert uow.outbox_events[event_index]["status"] == "pending"
+    assert "lastDiagnostic" in uow.outbox_events[event_index]
+
+    uow.outbox_events[event_index] = {
+        **uow.outbox_events[event_index],
+        "status": "pending",
+        "operation": "unknown",
+    }
+    before = list(starter.calls)
+    assert await MediaDispatchService(lambda: uow).dispatch_pending(starter) == {
+        "dispatched": 0,
+        "failed": 1,
+    }
+    assert starter.calls == before
+    assert uow.outbox_events[event_index]["status"] == "pending"
+
+    uow.outbox_events[event_index] = {
+        **uow.outbox_events[event_index],
+        "operation": "inspect",
+        "taskQueue": "foreign-queue",
+    }
+    assert await MediaDispatchService(lambda: uow).dispatch_pending(starter) == {
+        "dispatched": 0,
+        "failed": 1,
+    }
+    assert starter.calls == before
+    assert uow.outbox_events[event_index]["status"] == "pending"
+
+    uow.outbox_events[event_index] = {
+        **uow.outbox_events[event_index],
+        "taskQueue": MEDIA_TASK_QUEUE,
+        "resourceAdmission": None,
+    }
+    assert await MediaDispatchService(lambda: uow).dispatch_pending(starter) == {
+        "dispatched": 0,
+        "failed": 1,
+    }
+    assert starter.calls == before
+    assert uow.outbox_events[event_index]["status"] == "pending"
+
+    uow.outbox_events[event_index] = {
+        **event,
+        "status": "pending",
+    }
+    unavailable = Starter(unavailable=True)
+    assert await MediaDispatchService(lambda: uow).dispatch_pending(unavailable) == {
+        "dispatched": 0,
+        "failed": 1,
+    }
+    assert uow.outbox_events[event_index]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_temporal_media_starter_rejects_frozen_queue_schema_or_route_drift() -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def start_workflow(
+            self, workflow: str, arg: object, *, id: str, task_queue: str
+        ) -> object:
+            self.calls.append({"workflow": workflow, "arg": arg, "id": id, "taskQueue": task_queue})
+            return object()
+
+    client = Client()
+    payload: dict[str, object] = {
+        "workflowId": "media-stable-id",
+        "executionRoute": MEDIA_ROUTE,
+        "workflowType": MEDIA_WORKFLOW_TYPE,
+        "taskQueue": MEDIA_TASK_QUEUE,
+        "schemaVersion": MEDIA_SCHEMA_VERSION,
+    }
+    assert await TemporalMediaStarter(client).start(payload) == "started"
+    assert len(client.calls) == 1
+    for key, value in (
+        ("taskQueue", "other"),
+        ("schemaVersion", "2"),
+        ("executionRoute", "legacy"),
+    ):
+        with pytest.raises(ValidationDomainError, match="media launch"):
+            await TemporalMediaStarter(client).start({**payload, key: value})
+    assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "variant", ["pending", "rejected", "retake", "stale", "foreign", "current"]
+)
+async def test_generated_media_admission_variants_leave_all_downstream_owner_facts_unchanged(
+    variant: str,
+) -> None:
+    uow = InMemoryUnitOfWork()
+    project, episode, version = await _asset_owner(uow)
+    candidate = next(iter(uow.video_take_candidates.values()))
+    if variant in {"pending", "rejected", "retake"}:
+        uow.video_take_candidates[candidate.id] = replace(candidate, status=variant)
+    elif variant == "stale":
+        uow.video_take_candidates[candidate.id] = replace(
+            candidate, asset_version_revision=candidate.asset_version_revision + 1
+        )
+    elif variant == "foreign":
+        uow.video_take_candidates[candidate.id] = replace(candidate, project_id="foreign-project")
+    # The accepted candidate has no matching Scene/Shot current in the current variant.
+    ref = StoredObjectRef(
+        project.id,
+        "local",
+        "workspace",
+        version.storage_object.object_key,
+        version.storage_object.size_bytes,
+        version.storage_object.checksum,
+        version.storage_object.mime_type,
+        version.storage_object.e_tag,
+        f"media:generated:{variant}",
+    )
+    service = MediaOwnerService(lambda: uow)
+    before_outbox = list(uow.outbox_events)
+
+    with pytest.raises(ValidationDomainError, match="generated media (candidate|shot scope)"):
+        await service.enqueue_dispatch(
+            MediaDispatchAdmission(
+                project.id,
+                "generated_candidate",
+                version.id,
+                version.revision,
+                version.content_hash,
+                ref,
+                f"media:generated:{variant}",
+                episode_id=episode.id,
+                shot_id="missing-current-shot",
+                candidate_id=candidate.id,
+            )
+        )
+
+    assert uow.outbox_events == before_outbox
+    assert uow.media_inspections == {}
+    assert uow.media_derivatives == {}
+    assert uow.timeline_cuts == {}
+    assert uow.export_batches == {}
+
+
+@pytest.mark.asyncio
+async def test_media_derivative_activity_verifies_each_output_before_marking_ready(
+    tmp_path: Path,
+) -> None:
+    """A derivative is ready only after its concrete bounded object verifies."""
+    uow = InMemoryUnitOfWork()
+    project, _episode, version = await _asset_owner(uow)
+    storage = LocalWorkspaceAdapter(tmp_path / "workspace")
+    storage.put(version.storage_object.object_key, b"source", correlation_id="source")
+    owner = MediaOwnerService(lambda: uow)
+    inspection = await owner.record_inspection(
+        RecordInspectionCommand(
+            project.id,
+            version.id,
+            version.revision,
+            version.content_hash,
+            "inspect:derivatives",
+            _metadata(version.content_hash),
+            "ffprobe",
+            "7.1",
+        )
+    )
+    outputs = {
+        kind: storage.put(
+            f"projects/{project.id}/derivatives/{kind}.bin",
+            kind.encode(),
+            correlation_id=f"derive:{kind}",
+        )
+        for kind in ("proxy", "thumbnail", "keyframe_index", "waveform")
+    }
+
+    class Inspector:
+        def derive(self, *_args: object, **_kwargs: object) -> tuple[dict[str, object], ...]:
+            return tuple(
+                {
+                    "kind": kind,
+                    "status": "succeeded",
+                    "objectRef": stored.object_ref,
+                    "checksum": stored.checksum,
+                    "sizeBytes": stored.size_bytes,
+                    "toolVersion": "7.1",
+                    "metadata": {"schema": f"{kind}/v1"},
+                    "retentionPolicy": "project-retention",
+                    "retentionVersion": "7",
+                    "licenseStatus": "approved",
+                    "hold": False,
+                }
+                for kind, stored in outputs.items()
+            )
+
+    configure_media_activities(MediaActivityDependencies(owner, storage, Inspector()))
+    result = await media_derivative(
+        {
+            "projectId": project.id,
+            "inspectionId": inspection.id,
+            "operationKey": "derive:all",
+            "storedObjectRef": {
+                "projectId": project.id,
+                "profileId": "local",
+                "bucket": "workspace",
+                "objectKey": version.storage_object.object_key,
+                "sizeBytes": version.storage_object.size_bytes,
+                "checksum": version.storage_object.checksum,
+                "mimeType": version.storage_object.mime_type,
+                "operationKey": "derive:all",
+            },
+        }
+    )
+
+    assert len(result["derivativeIds"]) == 4
+    derivatives = {item.kind: item for item in uow.media_derivatives.values()}
+    assert set(derivatives) == {"proxy", "thumbnail", "keyframe_index", "waveform"}
+    for kind, stored in outputs.items():
+        derivative = derivatives[kind]
+        assert derivative.status == "ready"
+        assert derivative.checksum == stored.checksum
+        assert derivative.size_bytes == stored.size_bytes
+        assert derivative.object_ref == {
+            "profileId": "local",
+            "objectKey": stored.object_ref.removeprefix("workspace://"),
+            "operationKey": f"derive:all:{kind}",
+        }
+        assert derivative.retention_policy == "project-retention"
+        assert derivative.retention_version == "7"
+        assert derivative.license_status == "approved"
+        assert derivative.hold is False
+
+
+@pytest.mark.asyncio
+async def test_media_derivative_activity_records_failure_without_mutating_current_owner(
+    tmp_path: Path,
+) -> None:
+    uow = InMemoryUnitOfWork()
+    project, _episode, version = await _asset_owner(uow)
+    storage = LocalWorkspaceAdapter(tmp_path / "workspace")
+    storage.put(version.storage_object.object_key, b"source", correlation_id="source")
+    owner = MediaOwnerService(lambda: uow)
+    inspection = await owner.record_inspection(
+        RecordInspectionCommand(
+            project.id,
+            version.id,
+            version.revision,
+            version.content_hash,
+            "inspect:failure",
+            _metadata(version.content_hash),
+            "ffprobe",
+            "7.1",
+        )
+    )
+
+    class FailingInspector:
+        def derive(self, *_args: object, **_kwargs: object) -> tuple[dict[str, object], ...]:
+            return (
+                {
+                    "kind": "waveform",
+                    "status": "failed",
+                    "toolVersion": "7.1",
+                    "diagnostic": "ffmpeg derivative failed",
+                    "metadata": {"schema": "waveform/v1"},
+                },
+            )
+
+    configure_media_activities(MediaActivityDependencies(owner, storage, FailingInspector()))
+    result = await media_derivative(
+        {
+            "projectId": project.id,
+            "inspectionId": inspection.id,
+            "operationKey": "derive:failure",
+            "storedObjectRef": {
+                "projectId": project.id,
+                "profileId": "local",
+                "bucket": "workspace",
+                "objectKey": version.storage_object.object_key,
+                "sizeBytes": version.storage_object.size_bytes,
+                "checksum": version.storage_object.checksum,
+                "mimeType": version.storage_object.mime_type,
+                "operationKey": "derive:failure",
+            },
+        }
+    )
+
+    assert len(result["derivativeIds"]) == 1
+    derivative = next(iter(uow.media_derivatives.values()))
+    assert derivative.kind == "waveform"
+    assert derivative.status == "failed"
+    assert derivative.raw_diagnostic == "ffmpeg derivative failed"
+    assert uow.shots == {}
+
+
+@pytest.mark.asyncio
+async def test_media_render_requires_content_verified_duration_codec_and_container(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "render"
+    workspace.mkdir()
+    output = workspace / "opaque-output"
+
+    class Renderer:
+        def render(self, _request: RenderRequest, _workspace: Path) -> RenderResult:
+            output.write_bytes(b"not-derived-from-extension")
+            return RenderResult(
+                output,
+                "rendered",
+                0,
+                LoudnessMeasurement(-14.0, -1.0, "test", "1"),
+            )
+
+        def inspect_output(
+            self, output_path: Path, checked_workspace: Path
+        ) -> RenderOutputInspection:
+            assert output_path == output
+            assert checked_workspace == workspace
+            return RenderOutputInspection("mp4", "h264", "aac", 1.0)
+
+    configure_media_activities(
+        MediaActivityDependencies(
+            MediaOwnerService(lambda: InMemoryUnitOfWork()), None, None, Renderer()
+        )
+    )
+    payload = {
+        "workspace": str(workspace),
+        "renderRequest": {
+            "inputPaths": [str(workspace / "input")],
+            "outputPath": str(output),
+            "width": 1920,
+            "height": 1080,
+        },
+        "expectedOutput": {
+            "durationSeconds": 1.0,
+            "container": "mp4",
+            "videoCodec": "h264",
+            "audioCodec": "aac",
+        },
+    }
+
+    assert (await media_render(payload))["status"] == "succeeded"
+    incomplete = {**payload, "expectedOutput": {"durationSeconds": 1.0}}
+    assert (await media_render(incomplete))["diagnostic"] == "render_output_expectation_incomplete"
 
 
 def _version_for_render() -> TimelineVersion:
@@ -447,6 +1195,7 @@ class RetryableReadStorage:
 
 async def _worker_owner(
     storage: LocalWorkspaceAdapter,
+    renderer_identity: dict[str, object] | None = None,
 ) -> tuple[InMemoryUnitOfWork, object, object, object, ExportService]:
     uow = InMemoryUnitOfWork()
     project, episode, version = await _asset_owner(uow)
@@ -478,7 +1227,12 @@ async def _worker_owner(
     )
     uow.timeline_versions[timeline_version.id] = timeline_version
     storage.put(f"workspace://{version.storage_object.object_key}", b"source", "seed")
-    exports = ExportService(lambda: uow, MockFfmpegRenderAdapter(), storage=storage)
+    exports = ExportService(
+        lambda: uow,
+        MockFfmpegRenderAdapter(),
+        storage=storage,
+        renderer_identity=renderer_identity,
+    )
     batch = await exports.create_batch(
         project.id,
         [
@@ -495,6 +1249,42 @@ async def _worker_owner(
         storage_profile_revision=1,
     )
     return uow, project, episode, batch, exports
+
+
+@pytest.mark.asyncio
+async def test_explicit_composed_renderer_identity_survives_export_snapshot_and_replay(
+    tmp_path: Path,
+) -> None:
+    storage = LocalWorkspaceAdapter(tmp_path / "storage")
+    renderer_identity = {
+        "profileId": "renderer-profile",
+        "profileRevision": 4,
+        "capabilitySnapshotId": "catalog-render-snapshot",
+        "capabilityRevision": 9,
+    }
+    uow, project, _episode, batch, _exports = await _worker_owner(
+        storage, renderer_identity=renderer_identity
+    )
+    snapshot = batch.jobs[0].execution_snapshot
+    assert snapshot is not None
+    assert snapshot.renderer_identity["profileId"] == "renderer-profile"
+    assert snapshot.renderer_identity["profileRevision"] == 4
+    assert snapshot.renderer_identity["capabilitySnapshotId"] == "catalog-render-snapshot"
+    assert snapshot.renderer_identity["capabilityRevision"] == 9
+    assert len(str(snapshot.renderer_identity["snapshotId"])) == 64
+
+    renderer = CountingRenderer()
+    worker = EpisodeExportWorker(
+        lambda: uow,
+        renderer,
+        storage,
+        renderer_identity=renderer_identity,
+    )
+    result = await worker.execute(
+        ExecuteExportJobCommand(project.id, batch.jobs[0].id, tmp_path / "render", "identity")
+    )
+    assert result["status"] == "succeeded"
+    assert renderer.render_count == 1
 
 
 @pytest.mark.asyncio
@@ -524,6 +1314,254 @@ async def test_export_worker_packages_three_artifacts_and_is_idempotent(tmp_path
     assert manifest["exportProfile"] == "light"
     assert {item["artifactType"] for item in manifest["references"]} == {"mp4", "srt"}
     assert not (workspace / "episode.mp4").exists()
+
+
+@pytest.mark.asyncio
+async def test_media_storage_terminal_handoff_uses_typed_owner_commands_and_is_retry_safe(
+    tmp_path: Path,
+) -> None:
+    storage = LocalWorkspaceAdapter(tmp_path / "storage")
+    content = b"verified terminal object"
+    stored = storage.put("projects/p/exports/object.mp4", content, "media-terminal")
+
+    class AssetOwner:
+        def __init__(self) -> None:
+            self.commands: list[object] = []
+
+        async def get_reservation(self, _project_id: str, _reservation_id: str) -> object:
+            return type(
+                "Reservation",
+                (),
+                {"revision": 1, "operation_key": "asset-op", "storage_profile_id": "local"},
+            )()
+
+        async def complete_reservation(self, command: object) -> object:
+            self.commands.append(command)
+            return type("Version", (), {"id": "version-registered"})()
+
+    class ExportOwner:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+            self.artifact = type(
+                "Artifact",
+                (),
+                {
+                    "id": "artifact-registered",
+                    "status": "verified",
+                    "artifact_type": "mp4",
+                    "size_bytes": stored.size_bytes,
+                    "checksum": stored.checksum,
+                    "operation_key": "export-op",
+                    "mime_type": "video/mp4",
+                    "storage_object_ref": {
+                        "project_id": "p",
+                        "profile_id": "local",
+                        "bucket": "workspace",
+                        "object_key": "projects/p/exports/object.mp4",
+                        "size_bytes": stored.size_bytes,
+                        "checksum": stored.checksum,
+                        "mime_type": "video/mp4",
+                        "operation_key": "export-op",
+                        "verified": True,
+                    },
+                },
+            )()
+
+        async def register_artifact(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            raise RevisionConflictError("job-1", 4, 5)
+
+        async def get_job(self, _project_id: str, _job_id: str) -> object:
+            return type("Job", (), {"artifacts": [self.artifact]})()
+
+    assets = AssetOwner()
+    exports = ExportOwner()
+    configure_media_activities(
+        MediaActivityDependencies(
+            MediaOwnerService(lambda: InMemoryUnitOfWork()),
+            storage,
+            None,
+            assets=assets,
+            exports=exports,
+        )
+    )
+    ref = {
+        "projectId": "p",
+        "profileId": "local",
+        "bucket": "workspace",
+        "objectKey": "projects/p/exports/object.mp4",
+        "sizeBytes": stored.size_bytes,
+        "checksum": stored.checksum,
+        "mimeType": "video/mp4",
+        "etag": stored.etag,
+        "operationKey": "asset-op",
+        "verified": True,
+    }
+    asset_result = await media_storage_terminal_handoff(
+        {
+            "status": "verified",
+            "projectId": "p",
+            "operationKey": "asset-op",
+            "objectRef": ref,
+            "ownerHandoff": {
+                "owner": "assets",
+                "reservationId": "reservation-1",
+                "contentHash": stored.checksum,
+                "operationKey": "asset-op",
+                "reservationRevision": 1,
+            },
+        }
+    )
+    assert asset_result == {
+        "status": "registered",
+        "owner": "assets",
+        "assetVersionId": "version-registered",
+    }
+    assert len(assets.commands) == 1
+    retry = await media_storage_terminal_handoff(
+        {
+            "status": "verified",
+            "projectId": "p",
+            "operationKey": "asset-op",
+            "objectRef": ref,
+            "ownerHandoff": {
+                "owner": "assets",
+                "reservationId": "reservation-1",
+                "contentHash": stored.checksum,
+                "operationKey": "asset-op",
+                "reservationRevision": 1,
+            },
+        }
+    )
+    assert retry == asset_result and len(assets.commands) == 2
+
+    export_result = await media_storage_terminal_handoff(
+        {
+            "status": "verified",
+            "projectId": "p",
+            "operationKey": "export-op",
+            "objectRef": {**ref, "operationKey": "export-op"},
+            "ownerHandoff": {
+                "owner": "export",
+                "jobId": "job-1",
+                "artifactType": "mp4",
+                "expectedRevision": 4,
+                "storageProfileRevision": 2,
+                "operationKey": "export-op",
+                "packagingPhase": "registering",
+            },
+        }
+    )
+    assert export_result == {
+        "status": "registered",
+        "owner": "export",
+        "artifactId": "artifact-registered",
+        "artifactStatus": "verified",
+    }
+    assert exports.calls[0]["stored_object"].verified is True
+
+
+@pytest.mark.asyncio
+async def test_media_storage_terminal_handoff_fails_closed_without_explicit_target(
+    tmp_path: Path,
+) -> None:
+    storage = LocalWorkspaceAdapter(tmp_path / "storage")
+    stored = storage.put("projects/p/object.bin", b"object", "media-terminal-missing")
+    configure_media_activities(
+        MediaActivityDependencies(MediaOwnerService(lambda: InMemoryUnitOfWork()), storage, None)
+    )
+    with pytest.raises(ValidationDomainError, match="owner handoff target is required"):
+        await media_storage_terminal_handoff(
+            {
+                "status": "verified",
+                "projectId": "p",
+                "operationKey": "missing-target",
+                "objectRef": {
+                    "projectId": "p",
+                    "profileId": "local",
+                    "bucket": "workspace",
+                    "objectKey": "projects/p/object.bin",
+                    "sizeBytes": stored.size_bytes,
+                    "checksum": stored.checksum,
+                    "mimeType": "application/octet-stream",
+                    "etag": stored.etag,
+                    "operationKey": "missing-target",
+                    "verified": True,
+                },
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_media_storage_upload_returns_complete_verified_typed_reference(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "render.mp4"
+    output.write_bytes(b"rendered")
+    storage = LocalWorkspaceAdapter(tmp_path / "storage")
+    configure_media_activities(
+        MediaActivityDependencies(MediaOwnerService(lambda: InMemoryUnitOfWork()), storage, None)
+    )
+
+    result = await media_storage_upload(
+        {
+            "projectId": "p",
+            "operationKey": "export-op",
+            "outputPath": str(output),
+            "objectKey": "projects/p/exports/render.mp4",
+        }
+    )
+
+    assert result["status"] == "verified"
+    reference = result["objectRef"]
+    assert isinstance(reference, dict)
+    assert reference["mimeType"] == "video/mp4"
+    assert reference["verified"] is True
+
+
+@pytest.mark.asyncio
+async def test_export_worker_revalidates_frozen_resource_admission_before_render(
+    tmp_path: Path,
+) -> None:
+    storage = LocalWorkspaceAdapter(tmp_path / "storage")
+    uow, project, episode, batch, _exports = await _worker_owner(storage)
+    snapshot = batch.jobs[0].execution_snapshot
+    assert snapshot is not None
+    resource = RuntimeResourceSnapshot(
+        cpu_count=4,
+        available_concurrency=4,
+        memory_available_bytes=2_048,
+        memory_limit_bytes=4_096,
+        disk_free_bytes=8 * 1024 * 1024,
+        disk_total_bytes=16 * 1024 * 1024,
+        captured_at="2026-08-26T00:00:00+00:00",
+    )
+    initial = OperationsResilienceCoordinator(resource, capacity_snapshot(resource, project.id))
+    frozen = initial.freeze(
+        project.id,
+        "export.render",
+        f"export:{project.id}:worker-batch:{episode.id}:{snapshot.timeline_version_id}",
+    )
+    batch.jobs[0].execution_snapshot = replace(
+        snapshot,
+        admission_refs=admission_refs(frozen),
+        snapshot_hash="",
+    )
+    changed = replace(resource, revision=2)
+    renderer = CountingRenderer()
+    worker = EpisodeExportWorker(
+        lambda: uow,
+        renderer,
+        storage,
+        resilience=OperationsResilienceCoordinator(changed, capacity_snapshot(changed, project.id)),
+    )
+
+    with pytest.raises(ValidationDomainError, match="resource_snapshot_stale"):
+        await worker.execute(
+            ExecuteExportJobCommand(project.id, batch.jobs[0].id, tmp_path / "render", "stale")
+        )
+
+    assert renderer.render_count == 0
 
 
 @pytest.mark.asyncio

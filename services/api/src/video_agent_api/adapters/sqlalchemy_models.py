@@ -308,6 +308,7 @@ class AssetVersionReservation(Base):
     storage_profile_id: Mapped[str] = mapped_column(String(255), nullable=False)
     storage_profile_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     storage_profile_snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    admission_refs: Mapped[dict[str, object] | None] = mapped_column(JSON_DOCUMENT)
     upload_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     diagnostic: Mapped[str | None] = mapped_column(String(255))
     schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="1.0.0")
@@ -453,9 +454,14 @@ class WorkflowNodeRunModel(IdentityRevisionMixin, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     logical_operation: Mapped[str] = mapped_column(String(255), nullable=False)
     scope_refs: Mapped[list[dict[str, object]]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    admission_refs: Mapped[dict[str, object] | None] = mapped_column(JSON_DOCUMENT)
     output_evidence: Mapped[dict[str, object] | None] = mapped_column(JSON_DOCUMENT)
     failure: Mapped[dict[str, object] | None] = mapped_column(JSON_DOCUMENT)
     submission_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    execution_route: Mapped[str] = mapped_column(String(32), nullable=False, default="legacy")
+    workflow_type: Mapped[str] = mapped_column(String(128), nullable=False, default="phase_one_run")
+    task_queue: Mapped[str] = mapped_column(String(128), nullable=False, default="agent-tasks")
+    operation_snapshot: Mapped[dict[str, object] | None] = mapped_column(JSON_DOCUMENT)
 
 
 class WorkflowRunInputSnapshotModel(IdentityRevisionMixin, Base):
@@ -752,6 +758,11 @@ class ProviderCallModel(Base):
     provider_request_id: Mapped[str | None] = mapped_column(String(255))
     native_usage: Mapped[dict[str, object] | None] = mapped_column(JSON_DOCUMENT)
     failure_code: Mapped[str | None] = mapped_column(String(128))
+    outbound_correlation: Mapped[str | None] = mapped_column(String(128))
+    lookup_outcome: Mapped[str] = mapped_column(String(32), nullable=False, default="not_attempted")
+    remote_lookup_protocol: Mapped[str | None] = mapped_column(String(128))
+    remote_lookup_binding: Mapped[dict[str, object] | None] = mapped_column(JSON_DOCUMENT)
+    admission_refs: Mapped[dict[str, object] | None] = mapped_column(JSON_DOCUMENT)
     retention_policy: Mapped[str] = mapped_column(String(64), nullable=False)
     retention_version: Mapped[str] = mapped_column(String(32), nullable=False)
     hold: Mapped[bool] = mapped_column(nullable=False, default=False)
@@ -797,6 +808,9 @@ class VideoOperationModel(Base):
     aspect_ratio: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     provider_request_id: Mapped[str | None] = mapped_column(String(255))
+    outbound_correlation: Mapped[str | None] = mapped_column(String(128))
+    lookup_outcome: Mapped[str] = mapped_column(String(32), nullable=False, default="not_attempted")
+    admission_refs: Mapped[dict[str, object] | None] = mapped_column(JSON_DOCUMENT)
     cancel_requested: Mapped[bool] = mapped_column(nullable=False, default=False)
     observation_fingerprints: Mapped[list[str]] = mapped_column(
         JSON_DOCUMENT, nullable=False, default=list

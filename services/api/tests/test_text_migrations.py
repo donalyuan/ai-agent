@@ -10,7 +10,7 @@ from alembic import command
 
 API_ROOT = Path(__file__).parents[1]
 TEXT_MIGRATION = "0012_text_review_owner"
-CURRENT_HEAD = "0023_export_dispatch_owner"
+CURRENT_HEAD = "0029_lookup_binding"
 
 
 def _config(database_url: str) -> Config:

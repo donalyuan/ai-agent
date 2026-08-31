@@ -189,6 +189,7 @@ class AssetVersionReservation:
     storage_profile_id: str = "local-test-offline"
     storage_profile_revision: int = 1
     storage_profile_snapshot_hash: str = "0" * 64
+    admission_refs: dict[str, object] = field(default_factory=dict)
     upload_key: str = ""
     diagnostic: str | None = None
     schema_version: str = SCHEMA_VERSION
@@ -223,6 +224,9 @@ class AssetVersionReservation:
         _hash(self.storage_profile_snapshot_hash, "storage_profile_snapshot_hash")
         if self.storage_profile_revision < 1:
             raise ValidationDomainError("storage profile revision is invalid")
+        if not isinstance(self.admission_refs, dict):
+            raise ValidationDomainError("asset reservation admission refs are invalid")
+        self.admission_refs = dict(self.admission_refs)
 
     def transition(self, target: str, registered_version_id: str | None = None) -> None:
         if target not in {"registered", "cancelled", "failed"} or self.status != "reserved":

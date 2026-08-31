@@ -43,13 +43,27 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       MIGRATION_DATABASE_URL: postgresql+psycopg://phase0:phase0@postgres:5432/phase0
+      TEMPORAL_ADDRESS: ${TEMPORAL_ADDRESS}
       PROVIDER_MODE: ${PROVIDER_MODE}
       STORAGE_MODE: ${STORAGE_MODE}
       WORKSPACE_ROOT: ${WORKSPACE_ROOT}
+      PROVIDER_PROFILE_ID: ${PROVIDER_PROFILE_ID}
+      PROVIDER_MODEL_ID: ${PROVIDER_MODEL_ID}
+      PROVIDER_CREDENTIAL_REF: ${PROVIDER_CREDENTIAL_REF}
+      STORAGE_PROFILE_ID: ${STORAGE_PROFILE_ID}
+      STORAGE_BUCKET_BINDING_ID: ${STORAGE_BUCKET_BINDING_ID}
+      STORAGE_CREDENTIAL_REF: ${STORAGE_CREDENTIAL_REF}
+      RENDERER_PROFILE_ID: ${RENDERER_PROFILE_ID}
+      EXPECTED_MIGRATION_HEAD: ${EXPECTED_MIGRATION_HEAD}
+      FFMPEG_PATH: ${FFMPEG_PATH}
+      FFPROBE_PATH: ${FFPROBE_PATH}
+      RENDERER_REQUIRED: ${RENDERER_REQUIRED}
     volumes:
       - local-workspace:${WORKSPACE_ROOT}
     depends_on:
       postgres:
+        condition: service_healthy
+      temporal:
         condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"
@@ -102,12 +116,22 @@ services:
       dockerfile: services/api/Dockerfile
     command: ["python", "workers/generation/main.py"]
     environment:
+      DATABASE_URL: ${DATABASE_URL}
       TEMPORAL_ADDRESS: ${TEMPORAL_ADDRESS}
       PROVIDER_MODE: ${PROVIDER_MODE}
       STORAGE_MODE: ${STORAGE_MODE}
       WORKSPACE_ROOT: ${WORKSPACE_ROOT}
+      PROVIDER_PROFILE_ID: ${PROVIDER_PROFILE_ID}
+      PROVIDER_MODEL_ID: ${PROVIDER_MODEL_ID}
+      PROVIDER_CREDENTIAL_REF: ${PROVIDER_CREDENTIAL_REF}
+      STORAGE_PROFILE_ID: ${STORAGE_PROFILE_ID}
+      STORAGE_BUCKET_BINDING_ID: ${STORAGE_BUCKET_BINDING_ID}
+      STORAGE_CREDENTIAL_REF: ${STORAGE_CREDENTIAL_REF}
+      EXPECTED_MIGRATION_HEAD: ${EXPECTED_MIGRATION_HEAD}
       GENERATION_TASK_QUEUE: generation-tasks
       WORKER_HEALTH_MARKER: /tmp/generation-health.json
+    volumes:
+      - local-workspace:${WORKSPACE_ROOT}
     depends_on:
       temporal:
         condition: service_healthy
@@ -128,6 +152,17 @@ services:
       PROVIDER_MODE: ${PROVIDER_MODE}
       STORAGE_MODE: ${STORAGE_MODE}
       WORKSPACE_ROOT: ${WORKSPACE_ROOT}
+      PROVIDER_PROFILE_ID: ${PROVIDER_PROFILE_ID}
+      PROVIDER_MODEL_ID: ${PROVIDER_MODEL_ID}
+      PROVIDER_CREDENTIAL_REF: ${PROVIDER_CREDENTIAL_REF}
+      STORAGE_PROFILE_ID: ${STORAGE_PROFILE_ID}
+      STORAGE_BUCKET_BINDING_ID: ${STORAGE_BUCKET_BINDING_ID}
+      STORAGE_CREDENTIAL_REF: ${STORAGE_CREDENTIAL_REF}
+      RENDERER_PROFILE_ID: ${RENDERER_PROFILE_ID}
+      EXPECTED_MIGRATION_HEAD: ${EXPECTED_MIGRATION_HEAD}
+      FFMPEG_PATH: ${FFMPEG_PATH}
+      FFPROBE_PATH: ${FFPROBE_PATH}
+      RENDERER_REQUIRED: ${RENDERER_REQUIRED}
       MEDIA_TASK_QUEUE: media-tasks
       WORKER_HEALTH_MARKER: /tmp/media-health.json
     volumes:
@@ -140,6 +175,19 @@ services:
       interval: 5s
       timeout: 3s
       retries: 24
+
+  migrate:
+    profiles: ["migration"]
+    build:
+      context: ../..
+      dockerfile: services/api/Dockerfile
+    working_dir: /workspace/services/api
+    command: ["alembic", "-c", "/workspace/services/api/alembic.ini", "upgrade", "head"]
+    environment:
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   otel-collector:
     profiles: ["diagnostics"]

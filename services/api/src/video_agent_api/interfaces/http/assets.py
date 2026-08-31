@@ -16,6 +16,7 @@ from video_agent_api.application.assets import (
     CreateReservationCommand,
     UpdateAssetMetadataCommand,
 )
+from video_agent_api.application.media import MediaDispatchAdmission, MediaOwnerService
 from video_agent_api.application.storage_handoffs import asset_upload_intent
 from video_agent_api.application.storage_profiles import StorageProfileService
 from video_agent_api.domain.assets import ASSET_KINDS, Asset, AssetVersion, StorageObject
@@ -29,6 +30,7 @@ from video_agent_api.domain.errors import (
     ProjectNotFoundError,
     StorageProfileNotFoundError,
     StorageProfileRevisionConflictError,
+    ValidationDomainError,
 )
 from video_agent_api.interfaces.http.project_scope import project_scope
 from video_agent_api.ports.contracts import (
@@ -37,6 +39,7 @@ from video_agent_api.ports.contracts import (
     PortError,
     StorageValidationError,
     StorageWriteIntent,
+    StoredObjectRef,
 )
 
 router = APIRouter(tags=["assets"])
@@ -384,10 +387,15 @@ def _expected_revision(if_match: str, body_revision: int) -> int:
 
 
 def _storage(request: Request) -> Any:
-    runtime = getattr(request.app.state, "runtime", None)
-    if runtime is None or getattr(runtime, "storage", None) is None:
+    # A request-scoped resolved port is authoritative. The app-level local adapter
+    # remains only for legacy test fixtures that do not have a profile owner.
+    storage = getattr(request.state, "resolved_storage", None)
+    if storage is not None:
+        return getattr(storage, "port", storage)
+    storage = getattr(request.app.state, "storage_port", None)
+    if storage is None:
         raise DatabaseUnavailableError("storage owner is not configured")
-    return runtime.storage
+    return storage
 
 
 def _storage_profiles(request: Request) -> StorageProfileService:
@@ -406,13 +414,63 @@ async def _resolve_upload_profile(
     profile = await _storage_profiles(request).resolve_upload_profile(
         project_id, profile_id, profile_revision
     )
-    storage_owner = _storage(request)
-    capability_reader = getattr(storage_owner, "capability", None)
-    if capability_reader is None:
-        raise AdapterNotConfiguredError("storage capability is unconfigured")
-    capability = capability_reader(profile.revision)
+    composition = getattr(request.app.state, "runtime_composition", None)
+    if composition is not None:
+        composed = await composition.resolve_storage(
+            _storage_profiles(request),
+            project_id=project_id,
+            profile_id=profile.id,
+            expected_profile_revision=profile.revision,
+            expected_bucket_binding_id=profile.bucket_binding_id,
+            expected_identity={
+                "adapterKey": profile.adapter_key,
+                "profileId": profile.id,
+                "projectId": profile.project_id,
+                "revision": profile.revision,
+                "bucketBindingId": profile.bucket_binding_id,
+                "bucket": profile.bucket,
+                "endpoint": profile.endpoint,
+                "region": profile.region,
+                "credentialRef": profile.credential_ref,
+            },
+            local_workspace_root=getattr(
+                getattr(request.app.state, "runtime_settings", None),
+                "workspace_root",
+                None,
+            ),
+        )
+        request.state.resolved_storage = composed
+        capability_payload = composed.identity.capability
+        from video_agent_api.ports.contracts import StorageCapability
+
+        capability = StorageCapability(
+            profile_revision=int(capability_payload["profileRevision"]),
+            min_part_size_bytes=int(capability_payload["minPartSizeBytes"]),
+            max_part_size_bytes=int(capability_payload["maxPartSizeBytes"]),
+            max_part_count=int(capability_payload["maxPartCount"]),
+            max_object_size_bytes=int(capability_payload["maxObjectSizeBytes"]),
+        )
+    else:
+        storage_owner = _storage(request)
+        capability_reader = getattr(storage_owner, "capability", None)
+        if capability_reader is None:
+            raise AdapterNotConfiguredError("storage capability is unconfigured")
+        capability = capability_reader(profile.revision)
     snapshot_hash = StorageProfileService.snapshot_hash(profile, capability)
     return profile, capability, snapshot_hash
+
+
+async def _resolve_reservation_storage(request: Request, reservation: Any) -> Any:
+    """Resolve the reservation's complete profile identity before storage I/O."""
+    profile, _capability, _snapshot_hash = await _resolve_upload_profile(
+        request,
+        reservation.project_id,
+        reservation.storage_profile_id,
+        reservation.storage_profile_revision,
+    )
+    if profile.bucket_binding_id == "":
+        raise ValidationDomainError("storage bucket binding is required")
+    return _storage(request)
 
 
 async def _admit_upload(
@@ -781,7 +839,8 @@ async def resume_upload(
     try:
         AssetsService._require_schema_version(payload.schema_version)
         reservation = await service.get_reservation(project_id, reservation_id)
-        storage_owner = _storage(request)
+        service.revalidate_reservation_admission(reservation)
+        storage_owner = await _resolve_reservation_storage(request, reservation)
         session = storage_owner.resume_multipart(
             _reservation_intent(reservation), payload.correlation_id
         )
@@ -810,7 +869,8 @@ async def upload_part(
 ) -> MultipartPartResponse:
     try:
         reservation = await service.get_reservation(project_id, reservation_id)
-        storage_owner = _storage(request)
+        service.revalidate_reservation_admission(reservation)
+        storage_owner = await _resolve_reservation_storage(request, reservation)
         session = storage_owner.resume_multipart(_reservation_intent(reservation), correlation_id)
         if session.session_id != session_id:
             raise StorageValidationError("multipart session does not match reservation")
@@ -857,8 +917,11 @@ async def complete_upload(
         AssetsService._require_schema_version(payload.schema_version)
         reservation = await service.get_reservation(project_id, reservation_id)
         if reservation.status == "registered" and reservation.registered_version_id:
-            return _version_response(await service.get_version(reservation.registered_version_id))
-        storage_owner = _storage(request)
+            version = await service.get_version(reservation.registered_version_id)
+            await _enqueue_verified_media(request, service, version)
+            return _version_response(version)
+        service.revalidate_reservation_admission(reservation)
+        storage_owner = await _resolve_reservation_storage(request, reservation)
         session = storage_owner.resume_multipart(
             _reservation_intent(reservation), payload.correlation_id
         )
@@ -894,11 +957,55 @@ async def complete_upload(
                 stored.checksum,
             )
         )
+        await _enqueue_verified_media(request, service, version)
         return _version_response(version)
     except PortError as error:
         raise _storage_http_error(error) from error
     except DomainError as error:
         raise _error(error) from error
+
+
+async def _enqueue_verified_media(
+    request: Request, service: AssetsService, version: AssetVersion
+) -> None:
+    """Let the Media owner produce exactly one pipeline intent for eligible uploads."""
+    asset = await service.get_asset(version.asset_id, project_scope=version.project_id)
+    if (
+        asset.authorization_status != "verified"
+        or asset.source_type not in {"user_upload", "source_material", "imported"}
+        or asset.kind not in {"audio", "video"}
+    ):
+        return
+    owner = cast(MediaOwnerService | None, getattr(request.app.state, "media_owner_service", None))
+    if owner is None:
+        raise DatabaseUnavailableError("media dispatch owner is unconfigured")
+    storage = version.storage_object
+    asset_version_hash = version.content_hash
+    if asset_version_hash is None:
+        raise ValidationDomainError("media dispatch AssetVersion hash is unavailable")
+    operation_key = f"media:{version.id}:{version.revision}:{asset_version_hash}"
+    await owner.enqueue_dispatch(
+        MediaDispatchAdmission(
+            project_id=version.project_id,
+            discriminator="uploaded_source",
+            asset_version_id=version.id,
+            asset_version_revision=version.revision,
+            asset_version_hash=asset_version_hash,
+            stored_object_ref=StoredObjectRef(
+                project_id=version.project_id,
+                profile_id=storage.storage_provider,
+                bucket=storage.bucket,
+                object_key=storage.object_key,
+                size_bytes=storage.size_bytes,
+                checksum=storage.checksum,
+                mime_type=storage.mime_type,
+                etag=storage.e_tag,
+                operation_key=operation_key,
+            ),
+            operation_key=operation_key,
+            technical_input={"operation": "pipeline", "steps": ["inspect", "derivative"]},
+        )
+    )
 
 
 @router.post(
@@ -917,7 +1024,7 @@ async def cancel_reservation(
     try:
         reservation = await service.get_reservation(project_id, reservation_id)
         if payload.session_id is not None:
-            storage_owner = _storage(request)
+            storage_owner = await _resolve_reservation_storage(request, reservation)
             session = storage_owner.resume_multipart(
                 _reservation_intent(reservation), payload.correlation_id
             )
@@ -952,7 +1059,8 @@ async def reconcile_reservation(
         reservation = await service.get_reservation(project_id, reservation_id)
         if reservation.revision != payload.expected_revision:
             raise AssetVersionConflictError(reservation.id, payload.expected_revision)
-        stored = _storage(request).reconcile_multipart(
+        storage_owner = await _resolve_reservation_storage(request, reservation)
+        stored = storage_owner.reconcile_multipart(
             _reconciliation_intent(reservation), payload.correlation_id
         )
         if stored is not None and reservation.status == "reserved":

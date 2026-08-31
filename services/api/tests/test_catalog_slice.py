@@ -35,6 +35,7 @@ from video_agent_api.domain.errors import (
     RevisionConflictError,
     ValidationDomainError,
 )
+from video_agent_api.ports.contracts import FrozenRemoteLookup, PortResult
 from video_agent_api.ports.credentials import CredentialKeyring
 
 
@@ -57,10 +58,19 @@ def test_catalog_owner_tables_are_normalized_and_append_only(tmp_path) -> None:
         "model_sync_candidates",
         "skill_access_audits",
     } <= tables
+    assert "admission_refs" in {
+        column["name"] for column in inspect(engine).get_columns("provider_calls")
+    }
+    assert "remote_lookup_protocol" in {
+        column["name"] for column in inspect(engine).get_columns("provider_calls")
+    }
+    assert "remote_lookup_binding" in {
+        column["name"] for column in inspect(engine).get_columns("provider_calls")
+    }
     with engine.connect() as connection:
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            == "0023_export_dispatch_owner"
+            == "0029_lookup_binding"
         )
     engine.dispose()
 
@@ -136,9 +146,11 @@ async def test_sqlalchemy_catalog_round_trip_uses_normalized_owner_tables() -> N
                 cost_value="0",
                 cost_currency="USD",
                 native_usage={"inputTokens": 2},
+                admission_refs={"reference": "resilience:catalog-round-trip"},
             )
         )
         assert call.capability_snapshot_id == snapshot.id
+        assert call.remote_lookup_binding is None
         confirmation = await service.confirm_cost(
             ConfirmCostCommand(
                 project.id,
@@ -167,6 +179,10 @@ async def test_sqlalchemy_catalog_round_trip_uses_normalized_owner_tables() -> N
                 == snapshot.id
             )
             assert reloaded.provider_calls[call.id].request_fingerprint == "f" * 64
+            assert reloaded.provider_calls[call.id].admission_refs == {
+                "reference": "resilience:catalog-round-trip"
+            }
+            assert reloaded.provider_calls[call.id].remote_lookup_binding is None
             assert reloaded.cost_confirmations[("run-1", "text.generate:1")].id == confirmation.id
             assert not reloaded._phase_one_collections.get("providers")
         async with factory() as session:
@@ -474,3 +490,98 @@ async def test_probe_requires_current_profile_revision() -> None:
     profile = next(iter(uow.profiles.values()))
     with pytest.raises(RevisionConflictError, match="revision conflict"):
         await service.snapshot(profile.id, "image.generate", expected_revision=profile.revision - 1)
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_provider_call_requires_frozen_lookup_capability() -> None:
+    uow = InMemoryUnitOfWork()
+    service = CatalogService(lambda: uow)
+    await service.bootstrap()
+    provider = next(iter(uow.providers.values()))
+    profile = next(iter(uow.profiles.values()))
+    model = next(item for item in uow.models.values() if item.profile_id == profile.id)
+    snapshot = profile.capability_snapshots["text.generate"]
+    await service.record_provider_call(
+        RecordProviderCallCommand(
+            "project",
+            "run",
+            "node",
+            "text.generate:1",
+            "text.generate",
+            provider.id,
+            profile.id,
+            model.id,
+            "f" * 64,
+            capability_snapshot_id=snapshot.id,
+        )
+    )
+    await service.claim_provider_call("run", "text.generate:1", expected_operation="text.generate")
+    reconciled = await service.reconcile_provider_call("run", "text.generate:1")
+
+    assert reconciled.status == "unknown"
+    assert reconciled.lookup_outcome == "unsupported"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_provider_call_uses_persisted_lookup_binding_after_catalog_changes() -> (
+    None
+):
+    uow = InMemoryUnitOfWork()
+    service = CatalogService(lambda: uow)
+    await service.bootstrap()
+    provider = next(iter(uow.providers.values()))
+    profile = next(iter(uow.profiles.values()))
+    model = next(item for item in uow.models.values() if item.profile_id == profile.id)
+    snapshot = replace(
+        profile.capability_snapshots["text.generate"],
+        capabilities=("remote-lookup:by-correlation",),
+    )
+    profile.capability_snapshots["text.generate"] = snapshot
+    await service.record_provider_call(
+        RecordProviderCallCommand(
+            "project",
+            "run",
+            "node",
+            "text.generate:1",
+            "text.generate",
+            provider.id,
+            profile.id,
+            model.id,
+            "f" * 64,
+            capability_snapshot_id=snapshot.id,
+        )
+    )
+    await service.claim_provider_call("run", "text.generate:1", expected_operation="text.generate")
+    # A later catalog snapshot cannot reinterpret this already-durable call.
+    profile.capability_snapshots["text.generate"] = replace(
+        snapshot,
+        capabilities=(),
+    )
+    seen: list[tuple[str, str]] = []
+
+    class Lookup:
+        def lookup_provider_request(self, correlation: str, protocol: str) -> PortResult:
+            seen.append((correlation, protocol))
+            return PortResult("remote-1", correlation, {"usage": {"inputTokens": 2}})
+
+    reconciled = await service.reconcile_provider_call(
+        "run",
+        "text.generate:1",
+        lookups=(
+            FrozenRemoteLookup(
+                snapshot.id,
+                "text.generate",
+                "by-correlation",
+                Lookup(),
+                profile.id,
+                model.id,
+                profile.revision,
+                snapshot.revision,
+            ),
+        ),
+    )
+
+    assert reconciled.status == "succeeded"
+    assert reconciled.provider_request_id == "remote-1"
+    assert reconciled.lookup_outcome == "found"
+    assert seen == [(reconciled.outbound_correlation, "by-correlation")]

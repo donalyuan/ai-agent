@@ -165,3 +165,14 @@ Model detail SHALL 读取 owner reference proof。存在 CapabilitySnapshot、Pr
 #### Scenario:被引用模型不能删除
 - **WHEN** 用户查看或尝试删除 `model_in_use`/reference-proof-unavailable 的 Model
 - **THEN** UI 显示引用保护与 disable action，拒绝 delete mutation或展示 owner 拒绝，且历史 Model/snapshot 仍可读取
+
+### Requirement:Provider/Model/Skill 表格与动态参数表单
+设置页 SHALL 使用 TanStack Table 展示 Provider、Model、Skill owner rows，并使用 React Hook Form + Zod 按 owner 参数 schema 渲染和校验动态参数表单；表格和表单 MUST 复用 `shared/ui`，不得引入第二套组件库、基础变体或页面级手写 CSS。提交 MUST 携带 owner expectedRevision/If-Match，读取/筛选/动态渲染 MUST NOT 触发 ProviderCall、probe 或 Run。
+
+#### Scenario:编辑动态参数
+- **WHEN** 用户在 Provider/Model/Skill 表格选择资源并提交有效或无效动态参数
+- **THEN** TanStack Table 保持稳定列/排序，RHF + Zod 显示字段级错误与焦点，成功只提交一次 owner command，409 refetch 且不覆盖他人更新
+
+#### Scenario:参数 schema 不可用
+- **WHEN** owner 返回缺失、未知或不兼容参数 schema
+- **THEN** 表单显示原始不可用诊断并禁用提交，不猜测字段、不发起 probe、不伪造默认值

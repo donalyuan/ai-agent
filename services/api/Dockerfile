@@ -2,6 +2,10 @@ FROM ghcr.io/astral-sh/uv:0.10.12 AS uv
 
 FROM python:3.12.11-slim-bookworm
 WORKDIR /workspace
+# Media activities require an explicit, probeable renderer in the standard image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /uv /uvx /bin/
 ENV PATH=/workspace/services/api/.venv/bin:$PATH
 ENV PYTHONPATH=/workspace:/workspace/services/api/src

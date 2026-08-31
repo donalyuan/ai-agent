@@ -93,6 +93,7 @@ class MediaInspection:
     license_status: str = "approved"
     hold: bool = False
     raw_diagnostic: str | None = None
+    admission_refs: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if (
@@ -107,6 +108,7 @@ class MediaInspection:
             raise ValidationDomainError("media inspection identity is invalid")
         object.__setattr__(self, "source_hash", _hash(self.source_hash, "source hash"))
         object.__setattr__(self, "metadata", _metadata(self.metadata))
+        object.__setattr__(self, "admission_refs", dict(self.admission_refs))
         if self.metadata["checksum"] != self.source_hash:
             raise ValidationDomainError("ffprobe claimed-vs-observed checksum mismatch")
 
@@ -142,6 +144,7 @@ class MediaDerivative:
     license_status: str = "approved"
     hold: bool = False
     raw_diagnostic: str | None = None
+    admission_refs: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         expected = source_fingerprint(
@@ -159,6 +162,7 @@ class MediaDerivative:
         ):
             raise ValidationDomainError("media derivative identity is invalid")
         _hash(self.source_hash, "derivative source hash")
+        object.__setattr__(self, "admission_refs", dict(self.admission_refs))
         if self.status == "ready" and (
             self.object_ref is None
             or self.checksum is None
@@ -190,6 +194,7 @@ class PreviewArtifact:
     id: str = field(default_factory=lambda: str(uuid4()))
     schema_version: str = "1.0.0"
     raw_diagnostic: str | None = None
+    admission_refs: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if (
@@ -203,6 +208,7 @@ class PreviewArtifact:
             raise ValidationDomainError("preview artifact identity is invalid")
         _hash(self.timeline_fingerprint, "timeline fingerprint")
         _hash(self.render_plan_hash, "render plan hash")
+        object.__setattr__(self, "admission_refs", dict(self.admission_refs))
 
     def matches(self, cut_revision: int, timeline_fingerprint: str, render_plan_hash: str) -> bool:
         return (

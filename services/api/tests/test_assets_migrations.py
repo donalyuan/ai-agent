@@ -15,7 +15,7 @@ from video_agent_api.adapters.sqlalchemy import _version_from_model
 from video_agent_api.adapters.sqlalchemy_models import AssetVersion as AssetVersionModel
 
 API_ROOT = Path(__file__).parents[1]
-CURRENT_HEAD_REVISION = "0023_export_dispatch_owner"
+CURRENT_HEAD_REVISION = "0029_lookup_binding"
 OBJECT_KEY_CORPUS = json.loads(
     (
         API_ROOT.parents[1] / "packages/contracts/tests/fixtures/object-key-contract-corpus.json"
@@ -59,7 +59,7 @@ def test_assets_migration_cycle_and_columns(tmp_path: Path) -> None:
     reservation_columns = {
         column["name"] for column in inspect(engine).get_columns("asset_version_reservations")
     }
-    assert "upload_key" in reservation_columns
+    assert {"upload_key", "admission_refs"} <= reservation_columns
     command.downgrade(config, "0003_projects_episodes_slice")
     columns = {column["name"] for column in inspect(engine).get_columns("asset_versions")}
     assert "object_key" not in columns

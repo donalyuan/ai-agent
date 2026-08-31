@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
 from time import time
-from typing import NoReturn, TypeVar, overload
+from typing import Any, NoReturn, TypeVar, cast, overload
 from uuid import uuid4
 
 from video_agent_api.domain.object_key_contract import canonical_object_key
@@ -126,6 +126,30 @@ class LocalWorkspaceAdapter:
     @property
     def adapter_key(self) -> str:
         return "local_workspace"
+
+    @property
+    def profile_id(self) -> str:
+        return "local-test-offline"
+
+    @property
+    def profile_revision(self) -> int:
+        return 1
+
+    @property
+    def endpoint(self) -> str:
+        return "workspace://local"
+
+    @property
+    def region(self) -> str:
+        return "local"
+
+    @property
+    def bucket_binding_id(self) -> str:
+        return "local-workspace"
+
+    @property
+    def bucket(self) -> str:
+        return "workspace"
 
     @property
     def root(self) -> Path:
@@ -708,8 +732,14 @@ class LocalWorkspaceAdapter:
         self._temporary[key] = (path, status, time() if created_at is None else created_at)
 
 
+@dataclass(slots=True)
+class _TosUpload:
+    session: UploadSessionRef
+    receipts: dict[int, PartReceipt]
+
+
 class TOSAdapter:
-    """真实 transport 缺失时明确未配置；测试只能显式注入 deterministic fake。"""
+    """Freeze one private TOS profile and expose only verified storage references."""
 
     def __init__(
         self,
@@ -717,15 +747,105 @@ class TOSAdapter:
         credential_resolver: CredentialResolver | None = None,
         credential_ref: str | None = None,
         profile_id: str | None = None,
+        *,
+        tos_client: object | None = None,
+        bucket: str | None = None,
+        profile_revision: int | None = None,
+        endpoint: str | None = None,
+        region: str | None = None,
+        bucket_binding_id: str | None = None,
     ) -> None:
         self._transport = transport
         self._credential_resolver = credential_resolver
         self._credential_ref = credential_ref
         self._profile_id = profile_id
+        self._tos_client = tos_client
+        self._bucket = bucket
+        self._profile_revision = profile_revision
+        self._endpoint = endpoint
+        self._region = region
+        self._bucket_binding_id = bucket_binding_id
+        self._uploads: dict[str, _TosUpload] = {}
+        self._operations: dict[str, str] = {}
+        self._objects: dict[str, StoredObjectRef] = {}
+
+    @classmethod
+    def from_profile(
+        cls,
+        profile: Any,
+        credential_resolver: CredentialResolver,
+        *,
+        client_factory: Callable[[str, str, str, str], object] | None = None,
+    ) -> TOSAdapter:
+        """Construct the official SDK client only from a complete private profile snapshot."""
+        required = (
+            getattr(profile, "adapter_key", None) == "tos",
+            bool(getattr(profile, "id", None)),
+            bool(getattr(profile, "endpoint", None)),
+            bool(getattr(profile, "region", None)),
+            bool(getattr(profile, "bucket", None)),
+            bool(getattr(profile, "bucket_binding_id", None)),
+            bool(getattr(profile, "project_id", None)),
+            bool(getattr(profile, "project_scope", ())),
+            getattr(profile, "credential_status", None) == "configured",
+            bool(getattr(profile, "credential_ref", None)),
+            bool(getattr(profile, "enabled", False)),
+            bool(getattr(profile, "private_bucket", False)),
+            isinstance(getattr(profile, "revision", None), int) and profile.revision >= 1,
+        )
+        if not all(required):
+            raise AdapterNotConfiguredError("TOS profile is incomplete or not private")
+        project_id = str(profile.project_id)
+        if project_id not in tuple(profile.project_scope):
+            raise AdapterNotConfiguredError("TOS profile is outside its project scope")
+        credential = credential_resolver.resolve(profile.credential_ref, profile.id)
+        access_key, separator, secret_key = credential.partition(":")
+        if not access_key or not separator or not secret_key:
+            raise AdapterNotConfiguredError("TOS credential is invalid")
+        if client_factory is None:
+            import tos  # type: ignore[import-untyped]
+
+            client_factory = tos.TosClientV2
+        client = client_factory(access_key, secret_key, profile.endpoint, profile.region)
+        return cls(
+            credential_resolver=credential_resolver,
+            credential_ref=profile.credential_ref,
+            profile_id=profile.id,
+            tos_client=client,
+            bucket=profile.bucket,
+            profile_revision=profile.revision,
+            endpoint=profile.endpoint,
+            region=profile.region,
+            bucket_binding_id=profile.bucket_binding_id,
+        )
 
     @property
     def adapter_key(self) -> str:
         return "tos"
+
+    @property
+    def bucket(self) -> str | None:
+        return self._bucket
+
+    @property
+    def profile_id(self) -> str | None:
+        return self._profile_id
+
+    @property
+    def profile_revision(self) -> int | None:
+        return self._profile_revision
+
+    @property
+    def endpoint(self) -> str | None:
+        return self._endpoint
+
+    @property
+    def region(self) -> str | None:
+        return self._region
+
+    @property
+    def bucket_binding_id(self) -> str | None:
+        return self._bucket_binding_id
 
     def resolve_credential(self) -> str:
         if not self._credential_resolver or not self._credential_ref or not self._profile_id:
@@ -744,30 +864,145 @@ class TOSAdapter:
         )
         raise error
 
+    def _sdk(self, operation: str, correlation_id: str | None = None) -> tuple[Any, str]:
+        if self._tos_client is None or not self._bucket or not self._profile_id:
+            self._missing(operation, correlation_id)
+        return self._tos_client, self._bucket
+
+    @staticmethod
+    def _key(value: str) -> str:
+        key = canonical_object_key(value.removeprefix("tos://"))
+        if key is None:
+            raise StorageValidationError("object key is foreign or unsafe")
+        return key
+
+    def _validate_intent(self, intent: StorageWriteIntent) -> None:
+        LocalWorkspaceAdapter._validate_intent(intent)
+        if intent.profile_id != self._profile_id:
+            raise StorageValidationError("storage profile is stale or foreign")
+
+    @staticmethod
+    def _metadata(intent: StorageWriteIntent) -> dict[str, str]:
+        metadata = {
+            "operation-key": intent.operation_key,
+            "project-id": intent.project_id,
+            "profile-id": intent.profile_id,
+        }
+        if intent.expected_checksum is not None:
+            metadata["sha256"] = intent.expected_checksum
+        return metadata
+
+    @staticmethod
+    def _head_metadata(head: object) -> dict[str, str]:
+        raw = getattr(head, "meta", {}) or {}
+        if not isinstance(raw, dict):
+            raise StorageValidationError("TOS object metadata is invalid")
+        return {str(key): str(value) for key, value in raw.items()}
+
+    def _ref_from_head(self, intent: StorageWriteIntent, head: object) -> StoredObjectRef:
+        metadata = self._head_metadata(head)
+        if any(metadata.get(key) != value for key, value in self._metadata(intent).items()):
+            raise StorageValidationError("TOS object metadata does not match frozen intent")
+        size_bytes = getattr(head, "content_length", None)
+        mime_type = getattr(head, "content_type", None)
+        if not isinstance(size_bytes, int) or size_bytes < 0 or not isinstance(mime_type, str):
+            raise StorageValidationError("TOS object metadata is incomplete")
+        if intent.expected_size_bytes is not None and size_bytes != intent.expected_size_bytes:
+            raise StorageMediaValidationError("media_validation_failed: size mismatch")
+        if intent.expected_mime_type is not None and mime_type != intent.expected_mime_type:
+            raise StorageMediaValidationError("media_validation_failed: MIME mismatch")
+        checksum = metadata.get("sha256")
+        if checksum is None or len(checksum) != 64:
+            raise StorageMediaValidationError("media_validation_failed: checksum missing")
+        if intent.expected_checksum is not None and checksum != intent.expected_checksum:
+            raise StorageMediaValidationError("media_validation_failed: checksum mismatch")
+        return StoredObjectRef(
+            intent.project_id,
+            intent.profile_id,
+            self._bucket or "",
+            intent.object_key,
+            size_bytes,
+            checksum,
+            mime_type,
+            str(getattr(head, "etag", "")) or None,
+            intent.operation_key,
+        )
+
+    @staticmethod
+    def _intent_from_session(session: UploadSessionRef) -> StorageWriteIntent:
+        return StorageWriteIntent(
+            session.operation_key,
+            session.project_id,
+            session.profile_id,
+            session.object_key,
+            session.expected_size_bytes,
+            session.expected_checksum,
+            session.expected_mime_type,
+        )
+
     def put(self, object_key: str, content: bytes, correlation_id: str) -> StoredObject:
         if self._transport is not None:
             return self._transport.put(object_key, content, correlation_id)
-        self._missing("put", correlation_id)
+        client, bucket = self._sdk("put", correlation_id)
+        key = self._key(object_key)
+        checksum = sha256(content).hexdigest()
+        client.put_object(
+            bucket,
+            key,
+            content=content,
+            content_length=len(content),
+            content_type="application/octet-stream",
+            meta={"sha256": checksum},
+        )
+        head = client.head_object(bucket, key)
+        size_bytes = getattr(head, "content_length", None)
+        if size_bytes != len(content) or self._head_metadata(head).get("sha256") != checksum:
+            raise StorageMediaValidationError("TOS direct object verification failed")
+        return StoredObject(key, size_bytes, checksum, getattr(head, "etag", None))
 
     def get(self, object_ref: str) -> bytes:
         if self._transport is not None:
             return self._transport.get(object_ref)
-        self._missing("get")
+        client, bucket = self._sdk("get")
+        response = client.get_object(bucket, self._key(object_ref))
+        content = response.read()
+        if not isinstance(content, bytes):
+            raise StorageValidationError("TOS read response is invalid")
+        return content
 
     def iter_chunks(self, object_ref: str, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
         if self._transport is not None:
             return self._transport.iter_chunks(object_ref, chunk_size)
-        self._missing("iter_chunks")
+        if chunk_size <= 0:
+            raise StorageValidationError("storage chunk size is invalid")
+        client, bucket = self._sdk("iter_chunks")
+        response = client.get_object(bucket, self._key(object_ref))
+
+        def chunks() -> Iterator[bytes]:
+            while chunk := response.read(chunk_size):
+                if not isinstance(chunk, bytes):
+                    raise StorageValidationError("TOS read response is invalid")
+                yield chunk
+
+        return chunks()
 
     def delete(self, object_ref: str) -> None:
         if self._transport is not None:
             return self._transport.delete(object_ref)
-        self._missing("delete")
+        client, bucket = self._sdk("delete")
+        client.delete_object(bucket, self._key(object_ref))
 
     def stat(self, object_ref: str) -> StoredObject:
         if self._transport is not None:
             return self._transport.stat(object_ref)
-        self._missing("stat")
+        client, bucket = self._sdk("stat")
+        key = self._key(object_ref)
+        head = client.head_object(bucket, key)
+        size_bytes = getattr(head, "content_length", None)
+        checksum = self._head_metadata(head).get("sha256")
+        if not isinstance(size_bytes, int) or checksum is None:
+            raise StorageMediaValidationError("TOS object verification metadata is incomplete")
+        return StoredObject(key, size_bytes, checksum, getattr(head, "etag", None))
 
     def create_multipart_session(self, object_key: str, correlation_id: str) -> MultipartSession:
         if self._transport is not None:
@@ -783,7 +1018,32 @@ class TOSAdapter:
     ) -> PartReceipt:
         if self._transport is not None:
             return self._transport.upload_part(session_id, part_number, content, correlation_id)
-        self._missing("upload_part", correlation_id)
+        upload = self._uploads.get(session_id.session_id)
+        if upload is None or upload.session != session_id:
+            raise StorageValidationError("multipart session binding is invalid")
+        checksum = sha256(content).hexdigest()
+        if checksum != part_number.checksum or len(content) != part_number.size_bytes:
+            raise StorageMediaValidationError("multipart part verification failed")
+        previous = upload.receipts.get(part_number.part_number)
+        if previous is not None:
+            if previous.checksum != checksum or previous.size_bytes != len(content):
+                raise StorageValidationError("multipart part conflict")
+            return previous
+        client, bucket = self._sdk("upload_part", correlation_id)
+        response = client.upload_part(
+            bucket,
+            session_id.object_key,
+            session_id.session_id,
+            part_number.part_number,
+            content=content,
+            content_length=len(content),
+        )
+        etag = getattr(response, "etag", None)
+        if not isinstance(etag, str) or not etag:
+            raise StorageValidationError("TOS multipart receipt is invalid")
+        receipt = PartReceipt(part_number.part_number, checksum, etag, len(content))
+        upload.receipts[receipt.part_number] = receipt
+        return receipt
 
     def complete_multipart_session(
         self, session_id: str, parts: list[MultipartPart], correlation_id: str
@@ -820,7 +1080,7 @@ class TOSAdapter:
         if self._transport is not None:
             capability = getattr(self._transport, "capability", None)
             if capability is not None:
-                return capability(profile_revision)
+                return cast(StorageCapability, capability(profile_revision))
         self._missing("capability")
 
     def admit_upload(
@@ -829,32 +1089,109 @@ class TOSAdapter:
         if self._transport is not None:
             admission = getattr(self._transport, "admit_upload", None)
             if admission is not None:
-                return admission(size_bytes, part_size_bytes, profile_revision=profile_revision)
+                admission(size_bytes, part_size_bytes, profile_revision=profile_revision)
+                return
         self._missing("admit_upload")
 
     def create_multipart(self, intent: StorageWriteIntent, correlation_id: str) -> UploadSessionRef:
         if self._transport is not None:
             return self._transport.create_multipart(intent, correlation_id)
-        self._missing("create_multipart", correlation_id)
+        client, bucket = self._sdk("create_multipart", correlation_id)
+        self._validate_intent(intent)
+        existing_id = self._operations.get(intent.operation_key)
+        if existing_id is not None:
+            existing = self._uploads[existing_id].session
+            if (
+                existing.project_id != intent.project_id
+                or existing.profile_id != intent.profile_id
+                or existing.object_key != intent.object_key
+                or existing.expected_size_bytes != intent.expected_size_bytes
+                or existing.expected_checksum != intent.expected_checksum
+                or existing.expected_mime_type != intent.expected_mime_type
+            ):
+                raise StorageValidationError("multipart operation binding is invalid")
+            return existing
+        response = client.create_multipart_upload(
+            bucket,
+            intent.object_key,
+            content_type=intent.expected_mime_type,
+            meta=self._metadata(intent),
+        )
+        upload_id = getattr(response, "upload_id", None)
+        if not isinstance(upload_id, str) or not upload_id:
+            raise StorageValidationError("TOS multipart session is invalid")
+        session = UploadSessionRef(
+            upload_id,
+            intent.operation_key,
+            intent.project_id,
+            intent.profile_id,
+            intent.object_key,
+            "active",
+            intent.expected_size_bytes,
+            intent.expected_checksum,
+            intent.expected_mime_type,
+        )
+        self._uploads[upload_id] = _TosUpload(session, {})
+        self._operations[intent.operation_key] = upload_id
+        return session
 
     def resume_multipart(self, intent: StorageWriteIntent, correlation_id: str) -> UploadSessionRef:
-        if self._transport is not None:
-            return self._transport.resume_multipart(intent, correlation_id)
-        self._missing("resume_multipart", correlation_id)
+        return self.create_multipart(intent, correlation_id)
 
     def reconcile_multipart(
         self, intent: StorageWriteIntent, correlation_id: str
     ) -> StoredObjectRef | None:
         if self._transport:
             return self._transport.reconcile_multipart(intent, correlation_id)
-        self._missing("reconcile_multipart", correlation_id)
+        self._validate_intent(intent)
+        existing = self._objects.get(intent.operation_key)
+        if existing is not None:
+            if (
+                existing.project_id != intent.project_id
+                or existing.profile_id != intent.profile_id
+                or existing.object_key != intent.object_key
+                or existing.size_bytes != intent.expected_size_bytes
+                or existing.checksum != intent.expected_checksum
+                or existing.mime_type != intent.expected_mime_type
+            ):
+                raise StorageValidationError("multipart_reconcile_conflict")
+            return existing
+        client, bucket = self._sdk("reconcile_multipart", correlation_id)
+        try:
+            head = client.head_object(bucket, intent.object_key)
+        except Exception:
+            return None
+        ref = self._ref_from_head(intent, head)
+        self._objects[intent.operation_key] = ref
+        return ref
 
     def complete_multipart(
         self, session: UploadSessionRef, manifest: tuple[PartReceipt, ...], correlation_id: str
     ) -> StoredObjectRef:
         if self._transport is not None:
             return self._transport.complete_multipart(session, manifest, correlation_id)
-        self._missing("complete_multipart", correlation_id)
+        upload = self._uploads.get(session.session_id)
+        if upload is None or upload.session != session:
+            raise StorageValidationError("multipart session binding is invalid")
+        existing = self._objects.get(session.operation_key)
+        if existing is not None:
+            return existing
+        ordered = tuple(sorted(manifest, key=lambda item: item.part_number))
+        uploaded = tuple(upload.receipts[number] for number in sorted(upload.receipts))
+        if ordered != uploaded:
+            raise StorageValidationError("multipart manifest mismatch")
+        client, bucket = self._sdk("complete_multipart", correlation_id)
+        client.complete_multipart_upload(
+            bucket,
+            session.object_key,
+            session.session_id,
+            [{"part_number": item.part_number, "etag": item.etag} for item in ordered],
+        )
+        ref = self._ref_from_head(
+            self._intent_from_session(session), client.head_object(bucket, session.object_key)
+        )
+        self._objects[session.operation_key] = ref
+        return ref
 
     def abort_multipart(self, session: UploadSessionRef, correlation_id: str) -> UploadSessionRef:
         if self._transport is not None:

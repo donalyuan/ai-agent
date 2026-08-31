@@ -322,12 +322,14 @@ class ExportExecutionSnapshot:
     storage_profile_snapshot: dict[str, object]
     storage_profile_snapshot_hash: str
     storage_capability: dict[str, int]
+    renderer_identity: dict[str, object]
     renderer_capability: dict[str, object]
     render_plan: dict[str, object]
     inputs: tuple[ExportInputSnapshot, ...]
     audit_facts: dict[str, object]
     schema_version: str = "1.0.0"
     snapshot_hash: str = ""
+    admission_refs: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         required_capability = {
@@ -348,6 +350,13 @@ class ExportExecutionSnapshot:
             "mp4Muxer",
             "mp4Demuxer",
         }
+        required_renderer_identity = {
+            "profileId",
+            "profileRevision",
+            "capabilitySnapshotId",
+            "capabilityRevision",
+            "snapshotId",
+        }
         if (
             not all((self.project_id, self.episode_id, self.timeline_version_id))
             or self.timeline_version_revision < 1
@@ -359,12 +368,28 @@ class ExportExecutionSnapshot:
             or not self.storage_profile_snapshot
             or len(self.storage_profile_snapshot_hash) != 64
             or set(self.storage_capability) != required_capability
+            or set(self.renderer_identity) != required_renderer_identity
             or set(self.renderer_capability) != required_renderer
             or not self.render_plan
             or not self.inputs
             or not self.audit_facts
         ):
             raise ValidationDomainError("export execution snapshot is incomplete")
+        if (
+            not isinstance(self.renderer_identity["profileId"], str)
+            or not self.renderer_identity["profileId"].strip()
+            or isinstance(self.renderer_identity["profileRevision"], bool)
+            or not isinstance(self.renderer_identity["profileRevision"], int)
+            or self.renderer_identity["profileRevision"] < 1
+            or not isinstance(self.renderer_identity["capabilitySnapshotId"], str)
+            or not self.renderer_identity["capabilitySnapshotId"].strip()
+            or isinstance(self.renderer_identity["capabilityRevision"], bool)
+            or not isinstance(self.renderer_identity["capabilityRevision"], int)
+            or self.renderer_identity["capabilityRevision"] < 1
+            or not isinstance(self.renderer_identity["snapshotId"], str)
+            or len(self.renderer_identity["snapshotId"]) != 64
+        ):
+            raise ValidationDomainError("export renderer identity snapshot is invalid")
         if any(
             isinstance(value, bool) or not isinstance(value, int) or value < 1
             for value in self.storage_capability.values()
@@ -404,11 +429,13 @@ class ExportExecutionSnapshot:
                 "storageProfileSnapshot": self.storage_profile_snapshot,
                 "storageProfileSnapshotHash": self.storage_profile_snapshot_hash,
                 "storageCapability": self.storage_capability,
+                "rendererIdentity": self.renderer_identity,
                 "rendererCapability": self.renderer_capability,
                 "renderPlan": self.render_plan,
                 "inputs": [asdict(item) for item in self.inputs],
                 "auditFacts": self.audit_facts,
                 "schemaVersion": self.schema_version,
+                "admissionRefs": self.admission_refs,
             }
         )
         if not self.snapshot_hash:

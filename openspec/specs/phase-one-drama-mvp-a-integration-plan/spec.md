@@ -19,7 +19,7 @@ MVP-A SHALL 只消费固定、版本化、已发布的 `drama-mvp-a-default` Wor
 - **THEN** 启动阶段只读取 AgentScope runtime lock、Registry index 和 approved metadata；路由前不读取 `SKILL.md`/references，路由后仅读取选中固定 revision 的正文与必要 references，并记录 source identity
 
 ### Requirement:阶段 1 MVP-A 总体集成边界
-系统 SHALL 将阶段 1 剧集创作 MVP-A 组织为一个总体协调 change 与十八个职责单一的 child OpenSpec change，并在总体 change 中记录每个 child 的总体任务号、唯一职责、前置依赖、并行边界与非目标。除既有 child 外，系统 MUST 包含 `extend-projects-episodes-creative-slice`、`implement-asset-bible-continuity-slice`、`integrate-tos-storage-provider`、五个前端/业务闭环（其中一个为独立 `implement-project-asset-center`）、`implement-provider-model-skill-settings-ui`、独立 `implement-operations-resilience` 与独立 `implement-local-observability`。总体 change MUST 将阶段 0、`projects/episodes`、`assets/asset-versions` 和 objectKey repair 识别为已完成且不可重复实现的范围。总体协调 change MUST NOT 被描述为 child 实施运行时必须先应用的代码依赖。
+系统 SHALL 将阶段 1 剧集创作 MVP-A 组织为一个总体协调 change 与十九个职责单一的 child OpenSpec change，并在总体 change 中记录每个 child 的总体任务号、唯一职责、前置依赖、并行边界与非目标。除既有 child 外，系统 MUST 包含 `extend-projects-episodes-creative-slice`、`implement-asset-bible-continuity-slice`、`integrate-tos-storage-provider`、五个前端/业务闭环（其中一个为独立 `implement-project-asset-center`）、`implement-provider-model-skill-settings-ui`、独立 `implement-operations-resilience` 与独立 `implement-local-observability`。总体 change MUST 将阶段 0、`projects/episodes`、`assets/asset-versions` 和 objectKey repair 识别为已完成且不可重复实现的范围。总体协调 change MUST NOT 被描述为 child 实施运行时必须先应用的代码依赖。
 
 #### Scenario:后续切片以总体契约开始
 - **WHEN** 维护者开始任一阶段 1 后续 change
@@ -302,10 +302,10 @@ MVP-A SHALL 在 `/projects/:projectId/exports` 提供 `EpisodeExportBatch`。请
 - **THEN** 报告能重放 300-node 只读投影交互、复算普通 API P95，证明只监听 localhost/`127.0.0.1`，并分别列出 Chrome/Edge 版本与结果；外部或媒体耗时未混入普通 API 指标
 
 ### Requirement:阶段 1 退出标准
-系统 SHALL 将退出验证固定为：Mock 2x2x3、恢复且不重复付费、显式 live 1x1x1、指定历史 snapshot 新 Run、Episode 状态隔离、完整 SoundCue、导出失败定位及 upload/verify/register、实际 2 GiB 素材链路、W3C trace/log/metric owner 对账、300 项前端投影、普通 localhost API P95 `<500ms`、localhost-only bind、桌面 Chrome/Edge，以及所有 19 个 change 的 strict validation。五个前端/业务 child MUST 分别完成创作、image/video 上下文候选审查、时间线编辑、Provider/Model/Skill 设置和项目资产中心闭环；创作闭环必须含 projects creative owner、AssetBible entry/version/override/impact/task、Brief 到文本 Run 的 create/start/regenerate/reconcile/failed successor/historical rerun、Skill 人工路由、Run detail/cancel、Episode presentation/session isolation、完整 ShotCard 与共享项目导航；上下文闭环必须含 image/video conversation/message/turn、跨集恢复拒绝、AssetBible snapshot/task gate 到 Schema-valid AssetEditPlan 及显式 Timeline replacement handoff；Timeline 闭环必须含 ReplaceClipSource、完整 SoundCue、命名/preflight/publish/只读比较、`ExportDiagnosticTarget` 和 `/projects/:projectId/exports` 多集逐集导出；工作流/设置界面必须含阈值、批量/unknown cost 确认与精确 run/logical operation 绑定；资产中心必须含上传恢复/取消/实际 2 GiB/筛选/试听/usage/Timeline selector；resilience child 必须有 resource/capacity 拒绝、runbook 和 checksum/ETag 演练证据；observability child 必须证明 telemetry fail-open。
+系统 SHALL 将退出验证固定为：Mock 2x2x3、恢复且不重复付费、显式 live 1x1x1、指定历史 snapshot 新 Run、Episode 状态隔离、完整 SoundCue、导出失败定位及 upload/verify/register、实际 2 GiB 素材链路、W3C trace/log/metric owner 对账、300 项前端投影、普通 localhost API P95 `<500ms`、localhost-only bind、桌面 Chrome/Edge，以及所有 20 个 change 的 strict validation。五个前端/业务 child MUST 分别完成创作、image/video 上下文候选审查、时间线编辑、Provider/Model/Skill 设置和项目资产中心闭环；共享组件基线 MUST 由创作工作台建立并由其余四个 UI child 复用；创作闭环必须含 projects creative owner、AssetBible entry/version/override/impact/task、Brief 到文本 Run 的 create/start/regenerate/reconcile/failed successor/historical rerun、Skill 人工路由、Run detail/cancel、Episode presentation/session isolation、完整 ShotCard 与共享项目导航；上下文闭环必须含 image/video conversation/message/turn、跨集恢复拒绝、AssetBible snapshot/task gate 到 Schema-valid AssetEditPlan 及显式 Timeline replacement handoff；Timeline 闭环必须含 ReplaceClipSource、完整 SoundCue、命名/preflight/publish/只读比较、`ExportDiagnosticTarget` 和 `/projects/:projectId/exports` 多集逐集导出；工作流/设置界面必须含阈值、批量/unknown cost 确认与精确 run/logical operation 绑定；资产中心必须含上传恢复/取消/实际 2 GiB/筛选/试听/usage/Timeline selector；resilience child 必须有 resource/capacity 拒绝、runbook 和 checksum/ETag 演练证据；observability child 必须证明 telemetry fail-open。
 
 #### Scenario:集成验收拒绝缺口
-- **WHEN** 任一 mock/live 矩阵、恢复/幂等证据、UI/resilience/observability 闭环、实际 2 GiB/localhost bind 证据或 19 个 strict validation 缺失
+- **WHEN** 任一 mock/live 矩阵、恢复/幂等证据、UI/resilience/observability 闭环、实际 2 GiB/localhost bind 证据或 20 个 strict validation 缺失
 - **THEN** 阶段 1 验收失败并保留缺失证据，不报告 MVP-A 完成
 
 ### Requirement:空系统可追溯性和浏览器验收

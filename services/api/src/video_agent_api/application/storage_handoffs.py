@@ -32,6 +32,12 @@ class StorageRecoveryRecord:
     diagnostic: str
     object_ref: StoredObjectRef | None = None
 
+    def __post_init__(self) -> None:
+        if self.status not in {"reconciliation_required", "failed", "aborted", "resolved"}:
+            raise ValidationDomainError("storage recovery state is invalid")
+        if not self.operation_key or not self.session_id or not self.correlation_id:
+            raise ValidationDomainError("storage recovery identity is incomplete")
+
 
 @dataclass(frozen=True, slots=True)
 class AudioAssetHandoff:
@@ -82,7 +88,7 @@ class AssetUploadCoordinator:
                 CompleteReservationCommand(
                     reservation_id,
                     StorageObject(
-                        "local_workspace" if object_ref.bucket == "workspace" else "tos",
+                        _storage_provider_identity(object_ref.profile_id, object_ref.bucket),
                         object_ref.bucket,
                         object_ref.object_key,
                         object_ref.mime_type,
@@ -116,6 +122,15 @@ class AssetUploadCoordinator:
             )
         )
         return version
+
+
+def _storage_provider_identity(profile_id: str, bucket: str) -> str:
+    """Map only known adapter identities; never silently switch to Local."""
+    if profile_id in {"local", "local_workspace", "workspace"} or bucket == "workspace":
+        return "local_workspace"
+    if profile_id.startswith("tos") or profile_id:
+        return "tos"
+    raise ValidationDomainError("stored object adapter identity is unavailable")
 
 
 def asset_upload_intent(
@@ -160,6 +175,12 @@ def upload_verified_bytes(
     mime_type: str,
     correlation_id: str,
 ) -> StoredObjectRef:
+    resolved_profile_id = getattr(storage, "profile_id", None)
+    if not isinstance(resolved_profile_id, str) or not resolved_profile_id:
+        resolved_profile_id = "local"
+    if profile_id != "local" and profile_id != resolved_profile_id:
+        raise ValidationDomainError("storage profile binding is stale or foreign")
+    profile_id = resolved_profile_id
     checksum = sha256(content).hexdigest()
     intent = StorageWriteIntent(
         operation_key,

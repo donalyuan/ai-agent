@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from video_agent_api.domain.errors import (
     ProjectAccessForbiddenError,
@@ -90,7 +90,7 @@ class SkillRoutingService:
             )
             if existing is not None:
                 if existing.input_fingerprint == decision.input_fingerprint:
-                    return existing
+                    return cast(RouteDecision, existing)
                 raise RevisionConflictError(existing.id, existing.revision, existing.revision)
             uow.skill_route_decisions[decision.id] = decision
             uow.audit_events.append({"type": "skill.route.resolved", "decisionId": decision.id})
@@ -113,7 +113,7 @@ class SkillRoutingService:
                     existing.skill_name == command.skill_name
                     and existing.skill_version == command.skill_version
                 ):
-                    return existing
+                    return cast(SkillRouteSelection, existing)
                 raise RevisionConflictError(
                     decision.id, command.expected_revision, decision.revision
                 )
@@ -144,7 +144,7 @@ class SkillRoutingService:
                 raise ValidationDomainError("skill route decision is unavailable")
             if project_scope is not None and decision.project_id != project_scope:
                 raise ProjectAccessForbiddenError(project_scope)
-            return decision
+            return cast(RouteDecision, decision)
 
     async def list(self, project_id: str) -> list[RouteDecision]:
         async with self._uow_factory() as uow:

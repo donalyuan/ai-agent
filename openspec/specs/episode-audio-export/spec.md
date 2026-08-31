@@ -121,3 +121,36 @@ TBD - created by archiving change implement-episode-timeline-audio-export. Updat
 #### Scenario:codec 或 container 能力缺失时阻断
 - **WHEN** 二进制存在但缺少 H.264/AAC decoder/encoder、`yuv420p` 或 MP4 mux/demux/container 中任一必需能力
 - **THEN** owner 返回 `renderer_capability_unsupported` 和逐项 probe evidence，不创建 PreviewArtifact、rendering ExportJob、MP4/SRT/light success 或替代编码输出
+
+### Requirement:独立且已授权的导出 artifact
+MP4、UTF-8 SRT 和 light manifest MUST 分别为带 artifactId/type/status/object ref/retention/license 的 ExportArtifact record。Download MUST 校验完整 Project->Episode->TimelineVersion->ExportJob->Artifact ownership chain，并且只返回 short-TTL read-only grant。
+
+#### Scenario:不暴露跨项目或处于 hold 的 artifact
+- **WHEN** actor/project policy unauthorized，artifact 为 foreign、expired 或 held
+- **THEN** 拒绝 download，且不披露 objectKey 或 workspace URI。
+
+### Requirement:重拍后精确替换既有 Clip source
+Timeline owner SHALL 提供 `ReplaceClipSource` typed command，只接受 exact clipId、current Cut expectedRevision、expected old AssetVersion id/revision/hash/derivative fingerprint，以及同一 project/Episode/Shot 的 new accepted-current eligibility、new AssetVersion id/revision/hash 和 ready derivative fingerprint。成功 SHALL 只替换该 Clip source reference、保留 Clip stable ID、timelineStart/duration、静态 transform、transition/adjacency 并递增 current Cut revision；既有 TimelineVersion MUST 保持不变，用户必须另行发布新 Version。若新 source frame bounds 不足 MUST 失败，不得自动裁剪、拉伸或插黑。AssetEdit/VideoTake accept、Provider 和 scenes owner MUST NOT 直接修改 Timeline。
+
+#### Scenario:用已接受重拍精确替换一个 Clip
+- **WHEN** 用户选择已接受且 derivative ready 的同镜头新 AssetVersion，old/new fingerprints 和 expectedRevision 全部匹配，且新 source 覆盖原 frame bounds
+- **THEN** Timeline owner 在一个 UoW 替换指定 Clip source 并返回新 Cut revision；旧 TimelineVersion/AssetVersion 保持不变，未自动发布或导出
+
+#### Scenario:替换资格或 frame 不匹配时零写入
+- **WHEN** clip/old source/new eligibility/derivative/scope/revision 任一 stale、foreign、unaccepted、not-ready、hash mismatch 或 source frames 不足
+- **THEN** command 返回 validation/409，Clip/current Cut/TimelineVersion/ExportJob 均不变且不自动重新生成媒体
+
+### Requirement:显式项目多集逐集导出批次
+系统 SHALL 支持项目级 `EpisodeExportBatch`，请求 MUST 提供非空、去重、按用户明确顺序排列的 `{episodeId,timelineVersionId,timelineVersionRevision,outputBaseName}` 集合、统一 export settings、batch expectedRevision 和幂等键。系统 MUST 在创建任何 batch/job/outbox 前验证全部成员同项目、TimelineVersion 已发布且 immutable、名称安全唯一、authorization/media/renderer/export preflight 全部通过。成功后 MUST 为每集分别创建 ExportJob 和 MP4/SRT/light ExportArtifacts，以稳定 Episode number/id 与 TimelineVersion identity 命名；MUST NOT 自动选择 current、扩大集合、合并 RenderPlan 或拼接多集。
+
+#### Scenario:显式选择多集并逐集导出
+- **WHEN** 用户提交三个已发布 Episode/TimelineVersion 且全集合 preflight 通过
+- **THEN** 系统创建一个 batch 和三个独立 ExportJob，每集分别产出命名 MP4/SRT/light artifacts；没有跨集拼接 artifact
+
+#### Scenario:批次预检失败时不部分提交
+- **WHEN** 任一成员 foreign、重复、未发布、revision stale、名称冲突或 preflight 失败
+- **THEN** 整个请求返回逐项 diagnostic，零 EpisodeExportBatch/ExportJob/Outbox/artifact；不得静默移除失败成员或改用 current
+
+#### Scenario:执行后单集失败保持逐集结果
+- **WHEN** batch 已合法提交后某一集 render 失败而其他集成功
+- **THEN** batch 显示逐集状态和 `partially_failed`，成功 artifact 保留，失败集不自动重试或影响其他集；用户重试时使用该失败 member 的新 logical operation

@@ -20,7 +20,7 @@ from video_agent_api.domain.timeline import TimelineCut
 from video_agent_api.ports.storage import LocalWorkspaceAdapter
 
 API_ROOT = Path(__file__).parents[1]
-HEAD = "0023_export_dispatch_owner"
+HEAD = "0029_lookup_binding"
 OWNER_TABLES = {
     "timeline_current_cuts",
     "timeline_clips",

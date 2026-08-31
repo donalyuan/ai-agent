@@ -68,3 +68,61 @@ TBD - created by archiving change implement-episode-timeline-audio-export. Updat
 #### Scenario:拒绝不足的来源覆盖
 - **WHEN** 剪辑命令或预检发现素材帧数不足以满足 published TimelineVersion
 - **THEN** 系统返回 `missing_asset` 或 `frame_out_of_bounds`，不写部分编辑或导出替代画面
+
+### Requirement:符合 eligibility 的装配与引用 command
+系统 SHALL 以带 `expectedRevision` 的 owner commands add/remove image/video Clip 与 add/remove `dialogue|music|ambience|effects` SoundCue。image/video 只可引用同项目、当前 selected Episode、经 TextReview/媒体审核或 AssetEdit accept 成为 current storyboard/reference 的 immutable AssetVersion；audio library 必须同项目、已 storage verify、由 Assets append、authorization/license 完整且用户通过项目资产中心 selector/query 显式选择。selector handoff 只携带 project、AssetVersion id/revision/hash、authorization summary 与 derivative fingerprint；Timeline MUST NOT 复制上传 session、目录 filter、Asset metadata revision、usage 或 MediaDerivative owner state。remove MUST 只删 Timeline reference，不删/覆盖 AssetVersion。
+
+#### Scenario:导入并添加背景音乐
+- **WHEN** Local/TOS upload 已产生 verified StoredObjectRef、Assets 已 append audio AssetVersion，且用户显式选择该 project library item
+- **THEN** add music SoundCue 成功；任一前置失败不产生 cue/clip 或成功响应
+
+#### Scenario:拒绝无效装配
+- **WHEN** asset 未接受、foreign、other Episode、缺 license/authorization、重复、或 expectedRevision 过期
+- **THEN** command 返回稳定 validation/conflict，且不改写 Timeline 或 AssetVersion
+
+#### Scenario:资产中心 projection 不可用时不猜测选择
+- **WHEN** selector handoff 为 stale/foreign/unauthorized、usage/media projection unavailable，或 id/revision/hash/fingerprint 不匹配
+- **THEN** Timeline 返回 owner diagnostic，不创建 Clip/SoundCue、不复制资产目录状态，也不触发第二次上传或派生生成
+
+### Requirement:绑定来源的 proxy 预览与最终 parity
+系统 SHALL 将 immutable `ProxyRendition`/`PreviewManifest`/`PreviewArtifact`（或语义等价派生事实）绑定 current Cut identity/revision 或 TimelineVersion、timelineFingerprint/renderPlanHash；current Cut 变化 MUST 令 preview stale 并暂停。preview 和 FFmpeg MUST 共用 canonical RenderPlan/compiler，其 AssetVersion IDs、排序、source/timeline ranges、transform/basic audio、caption、duration/format facts 一致，且不复用 ExportJob 状态。
+
+#### Scenario:验证 golden preview parity
+- **WHEN** media adapter 运行显式 golden sample
+- **THEN** 关键帧 SSIM >= 0.98、总时长容差 <= 1 frame、字幕边界和音频 onset/sync <= 1 frame；MVP-A 不承诺逐像素/逐采样一致、4K/高码率浏览器渲染、专业监看或复杂特效
+
+### Requirement:Timeline 只消费已接受 video 与 ready derivative
+Timeline SHALL consume only scenes owner 的 accepted current video eligibility plus media worker `MediaDerivative` records with matching source AssetVersion id/revision/hash and status `ready`. Unaccepted/pending/rejected/retake/stale/foreign video candidates、missing inspection, derivative failure or source fingerprint mismatch MUST block Clip/proxy/Timeline handoff before any Timeline or Export mutation.
+
+#### Scenario:proxy 使用 media worker derivative
+- **WHEN** 为 TimelineVersion 选择 accepted current video 和匹配的 ready proxy/keyframe/waveform/metadata record
+- **THEN** Timeline 绑定 source fingerprint、derivative id 和 current Cut revision；它不重新生成或改写 media derivative fact
+
+#### Scenario:来源变更使预览失效
+- **WHEN** current video、AssetVersion revision/hash、derivative source fingerprint 或 current Cut revision 变化
+- **THEN** preview/proxy 标记为 stale 并要求显式 refresh；不报告 export success 或 implicit current replacement
+
+### Requirement:基础视觉转场
+MVP-A MUST 只通过 canonical RenderPlan/compiler 支持 `cut` 和 `crossfade`，使用整数 30fps frame、有界 transition duration 和 Clip adjacency/overlap invariant。
+
+#### Scenario:Renderer parity 失败阻断成功
+- **WHEN** preview 和 FFmpeg compilation 与 canonical RenderPlan 偏离
+- **THEN** preview/export 不报告 success；wipe、mask、auto transition、keyframe 和 audio crossfade 均 out of scope。
+
+### Requirement:导出诊断必须可定位到 owner fact
+Timeline/export preflight SHALL 为每个失败项返回 `ExportDiagnosticTarget`，其 `targetType` 仅为 `timeline|clip|caption|sound_cue|asset_version|renderer|storage|artifact`，并携带同项目 Episode/TimelineVersion 以及适用的精确 owner ID/revision、frame/fieldPath 和 owner-validated route token。调用方 MUST NOT 从 message 文本、数组位置或 display name 猜测定位；published TimelineVersion MUST 保持只读，renderer/storage 全局问题只能跳到项目设置。
+
+#### Scenario:缺失素材或字幕越界可跳到问题位置
+- **WHEN** preflight 发现 Clip/Caption/SoundCue/AssetVersion 缺失、越界、stale 或授权失败
+- **THEN** diagnostic 指向精确 owner fact/revision 和安全 route token，UI 可定位并修复 current Cut；失败不创建 ExportJob/Artifact 或修改 published Version
+
+### Requirement:packaging 包含 artifact 上传校验与登记
+ExportJob.status MUST 继续只允许 `queued|preflighting|rendering|packaging|succeeded|failed|cancel_requested|cancelled`。rendering 完成后 `packaging` SHALL 公开 `uploading|verifying|registering` progress subphase，并为 MP4、SRT、light 分别使用冻结 StorageProfile 和 export operation key 执行 StoragePort upload、stat/checksum/MIME/size verification，再由 Timeline/export owner 追加独立 `ExportArtifact`。只有三个 artifact 全部 verified/registered 且 manifest refs 精确匹配时才可 `succeeded`；unknown MUST 先 reconcile，失败 MUST NOT 重渲染、重复上传、伪造 artifact 或 fallback Local/TOS。
+
+#### Scenario:上传并登记三个独立导出产物
+- **WHEN** renderer 已产生有效 MP4/SRT/light 输出，Storage upload、verification 与 owner registration 全部成功
+- **THEN** Job 在 packaging 中依次报告 upload/verify/register progress，追加三个独立 ExportArtifact 后转为 succeeded，响应不暴露 objectKey 或持久 URL
+
+#### Scenario:上传响应未知时不重复产物
+- **WHEN** artifact upload/complete 响应丢失或 registration 状态未知
+- **THEN** worker 以同一 operation key/stat/checksum 先 reconcile，保留 packaging/retryable diagnostic，不重渲染、不创建第二对象/Artifact、不切换 profile 或报告 succeeded

@@ -79,8 +79,9 @@ async def submit_video(
     shot_id: str,
     body: SubmitRequest,
     service: Annotated[AgnesVideoService, Depends(_service)],
+    request: Request,
 ) -> object:
-    operation = await service.submit(
+    operation = await service.enqueue(
         SubmitVideoCommand(
             project_id=project_id,
             episode_id=episode_id,
@@ -107,7 +108,8 @@ async def submit_video(
             source_provenance=body.source_provenance,
             source_schema_version=body.source_schema_version,
             schema_version=body.schema_version,
-        )
+        ),
+        project_scope=project_scope(request),
     )
     return {
         "id": operation.id,

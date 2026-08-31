@@ -164,3 +164,10 @@ UI MUST 渲染独立 MP4/SRT/light artifact states，且不暴露 objectKey/work
 #### Scenario:下载已验证的成功 artifact
 - **WHEN** succeeded Job 的 MP4/SRT/light artifact 状态为 verified 且 owner download-grant 校验通过
 - **THEN** UI 请求 short-TTL grant 并打开 opaque access path；其他状态、hold、expired、foreign 或 unauthorized artifact 保持禁用并显示 owner diagnostic，不泄露 objectKey/workspace URI
+
+### Requirement:时间线组件与领域引擎边界
+Timeline UI SHALL 使用共享 `shared/ui` 与 `react-resizable-panels` 的固定分区、dnd-kit 的同父 Clip 排序和 TanStack Virtual 的长列表/日志；PixiJS、WaveSurfer.js、HLS.js SHALL 只在时间线领域模块中分别提供画面、波形和同源代理播放。上述领域组件 MUST NOT 进入 `shared/ui`。React Flow 只能作为固定 published WorkflowVersion 的只读投影，MVP-A MUST NOT 提供图编辑。
+
+#### Scenario:操作时间线与媒体预览
+- **WHEN** 用户调整有限分区、用 pointer/keyboard 重排同父 Clip、滚动长列表、拖动播放头或查看代理状态
+- **THEN** 布局尺寸稳定、排序范围可验证、虚拟 DOM 有界，Pixi 画面非空，WaveSurfer/HLS 状态可见，且不产生 graph mutation 或隐式 owner 写入

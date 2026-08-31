@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -24,6 +25,11 @@ from video_agent_api.domain.errors import (
     ValidationDomainError,
 )
 from video_agent_api.ports.contracts import StoredObjectRef
+from video_agent_api.resilience import (
+    OperationsResilienceCoordinator,
+    admission_from_refs,
+    admission_refs,
+)
 
 from .ports import AssetsUnitOfWorkFactory
 
@@ -65,6 +71,7 @@ class CreateReservationCommand:
     storage_profile_snapshot_hash: str
     upload_key: str | None = None
     schema_version: str = "1.0.0"
+    admission_refs: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,8 +120,51 @@ class AssetCatalogPage:
 class AssetsService:
     """Each command owns one UoW; versions are append-only and never updated in place."""
 
-    def __init__(self, uow_factory: AssetsUnitOfWorkFactory) -> None:
+    def __init__(
+        self,
+        uow_factory: AssetsUnitOfWorkFactory,
+        *,
+        resilience_factory: Callable[[str], OperationsResilienceCoordinator] | None = None,
+    ) -> None:
         self._uow_factory = uow_factory
+        self._resilience_factory = resilience_factory
+
+    def _freeze_upload_admission(
+        self, project_id: str, operation_key: str, declared_size_bytes: int
+    ) -> dict[str, object]:
+        if self._resilience_factory is None:
+            return {}
+        admission = self._resilience_factory(project_id).freeze(
+            project_id,
+            "asset.upload",
+            operation_key,
+            required_bytes=declared_size_bytes,
+        )
+        if not admission.allowed:
+            raise ValidationDomainError(
+                admission.diagnostic or "asset_upload_resource_admission_blocked"
+            )
+        return admission_refs(admission)
+
+    def revalidate_reservation_admission(self, reservation: AssetVersionReservation) -> None:
+        """Block multipart side effects when the reservation's frozen admission changed."""
+        if self._resilience_factory is None or not reservation.admission_refs:
+            return
+        try:
+            frozen = admission_from_refs(reservation.admission_refs)
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValidationDomainError("asset_upload_resource_admission_invalid") from error
+        if (
+            frozen.scope != reservation.project_id
+            or frozen.operation != "asset.upload"
+            or frozen.operation_key != reservation.operation_key
+        ):
+            raise ValidationDomainError("asset_upload_resource_admission_mismatch")
+        current = self._resilience_factory(reservation.project_id).revalidate(frozen)
+        if not current.allowed:
+            raise ValidationDomainError(
+                current.diagnostic or "asset_upload_resource_admission_blocked"
+            )
 
     @staticmethod
     def _require_schema_version(value: str) -> None:
@@ -322,6 +372,15 @@ class AssetsService:
         self, command: CreateReservationCommand
     ) -> AssetVersionReservation:
         self._require_schema_version(command.schema_version)
+        reservation_id = str(uuid4())
+        operation_key = f"asset-upload:{command.project_id}:{command.asset_id}:{reservation_id}"
+        frozen_admission = (
+            dict(command.admission_refs)
+            if command.admission_refs is not None
+            else self._freeze_upload_admission(
+                command.project_id, operation_key, command.declared_size_bytes
+            )
+        )
         async with self._uow_factory() as uow:
             asset = await uow.assets.get(command.asset_id)
             if asset is None or asset.project_id != command.project_id:
@@ -362,8 +421,8 @@ class AssetsService:
                 )
                 if snapshot != requested:
                     raise AssetVersionConflictError(existing.id, existing.revision)
+                self.revalidate_reservation_admission(existing)
                 return existing
-            reservation_id = str(uuid4())
             extension_by_mime = {
                 "image/png": "png",
                 "image/jpeg": "jpg",
@@ -380,7 +439,7 @@ class AssetsService:
             reservation = AssetVersionReservation(
                 command.project_id,
                 command.asset_id,
-                f"asset-upload:{command.project_id}:{command.asset_id}:{reservation_id}",
+                operation_key,
                 command.fingerprint,
                 id=reservation_id,
                 expected_asset_revision=command.expected_asset_revision,
@@ -391,6 +450,7 @@ class AssetsService:
                 storage_profile_id=command.storage_profile_id,
                 storage_profile_revision=command.storage_profile_revision,
                 storage_profile_snapshot_hash=command.storage_profile_snapshot_hash,
+                admission_refs=frozen_admission,
                 upload_key=upload_key,
             )
             uow.asset_reservations[reservation.id] = reservation
@@ -438,6 +498,7 @@ class AssetsService:
                 return existing
             if reservation.status != "reserved":
                 raise AssetVersionConflictError(command.reservation_id, 0)
+            self.revalidate_reservation_admission(reservation)
             asset = await uow.assets.get(reservation.asset_id)
             if asset is None:
                 raise AssetNotFoundError(reservation.asset_id)

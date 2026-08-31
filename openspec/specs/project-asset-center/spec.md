@@ -90,3 +90,10 @@ TBD - created by archiving change implement-project-asset-center. Update Purpose
 #### Scenario: 页面访问不触发外部副作用
 - **WHEN** 用户只打开资产中心、切换筛选、版本或 usage tab
 - **THEN** 不创建/切换 Profile，不调用真实 TOS/Provider，不创建 UploadSession/ProviderCall/RunEvent/AssetVersion/derivative
+
+### Requirement:资产目录表格与虚拟化边界
+资产中心 SHALL 使用 TanStack Table + TanStack Virtual 展示目录、版本历史和 usage，并复用 `shared/ui` 的表格、tabs、tooltip、dialog、progress 与通知封装；MUST NOT 引入第二套组件库、复制 owner 事实或将音频领域播放器放入 `shared/ui`。虚拟列表 DOM 必须有界，读取/筛选/usage tab MUST NOT 创建业务 mutation。
+
+#### Scenario:浏览长目录和 usage
+- **WHEN** 用户筛选、滚动、选择版本、打开 usage 或查看 unavailable/partial owner projection
+- **THEN** Table 保持稳定 cursor/排序，Virtual 保持有界 DOM，shared/ui 控件显示原始诊断，且不伪报未使用、不创建上传/版本/Provider/Timeline 事实

@@ -1055,6 +1055,43 @@ class RunsService:
                     key,
                     logical_operation=_logical_operation(key),
                     scope_refs=scope_refs,
+                    execution_route=(
+                        "generation" if key in IMMEDIATE_TEMPORAL_NODE_KEYS else "legacy"
+                    ),
+                    workflow_type=(
+                        {
+                            "text.generate": "text-generation",
+                            "media.generate.image": "image-generation",
+                            "media.generate.video": "video-generation",
+                        }.get(key, "phase_one_run")
+                    ),
+                    task_queue=(
+                        "generation-tasks" if key in IMMEDIATE_TEMPORAL_NODE_KEYS else "agent-tasks"
+                    ),
+                    operation_snapshot=(
+                        {
+                            "schemaVersion": SCHEMA_VERSION,
+                            "executionRoute": (
+                                "generation" if key in IMMEDIATE_TEMPORAL_NODE_KEYS else "legacy"
+                            ),
+                            "workflowType": (
+                                {
+                                    "text.generate": "text-generation",
+                                    "media.generate.image": "image-generation",
+                                    "media.generate.video": "video-generation",
+                                }.get(key, "phase_one_run")
+                            ),
+                            "taskQueue": (
+                                "generation-tasks"
+                                if key in IMMEDIATE_TEMPORAL_NODE_KEYS
+                                else "agent-tasks"
+                            ),
+                            "catalog": deepcopy(frozen_selection),
+                            "policy": {"revision": frozen_selection.get("profileRevision")},
+                            "resource": None,
+                            "capacity": None,
+                        }
+                    ),
                 )
                 for key in node_keys
             ]
@@ -1074,6 +1111,11 @@ class RunsService:
                         "nodeKey": node.node_key,
                         "logicalOperation": node.logical_operation,
                         "scopeRefs": list(node.scope_refs),
+                        "executionRoute": node.execution_route,
+                        "workflowType": node.workflow_type,
+                        "taskQueue": node.task_queue,
+                        "schemaVersion": SCHEMA_VERSION,
+                        "operationSnapshot": deepcopy(node.operation_snapshot or {}),
                     }
                     for node in run.nodes
                 ),
@@ -1694,12 +1736,18 @@ class RunsService:
                     "media.generate.video",
                     logical_operation=_logical_operation("media.generate.video", "retake"),
                     scope_refs=node.scope_refs,
+                    execution_route="generation",
+                    workflow_type="video-generation",
+                    task_queue="generation-tasks",
                 )
                 successor_review = NodeRun(
                     run.id,
                     "media.review.video",
                     logical_operation=_logical_operation("media.review.video", "retake"),
                     scope_refs=node.scope_refs,
+                    execution_route="generation",
+                    workflow_type="video-generation",
+                    task_queue="generation-tasks",
                 )
                 node.transition("failed")
                 node.failure = {
@@ -1808,6 +1856,10 @@ class RunsService:
                             "sourceNodeRevision": source.revision,
                             "evidenceHash": _canonical_hash(source.output_evidence),
                         },
+                        execution_route=source.execution_route,
+                        workflow_type=source.workflow_type,
+                        task_queue=source.task_queue,
+                        operation_snapshot=deepcopy(source.operation_snapshot),
                     )
                 else:
                     node = NodeRun(
@@ -1815,6 +1867,10 @@ class RunsService:
                         source.node_key,
                         logical_operation=f"{source.node_key}:successor:{uuid4()}",
                         scope_refs=source.scope_refs,
+                        execution_route=source.execution_route,
+                        workflow_type=source.workflow_type,
+                        task_queue=source.task_queue,
+                        operation_snapshot=deepcopy(source.operation_snapshot),
                     )
                 successor.nodes.append(node)
             successor.transition("running")
@@ -1974,6 +2030,16 @@ class RunsService:
                         str(item["nodeKey"]),
                         logical_operation=f"{item['nodeKey']}:historical:{index}:{uuid4()}",
                         scope_refs=tuple(item.get("scopeRefs", [])),
+                        execution_route=(
+                            "generation" if item.get("executionRoute") == "generation" else "legacy"
+                        ),
+                        workflow_type=str(item.get("workflowType", "phase_one_run")),
+                        task_queue=str(item.get("taskQueue", "agent-tasks")),
+                        operation_snapshot=deepcopy(
+                            item.get("operationSnapshot")
+                            if isinstance(item.get("operationSnapshot"), dict)
+                            else None
+                        ),
                     )
                 )
             if not rerun.nodes:

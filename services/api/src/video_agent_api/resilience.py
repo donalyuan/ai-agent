@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from uuid import UUID
 
@@ -52,6 +54,165 @@ class OperationAdmission:
     source: str | None = None
     operation_key: str | None = None
     correlation_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenOperationAdmission:
+    operation_key: str
+    scope: str
+    operation: str
+    reference: str
+    resource_revision: int
+    capacity_revision: int
+    resource_hash: str
+    capacity_hash: str
+    allowed: bool
+    diagnostic: str | None
+    warning: str | None
+
+
+class OperationsResilienceCoordinator:
+    """Own deterministic resource/capacity admission facts, never business state."""
+
+    def __init__(self, resource: RuntimeResourceSnapshot, capacity: CapacitySnapshot) -> None:
+        self._resource = resource
+        self._capacity = capacity
+        self.resource_hash = _snapshot_hash(resource)
+        self.capacity_hash = _snapshot_hash(capacity)
+
+    def freeze(
+        self,
+        scope: str,
+        operation: str,
+        operation_key: str,
+        *,
+        required_bytes: int = 0,
+        min_cpu: int = 1,
+        min_memory_bytes: int = 0,
+    ) -> FrozenOperationAdmission:
+        # A worker may serve multiple project scopes from one immutable probe.  A
+        # wildcard capacity scope preserves the same coordinator instance while
+        # retaining strict scope checks for coordinators created per project.
+        if (
+            not scope
+            or not operation
+            or not operation_key
+            or self._capacity.scope not in {scope, "*"}
+        ):
+            return self._result(
+                scope, operation, operation_key, False, "resource_scope_invalid", None
+            )
+        decision = admit(
+            self._resource,
+            required_bytes=required_bytes,
+            min_cpu=min_cpu,
+            min_memory_bytes=min_memory_bytes,
+            operation_key=operation_key,
+        )
+        return self._result(
+            scope,
+            operation,
+            operation_key,
+            decision.allowed,
+            decision.diagnostic,
+            decision.warning,
+        )
+
+    def revalidate(self, frozen: FrozenOperationAdmission) -> FrozenOperationAdmission:
+        if (
+            frozen.resource_hash != self.resource_hash
+            or frozen.capacity_hash != self.capacity_hash
+            or frozen.resource_revision != self._resource.revision
+            or frozen.capacity_revision != self._capacity.revision
+        ):
+            return self._result(
+                frozen.scope,
+                frozen.operation,
+                frozen.operation_key,
+                False,
+                "resource_snapshot_stale",
+                None,
+            )
+        return frozen
+
+    def _result(
+        self,
+        scope: str,
+        operation: str,
+        operation_key: str,
+        allowed: bool,
+        diagnostic: str | None,
+        warning: str | None,
+    ) -> FrozenOperationAdmission:
+        reference = sha256(
+            "\x1f".join(
+                (
+                    scope,
+                    operation,
+                    operation_key,
+                    self.resource_hash,
+                    self.capacity_hash,
+                )
+            ).encode()
+        ).hexdigest()
+        return FrozenOperationAdmission(
+            operation_key,
+            scope,
+            operation,
+            f"resilience:{reference}",
+            self._resource.revision,
+            self._capacity.revision,
+            self.resource_hash,
+            self.capacity_hash,
+            allowed,
+            diagnostic,
+            warning,
+        )
+
+
+def admission_refs(admission: FrozenOperationAdmission) -> dict[str, object]:
+    """Serialize only immutable admission identity for the owning operation."""
+    return {
+        "operationKey": admission.operation_key,
+        "scope": admission.scope,
+        "operation": admission.operation,
+        "reference": admission.reference,
+        "resourceRevision": admission.resource_revision,
+        "capacityRevision": admission.capacity_revision,
+        "resourceHash": admission.resource_hash,
+        "capacityHash": admission.capacity_hash,
+        "allowed": admission.allowed,
+        "diagnostic": admission.diagnostic,
+        "warning": admission.warning,
+    }
+
+
+def admission_from_refs(value: object) -> FrozenOperationAdmission:
+    if not isinstance(value, dict):
+        raise ValueError("admission refs are invalid")
+    return FrozenOperationAdmission(
+        operation_key=str(value["operationKey"]),
+        scope=str(value["scope"]),
+        operation=str(value["operation"]),
+        reference=str(value["reference"]),
+        resource_revision=int(value["resourceRevision"]),
+        capacity_revision=int(value["capacityRevision"]),
+        resource_hash=str(value["resourceHash"]),
+        capacity_hash=str(value["capacityHash"]),
+        allowed=bool(value["allowed"]),
+        diagnostic=str(value["diagnostic"]) if value.get("diagnostic") else None,
+        warning=str(value["warning"]) if value.get("warning") else None,
+    )
+
+
+def _snapshot_hash(snapshot: RuntimeResourceSnapshot | CapacitySnapshot) -> str:
+    # Capture time is audit metadata, not a resource/capacity identity input.
+    # API and Workers independently probe the same configured runtime after a
+    # restart, so including it would reject an otherwise identical frozen
+    # admission solely because the probe happened at a different instant.
+    identity = asdict(snapshot)
+    identity.pop("captured_at")
+    return sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

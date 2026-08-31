@@ -63,7 +63,19 @@ class RenderResult:
     loudness: LoudnessMeasurement
 
 
+@dataclass(frozen=True, slots=True)
+class RenderOutputInspection:
+    """Content-derived facts required before a rendered file can be handed off."""
+
+    container: str
+    video_codec: str
+    audio_codec: str
+    duration_seconds: float
+
+
 class FfmpegRenderPort(Protocol):
     def probe(self) -> RendererCapabilitySnapshot: ...
 
     def render(self, request: RenderRequest, workspace: Path) -> RenderResult: ...
+
+    def inspect_output(self, output_path: Path, workspace: Path) -> RenderOutputInspection: ...

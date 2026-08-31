@@ -17,6 +17,7 @@ from video_agent_api.domain.errors import (
 from video_agent_api.ports.rendering import (
     LoudnessMeasurement,
     RendererCapabilitySnapshot,
+    RenderOutputInspection,
     RenderRequest,
     RenderResult,
 )
@@ -181,6 +182,54 @@ class SubprocessFfmpegRenderAdapter:
             "renderer_loudness_measurement_failed: finite loudness JSON is missing"
         )
 
+    def inspect_output(self, output_path: Path, workspace: Path) -> RenderOutputInspection:
+        """Read bounded ffprobe fields; filename extensions never establish media identity."""
+        workspace = workspace.resolve()
+        output = output_path.resolve()
+        if not output.is_file() or not output.is_relative_to(workspace):
+            raise ValidationDomainError("render_output_invalid:path")
+        try:
+            completed = subprocess.run(
+                [
+                    str(self._ffprobe_path),
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=format_name,duration:stream=codec_type,codec_name",
+                    "-of",
+                    "json",
+                    str(output),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise ValidationDomainError(
+                f"render_output_invalid:ffprobe:{type(error).__name__}"
+            ) from error
+        if completed.returncode != 0 or len(completed.stdout) > 32 * 1024:
+            raise ValidationDomainError("render_output_invalid:ffprobe")
+        try:
+            payload = json.loads(completed.stdout)
+            formats = str(payload["format"]["format_name"]).split(",")
+            duration = float(payload["format"]["duration"])
+            streams = payload["streams"]
+            video_codec = next(
+                str(stream["codec_name"]) for stream in streams if stream["codec_type"] == "video"
+            )
+            audio_codec = next(
+                str(stream["codec_name"]) for stream in streams if stream["codec_type"] == "audio"
+            )
+        except (KeyError, StopIteration, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValidationDomainError("render_output_invalid:media") from error
+        if "mp4" not in formats or video_codec != "h264" or audio_codec != "aac":
+            raise ValidationDomainError("render_output_invalid:container_or_codec")
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValidationDomainError("render_output_invalid:duration")
+        return RenderOutputInspection("mp4", video_codec, audio_codec, duration)
+
     def _run(self, arguments: tuple[str, ...]) -> str:
         completed = subprocess.run(
             arguments,
@@ -219,6 +268,13 @@ class MockFfmpegRenderAdapter:
             LoudnessMeasurement(-14.0, -1.0, "mock-ffmpeg-loudnorm", "1"),
         )
 
+    def inspect_output(self, output_path: Path, workspace: Path) -> RenderOutputInspection:
+        if not output_path.is_file() or not output_path.resolve().is_relative_to(
+            workspace.resolve()
+        ):
+            raise ValidationDomainError("render_output_invalid:path")
+        return RenderOutputInspection("mp4", "h264", "aac", 1.0)
+
 
 def _codec_available(output: str, *names: str) -> bool:
     lines = output.lower().splitlines()
@@ -228,6 +284,8 @@ def _codec_available(output: str, *names: str) -> bool:
 def _format_available(output: str, mode: str, name: str) -> bool:
     for line in output.splitlines():
         stripped = line.strip()
-        if len(stripped) > 3 and mode in stripped[:2] and name in stripped[2:].split():
-            return True
+        if len(stripped) > 3 and mode in stripped[:2]:
+            aliases = {alias for token in stripped[2:].split() for alias in token.split(",")}
+            if name in aliases:
+                return True
     return False

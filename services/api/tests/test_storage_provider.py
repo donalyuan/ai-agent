@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from alembic.config import Config
@@ -236,6 +238,162 @@ def test_tos_is_unconfigured_by_default_and_fake_is_explicit(tmp_path: Path) -> 
         TOSAdapter(fake).resolve_credential()
 
 
+def test_tos_client_requires_complete_private_profile_and_never_uses_local_fallback() -> None:
+    class Profile:
+        id = "profile"
+        adapter_key = "tos"
+        endpoint = "https://tos.example.test"
+        region = "cn-test"
+        bucket = "private-bucket"
+        bucket_binding_id = "private-binding"
+        project_id = "project"
+        project_scope = ("project",)
+        credential_ref = "credential"
+        credential_status = "configured"
+        enabled = True
+        private_bucket = True
+        revision = 3
+
+    calls: list[tuple[str, str, str, str]] = []
+
+    def client_factory(ak: str, sk: str, endpoint: str, region: str) -> object:
+        calls.append((ak, sk, endpoint, region))
+        return object()
+
+    class Resolver:
+        def resolve(self, credential_ref: str, profile_id: str) -> str:
+            assert (credential_ref, profile_id) == ("credential", "profile")
+            return "access-key:secret-key"
+
+    adapter = TOSAdapter.from_profile(Profile(), Resolver(), client_factory=client_factory)
+    assert adapter.adapter_key == "tos"
+    assert adapter.profile_id == "profile"
+    assert adapter.profile_revision == 3
+    assert calls == [("access-key", "secret-key", "https://tos.example.test", "cn-test")]
+
+    Profile.private_bucket = False
+    with pytest.raises(AdapterNotConfiguredError, match="profile"):
+        TOSAdapter.from_profile(Profile(), Resolver(), client_factory=client_factory)
+    assert len(calls) == 1
+
+
+def test_tos_profile_uses_sdk_for_multipart_stat_read_and_write() -> None:
+    class Profile:
+        id = "profile"
+        adapter_key = "tos"
+        endpoint = "https://tos.example.test"
+        region = "cn-test"
+        bucket = "private-bucket"
+        bucket_binding_id = "private-binding"
+        project_id = "project"
+        project_scope = ("project",)
+        credential_ref = "credential"
+        credential_status = "configured"
+        enabled = True
+        private_bucket = True
+        revision = 3
+
+    class Client:
+        def __init__(self) -> None:
+            self.parts: dict[int, bytes] = {}
+            self.objects: dict[str, tuple[bytes, str, dict[str, str]]] = {}
+
+        def create_multipart_upload(self, bucket: str, key: str, **kwargs: object) -> object:
+            assert bucket == "private-bucket"
+            assert kwargs["meta"] == {
+                "operation-key": "asset-upload:project:asset:reservation",
+                "project-id": "project",
+                "profile-id": "profile",
+                "sha256": hashlib.sha256(b"hello").hexdigest(),
+            }
+            assert kwargs["content_type"] == "application/octet-stream"
+            return SimpleNamespace(upload_id="upload-1")
+
+        def upload_part(
+            self, bucket: str, key: str, upload_id: str, part_number: int, **kwargs: object
+        ) -> object:
+            assert (bucket, key, upload_id, part_number) == (
+                "private-bucket",
+                "projects/project/assets/asset/reservation/original.bin",
+                "upload-1",
+                1,
+            )
+            self.parts[part_number] = kwargs["content"]  # type: ignore[assignment]
+            return SimpleNamespace(etag="tos-etag-1")
+
+        def complete_multipart_upload(
+            self, bucket: str, key: str, upload_id: str, parts: list[dict[str, object]]
+        ) -> object:
+            assert (bucket, key, upload_id) == (
+                "private-bucket",
+                "projects/project/assets/asset/reservation/original.bin",
+                "upload-1",
+            )
+            assert parts == [{"part_number": 1, "etag": "tos-etag-1"}]
+            content = b"".join(self.parts.values())
+            self.objects[key] = (
+                content,
+                "application/octet-stream",
+                {
+                    "operation-key": "asset-upload:project:asset:reservation",
+                    "project-id": "project",
+                    "profile-id": "profile",
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                },
+            )
+            return SimpleNamespace()
+
+        def head_object(self, bucket: str, key: str) -> object:
+            assert bucket == "private-bucket"
+            content, mime_type, meta = self.objects[key]
+            return SimpleNamespace(
+                content_length=len(content),
+                content_type=mime_type,
+                etag="tos-object-etag",
+                meta=meta,
+            )
+
+        def get_object(self, bucket: str, key: str) -> object:
+            assert bucket == "private-bucket"
+            return SimpleNamespace(read=BytesIO(self.objects[key][0]).read)
+
+        def put_object(self, bucket: str, key: str, **kwargs: object) -> object:
+            assert bucket == "private-bucket"
+            content = kwargs["content"]
+            assert isinstance(content, bytes)
+            self.objects[key] = (content, str(kwargs["content_type"]), dict(kwargs["meta"]))
+            return SimpleNamespace(etag="tos-put-etag")
+
+    client = Client()
+
+    class Resolver:
+        def resolve(self, credential_ref: str, profile_id: str) -> str:
+            assert (credential_ref, profile_id) == ("credential", "profile")
+            return "access-key:secret-key"
+
+    adapter = TOSAdapter.from_profile(Profile(), Resolver(), client_factory=lambda *_args: client)
+    intent = replace(_intent(), profile_id="profile")
+    session = adapter.create_multipart(intent, "corr-create")
+    receipt = adapter.upload_part(session, _receipt(1, b"hello"), b"hello", "corr-part")
+    ref = adapter.complete_multipart(session, (receipt,), "corr-complete")
+
+    assert ref == StoredObjectRef(
+        "project",
+        "profile",
+        "private-bucket",
+        intent.object_key,
+        5,
+        hashlib.sha256(b"hello").hexdigest(),
+        "application/octet-stream",
+        "tos-object-etag",
+        intent.operation_key,
+    )
+    assert adapter.reconcile_multipart(intent, "corr-reconcile") == ref
+    assert b"".join(adapter.iter_chunks(intent.object_key, 2)) == b"hello"
+    stored = adapter.put("projects/project/direct.bin", b"direct", "corr-put")
+    assert stored.size_bytes == 6 and stored.checksum == hashlib.sha256(b"direct").hexdigest()
+
+
 def test_workspace_cleaner_obeys_success_failure_retention(tmp_path: Path) -> None:
     storage = LocalWorkspaceAdapter(tmp_path)
     storage.put("tmp/success.bin", b"ok", "corr")
@@ -440,8 +598,14 @@ def test_storage_owner_migration_tables_and_constraints(tmp_path: Path) -> None:
     } <= tables
     with engine.connect() as connection:
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "0023_export_dispatch_owner"
+            "0029_lookup_binding"
         )
+        assert {
+            row[1] for row in connection.execute(text("PRAGMA table_info(workflow_node_runs)"))
+        } >= {"admission_refs"}
+        assert {
+            row[1] for row in connection.execute(text("PRAGMA table_info(video_operations)"))
+        } >= {"admission_refs"}
     command.downgrade(config, "0018_asset_edit_owner")
     assert not ({"storage_profiles", "stored_objects"} & set(inspect(engine).get_table_names()))
     engine.dispose()

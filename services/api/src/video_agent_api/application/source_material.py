@@ -62,7 +62,7 @@ class SourceMaterialService:
             await uow.commit()
         return source
 
-    async def append(self, command: AppendSourceMaterialCommand):
+    async def append(self, command: AppendSourceMaterialCommand) -> SourceMaterialVersion:
         async with self._uow_factory() as uow:
             source = uow.source_materials.get(command.source_material_id)
             if source is None:
@@ -112,7 +112,7 @@ class SourceMaterialService:
                 )
             version = source.append(
                 expected_revision=command.expected_revision,
-                input_mode=command.input_mode,  # type: ignore[arg-type]
+                input_mode=command.input_mode,
                 content=command.content,
                 content_hash=command.content_hash,
                 asset_version_id=command.asset_version_id,
@@ -126,7 +126,7 @@ class SourceMaterialService:
                 project.revision += 1
                 await uow.projects.save(project)
             await uow.commit()
-            return version
+            return cast(SourceMaterialVersion, version)
 
     async def create_upload_intent(
         self,
@@ -180,7 +180,7 @@ class SourceMaterialService:
             }
 
 
-async def _project_for_source(uow: Any, source_id: str):
+async def _project_for_source(uow: Any, source_id: str) -> Any | None:
     for project in await uow.projects.list():
         if any(
             str(item.get("id")) == source_id for item in getattr(project, "source_materials", [])

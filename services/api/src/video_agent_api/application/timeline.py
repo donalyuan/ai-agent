@@ -174,7 +174,7 @@ class TimelineService:
                 }
             )
             await uow.commit()
-            return cut
+            return cast(TimelineCut, cut)
 
     async def publish(
         self,

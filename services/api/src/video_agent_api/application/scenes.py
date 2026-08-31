@@ -158,6 +158,7 @@ async def _accept_current_media(
     shot_id: str,
     candidate: dict[str, object],
     expected_shot_revision: int,
+    media_owner: Any | None = None,
 ) -> Shot:
     shot = uow.shots.get(shot_id)
     if shot is None or shot.project_id != project_id or shot.episode_id != episode_id:
@@ -251,12 +252,20 @@ async def _accept_current_media(
         }
     )
     uow.outbox_events.append({"type": "media.reviewed", "shotId": shot.id, "decision": "accept"})
+    if media_owner is not None:
+        # The review command is an eligibility projection, not the candidate owner
+        # record.  The producer gate needs the transaction's accepted state too.
+        accepted_projection = {**candidate, "status": "accepted"}
+        await media_owner.produce_generated_candidate(
+            uow, candidate=accepted_projection, asset_version=asset_version
+        )
     return cast(Shot, shot)
 
 
 class ScenesService:
-    def __init__(self, uow_factory: Any) -> None:
+    def __init__(self, uow_factory: Any, media_owner: Any | None = None) -> None:
         self._uow_factory = uow_factory
+        self._media_owner = media_owner
 
     async def create_scene(self, command: CreateSceneCommand) -> Scene:
         async with self._uow_factory() as uow:
@@ -386,6 +395,7 @@ class ScenesService:
                     shot_id=command.shot_id,
                     candidate=command.candidate or {},
                     expected_shot_revision=command.expected_shot_revision,
+                    media_owner=self._media_owner,
                 )
                 await uow.commit()
                 return shot
@@ -431,6 +441,7 @@ class ScenesService:
             shot_id=shot_id,
             candidate=candidate,
             expected_shot_revision=expected_shot_revision,
+            media_owner=self._media_owner,
         )
 
     async def update_derivative_in_transaction(

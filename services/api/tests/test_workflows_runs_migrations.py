@@ -21,7 +21,7 @@ from video_agent_api.domain.runs import ProjectDefaultWorkflowBinding, WorkflowV
 from video_agent_api.skills.router import RankedSkill, RouteDecision
 
 API_ROOT = Path(__file__).parents[1]
-CURRENT_HEAD = "0023_export_dispatch_owner"
+CURRENT_HEAD = "0029_lookup_binding"
 WORKFLOW_TABLES = {
     "published_workflow_versions",
     "project_default_workflow_bindings",

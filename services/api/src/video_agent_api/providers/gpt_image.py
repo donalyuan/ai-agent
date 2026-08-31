@@ -5,7 +5,9 @@ from base64 import b64decode
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from ipaddress import ip_address
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
+
+import httpx
 
 from video_agent_api.ports.contracts import (
     AdapterNotConfiguredError,
@@ -20,6 +22,12 @@ class GPTImageProvider(ImageGenerationPort):
     configured: bool = False
     allowed_hosts: frozenset[str] = frozenset()
     transport: Callable[[str, dict[str, object], ModelSelection, str], PortResult] | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    http_transport: httpx.BaseTransport | None = None
+    timeout_seconds: float = 30.0
+    idempotency_key_header: str | None = None
+    correlation_header: str | None = None
     max_references: int = 8
     max_reference_bytes: int = 32 * 1024 * 1024
     max_dimension: int = 8192
@@ -55,12 +63,58 @@ class GPTImageProvider(ImageGenerationPort):
         selection: ModelSelection,
         correlation_id: str,
     ) -> PortResult:
-        if self.transport is None:
+        if self.transport is not None:
+            result = self.transport(operation, payload, selection, correlation_id)
+            if not isinstance(result, PortResult):
+                raise ValueError("gpt_image_result_invalid")
+            return result
+        if not self.base_url or not self.api_key:
             raise AdapterNotConfiguredError("gpt_image_transport_unconfigured")
-        result = self.transport(operation, payload, selection, correlation_id)
-        if not isinstance(result, PortResult):
-            raise ValueError("gpt_image_result_invalid")
-        return result
+        endpoint = "v1/images/generations" if operation == "generate" else "v1/images/edits"
+        request_payload = {"model": selection.model_id, "prompt": payload["prompt"]}
+        parameters = payload.get("parameters")
+        if not isinstance(parameters, dict):
+            raise ValueError("gpt_image_parameters_invalid")
+        for key, value in parameters.items():
+            if key in request_payload:
+                raise ValueError("gpt_image_parameter_conflicts_with_transport")
+            request_payload[key] = value
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        if self.idempotency_key_header:
+            headers[self.idempotency_key_header] = correlation_id
+        if self.correlation_header:
+            headers[self.correlation_header] = correlation_id
+        with httpx.Client(transport=self.http_transport, follow_redirects=False) as client:
+            response = client.post(
+                urljoin(self.base_url.rstrip("/") + "/", endpoint),
+                headers=headers,
+                json=request_payload,
+                timeout=self.timeout_seconds,
+            )
+        response.raise_for_status()
+        body = response.json()
+        data = body.get("data") if isinstance(body, dict) else None
+        item = data[0] if isinstance(data, list) and data else None
+        encoded = item.get("b64_json") if isinstance(item, dict) else None
+        if not isinstance(encoded, str):
+            raise ValueError("gpt_image_b64_json_missing")
+        width, height = self._png_dimensions(encoded)
+        request_id = str(response.headers.get("x-request-id") or body.get("id") or "unknown")
+        return PortResult(
+            request_id,
+            correlation_id,
+            {"base64": encoded, "mimeType": "image/png", "width": width, "height": height},
+        )
+
+    @staticmethod
+    def _png_dimensions(encoded: str) -> tuple[int, int]:
+        try:
+            value = b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise ValueError("gpt_image_b64_json_invalid") from error
+        if value[:8] != b"\x89PNG\r\n\x1a\n" or value[12:16] != b"IHDR" or len(value) < 24:
+            raise ValueError("gpt_image_b64_json_not_png")
+        return int.from_bytes(value[16:20], "big"), int.from_bytes(value[20:24], "big")
 
     def validate_reference_urls(self, urls: Iterable[str]) -> None:
         values = tuple(urls)

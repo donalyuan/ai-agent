@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -116,6 +116,7 @@ async def generate(
     project_id: str,
     body: GenerateRequest,
     service: Annotated[TextGenerationService, Depends(_service)],
+    response: Response,
 ) -> object:
     if body.schema_version != "1.0.0":
         from video_agent_api.domain.errors import ValidationDomainError
@@ -156,20 +157,33 @@ async def generate(
         if source is not None
         else None
     )
-    return _response(
-        await service.generate(
-            GenerateTextBatchCommand(
-                project_id,
-                body.run_id,
-                body.brief_revision,
-                ModelSelection(body.provider_id, body.profile_id, body.model_id, body.adapter_key),
-                brief,
-                source_snapshot,
-                tuple(body.requested_kinds),
-                tuple(body.scope_ids),
-            )
-        )
+    command = GenerateTextBatchCommand(
+        project_id,
+        body.run_id,
+        body.brief_revision,
+        ModelSelection(body.provider_id, body.profile_id, body.model_id, body.adapter_key),
+        brief,
+        source_snapshot,
+        tuple(body.requested_kinds),
+        tuple(body.scope_ids),
     )
+    async with service._uow_factory() as uow:
+        run = uow.workflow_runs.get(body.run_id)
+        node = (
+            next((item for item in run.nodes if item.node_key == "text.generate"), None)
+            if run is not None and run.project_id == project_id
+            else None
+        )
+    if node is not None and node.execution_route == "generation":
+        operation = await service.enqueue(command)
+        response.status_code = 202
+        return {
+            "id": operation.id,
+            "runId": operation.run_id,
+            "logicalOperation": operation.logical_operation,
+            "status": operation.status,
+        }
+    return _response(await service.generate(command))
 
 
 class DecideRequest(DTO):

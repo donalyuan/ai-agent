@@ -9,8 +9,13 @@ import pytest
 from video_agent_api.adapters.in_memory import InMemoryUnitOfWork
 from video_agent_api.application.agent_edit import AgentEditService
 from video_agent_api.application.assets import AssetsService, CreateAssetCommand
-from video_agent_api.application.catalog import CatalogService, CreateModelCommand
+from video_agent_api.application.catalog import (
+    CatalogService,
+    CreateModelCommand,
+    RecordProviderCallCommand,
+)
 from video_agent_api.application.creative import CreativeService, SaveCreativeBriefCommand
+from video_agent_api.application.generation_dispatch import GenerationCommandConsumer
 from video_agent_api.application.image_generation import (
     GenerateImageCommand,
     ImageGenerationService,
@@ -64,6 +69,11 @@ from video_agent_api.providers.agnes import AgnesVideoProvider, VideoSubmissionS
 from video_agent_api.providers.gpt_image import GPTImageProvider
 from video_agent_api.providers.media_inspect import LocalMediaInspector
 from video_agent_api.providers.text import OpenAICompatibleTextModelAdapter
+from video_agent_api.resilience import (
+    OperationsResilienceCoordinator,
+    RuntimeResourceSnapshot,
+    capacity_snapshot,
+)
 
 
 def test_credential_envelope_is_authenticated_and_owner_bound() -> None:
@@ -373,6 +383,94 @@ def test_video_operation_rejects_backward_terminal_transition() -> None:
 
 
 @pytest.mark.asyncio
+async def test_video_reconcile_uses_frozen_owner_correlation() -> None:
+    uow = InMemoryUnitOfWork()
+    observed: list[tuple[str, str]] = []
+
+    class PollingProvider:
+        def get_video_status(self, provider_request_id: str, correlation_id: str) -> PortResult:
+            observed.append((provider_request_id, correlation_id))
+            return PortResult(
+                provider_request_id,
+                correlation_id,
+                {"providerRequestId": provider_request_id, "status": "running"},
+            )
+
+    operation = VideoOperation(
+        "project",
+        "run",
+        "video.submit:1",
+        "provider",
+        "profile",
+        "model",
+        "capability",
+        "asset-version",
+        1,
+        "a" * 64,
+        "shot-spec",
+        1,
+        "b" * 64,
+        4.0,
+        "16:9",
+        status="submission_unknown",
+        provider_request_id="remote-video",
+        outbound_correlation="frozen-video-correlation",
+    )
+    uow.video_operations[(operation.run_id, operation.logical_operation)] = operation
+    service = AgnesVideoService(lambda: uow, PollingProvider(), CatalogService(lambda: uow))
+
+    result = await service.reconcile(
+        ReconcileVideoCommand(operation.run_id, operation.logical_operation, "remote-video")
+    )
+
+    assert observed == [("remote-video", "frozen-video-correlation")]
+    assert result.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_live_video_reconcile_never_recomposes_from_mutable_catalog() -> None:
+    uow = InMemoryUnitOfWork()
+    operation = VideoOperation(
+        "project",
+        "run",
+        "video.submit:1",
+        "provider",
+        "profile",
+        "model",
+        "capability",
+        "asset-version",
+        1,
+        "a" * 64,
+        "shot-spec",
+        1,
+        "b" * 64,
+        4.0,
+        "16:9",
+        status="submission_unknown",
+        provider_request_id="remote-video",
+        outbound_correlation="frozen-video-correlation",
+    )
+    uow.video_operations[(operation.run_id, operation.logical_operation)] = operation
+
+    class MutableCatalogComposition:
+        async def resolve_provider(self, *_args: object, **_kwargs: object) -> object:
+            raise AssertionError("reconcile must not resolve the current catalog")
+
+    service = AgnesVideoService(
+        lambda: uow,
+        object(),
+        CatalogService(lambda: uow),
+        live_composition=MutableCatalogComposition(),
+    )
+
+    result = await service.reconcile(
+        ReconcileVideoCommand(operation.run_id, operation.logical_operation, "remote-video")
+    )
+
+    assert result.status == "submission_unknown"
+
+
+@pytest.mark.asyncio
 async def test_agnes_submit_preflight_and_unknown_submission() -> None:
     uow = InMemoryUnitOfWork()
     catalog = CatalogService(lambda: uow)
@@ -415,9 +513,21 @@ async def test_agnes_submit_preflight_and_unknown_submission() -> None:
         "Version", (), {"project_id": project}
     )()
 
-    def transport(*_args: object, **_kwargs: object) -> PortResult:
+    submitted_correlations: list[str] = []
+
+    def transport(*args: object, **_kwargs: object) -> PortResult:
+        submitted_correlations.append(str(args[3]))
         raise RuntimeError("transport uncertain")
 
+    healthy_resource = RuntimeResourceSnapshot(
+        cpu_count=4,
+        available_concurrency=4,
+        memory_available_bytes=2048,
+        memory_limit_bytes=4096,
+        disk_free_bytes=8 * 1024 * 1024,
+        disk_total_bytes=16 * 1024 * 1024,
+        captured_at="2026-08-26T00:00:00+00:00",
+    )
     service = AgnesVideoService(
         lambda: uow,
         AgnesVideoProvider(
@@ -426,6 +536,10 @@ async def test_agnes_submit_preflight_and_unknown_submission() -> None:
             transport=transport,
         ),
         catalog,
+        resilience=OperationsResilienceCoordinator(
+            healthy_resource,
+            capacity_snapshot(healthy_resource, project),
+        ),
     )
     command = SubmitVideoCommand(
         project,
@@ -506,12 +620,63 @@ async def test_agnes_submit_preflight_and_unknown_submission() -> None:
         confirmation_id="confirmed",
         user_uuid="11111111-1111-4111-8111-111111111111",
     )
+    profile.operation_policies["video.submit"] = {"maxConcurrency": 1, "rateLimit": 60}
+    await catalog.record_provider_call(
+        RecordProviderCallCommand(
+            project,
+            "other-run",
+            "other-node",
+            "video.submit:occupied",
+            "video.submit",
+            provider.id,
+            profile.id,
+            model.id,
+            "c" * 64,
+            capability_snapshot_id=capability.id,
+        )
+    )
+    with pytest.raises(ValidationDomainError, match="provider_operation_concurrency_exhausted"):
+        await service.submit(command)
+    assert uow.video_operations == {}
+    assert len(uow.provider_calls) == 1
+    await catalog.finalize_provider_call("other-run", "video.submit:occupied", status="failed")
+    unavailable_resource = RuntimeResourceSnapshot(
+        cpu_count=4,
+        available_concurrency=4,
+        memory_available_bytes=1024,
+        memory_limit_bytes=2048,
+        disk_free_bytes=None,
+        disk_total_bytes=None,
+        captured_at="2026-08-26T00:00:00+00:00",
+        error="resource probe unavailable",
+    )
+    protected_service = AgnesVideoService(
+        lambda: uow,
+        service._provider,
+        catalog,
+        resilience=OperationsResilienceCoordinator(
+            unavailable_resource,
+            capacity_snapshot(unavailable_resource, project),
+        ),
+    )
+    with pytest.raises(ValidationDomainError, match="resource_probe_unavailable"):
+        await protected_service.submit(command)
+    assert uow.video_operations == {} and len(uow.provider_calls) == 1
     with pytest.raises(RuntimeError, match="uncertain"):
         await service.submit(command)
     operation = uow.video_operations[("run-video", "video.submit:1")]
     assert operation.status == "submission_unknown"
-    assert len(uow.provider_calls) == 1
-    assert next(iter(uow.provider_calls.values())).capability_snapshot_id == capability.id
+    assert operation.admission_refs is not None
+    assert operation.admission_refs["operation"] == "video.submit"
+    assert len(uow.provider_calls) == 2
+    provider_call = next(
+        item for item in uow.provider_calls.values() if item.run_id == command.run_id
+    )
+    assert provider_call.capability_snapshot_id == capability.id
+    assert operation.outbound_correlation == provider_call.outbound_correlation
+    assert operation.lookup_outcome == "not_attempted"
+    assert submitted_correlations == [provider_call.outbound_correlation]
+    assert uow.profiles[profile.id].active_operations == {"video.submit": 1}
     assert not uow.run_events
     operation.status = "submitted"
     with pytest.raises(ValidationDomainError, match="requires_submission_unknown"):
@@ -525,6 +690,10 @@ async def test_agnes_submit_preflight_and_unknown_submission() -> None:
             ReconcileVideoCommand(command.run_id, command.logical_operation, None),
             project_scope="foreign-project",
         )
+    uow.profiles[profile.id].operation_policies["video.submit"] = {
+        "maxConcurrency": 2,
+        "rateLimit": 60,
+    }
     with pytest.raises(ValidationDomainError, match="image_candidate_unaccepted"):
         shot = uow.shots[shot_id]
         shot.current_image = None
@@ -617,18 +786,149 @@ async def test_image_generation_continuity_gate_and_unreferenced_candidate(tmp_p
         model.id,
         capability.id,
         capability.revision,
+        profile.revision,
         continuity.id,
         continuity.revision,
         continuity.content_hash,
         continuity.target_revision,
         {},
     )
-    candidate = await service.execute(command)
+    queued = await service.enqueue(command)
+    assert queued.status == "pending"
+    assert queued.candidate is None
+    assert len(uow.provider_calls) == 1
+    image_events = [
+        event for event in uow.outbox_events if event["type"] == "image.generation.requested"
+    ]
+    assert len(image_events) == 1
+    assert image_events[0]["executionRoute"] == "generation"
+    assert image_events[0]["workflowType"] == "image-generation"
+    assert image_events[0]["taskQueue"] == "generation-tasks"
+    assert image_events[0]["schemaVersion"] == "1.0.0"
+    assert not uow.state.asset_versions
+
+    class MissingStorageIdentity(LocalWorkspaceAdapter):
+        @property
+        def profile_id(self) -> str:
+            return ""
+
+    invalid_storage_service = ImageGenerationService(
+        lambda: uow,
+        DeterministicMockProvider(),
+        MissingStorageIdentity(tmp_path / "missing-storage-identity"),
+        catalog,
+        AssetsService(lambda: uow),
+    )
+    before_invalid_storage = (len(uow.provider_calls), len(uow.outbox_events))
+    with pytest.raises(ValidationDomainError, match="image storage identity is incomplete"):
+        await invalid_storage_service.enqueue(
+            replace(command, logical_operation="image.generate:missing-storage-identity")
+        )
+    assert (len(uow.provider_calls), len(uow.outbox_events)) == before_invalid_storage
+
+    resource_unavailable = RuntimeResourceSnapshot(
+        cpu_count=4,
+        available_concurrency=4,
+        memory_available_bytes=1024,
+        memory_limit_bytes=2048,
+        disk_free_bytes=None,
+        disk_total_bytes=None,
+        captured_at="2026-08-26T00:00:00+00:00",
+        error="resource probe unavailable",
+    )
+    protected_service = ImageGenerationService(
+        lambda: uow,
+        DeterministicMockProvider(),
+        LocalWorkspaceAdapter(tmp_path / "protected-workspace"),
+        catalog,
+        AssetsService(lambda: uow),
+        resilience=OperationsResilienceCoordinator(
+            resource_unavailable,
+            capacity_snapshot(resource_unavailable, project.id),
+        ),
+    )
+    before_rejection = (len(uow.provider_calls), len(uow.outbox_events))
+    with pytest.raises(ValidationDomainError, match="resource_probe_unavailable"):
+        await protected_service.enqueue(
+            replace(command, logical_operation="image.generate:blocked")
+        )
+    assert (len(uow.provider_calls), len(uow.outbox_events)) == before_rejection
+
+    assert (await service.enqueue(command)).id == queued.id
+    with pytest.raises(
+        ValidationDomainError, match="image provider operation fingerprint conflict"
+    ):
+        await service.enqueue(replace(command, prompt="a different room"))
+
+    dispatched = await GenerationCommandConsumer(lambda: uow, service).dispatch_pending()
+    assert dispatched == {"dispatched": 1, "failed": 0}
+    candidate = uow.image_generation_candidates[(command.run_id, command.logical_operation)]
     assert candidate.status == "unreferenced"
     assert candidate.asset_version_id in uow.state.asset_versions
     assert uow.provider_calls
     assert not uow.run_events
     assert (await service.execute(command)).id == candidate.id
+
+    healthy_resource = RuntimeResourceSnapshot(
+        cpu_count=4,
+        available_concurrency=4,
+        memory_available_bytes=2048,
+        memory_limit_bytes=4096,
+        disk_free_bytes=8 * 1024 * 1024,
+        disk_total_bytes=16 * 1024 * 1024,
+        captured_at="2026-08-26T00:00:00+00:00",
+        revision=1,
+    )
+    resilient_service = ImageGenerationService(
+        lambda: uow,
+        DeterministicMockProvider(),
+        LocalWorkspaceAdapter(tmp_path / "resilient-workspace"),
+        catalog,
+        AssetsService(lambda: uow),
+        resilience=OperationsResilienceCoordinator(
+            healthy_resource,
+            capacity_snapshot(healthy_resource, project.id),
+        ),
+    )
+    stale_command = replace(command, logical_operation="image.generate:stale-admission")
+    await resilient_service.enqueue(stale_command)
+    changed_resource = replace(healthy_resource, revision=2)
+    restarted_service = ImageGenerationService(
+        lambda: uow,
+        DeterministicMockProvider(),
+        LocalWorkspaceAdapter(tmp_path / "restarted-workspace"),
+        catalog,
+        AssetsService(lambda: uow),
+        resilience=OperationsResilienceCoordinator(
+            changed_resource,
+            capacity_snapshot(changed_resource, project.id),
+        ),
+    )
+    assert await GenerationCommandConsumer(lambda: uow, restarted_service).dispatch_pending() == {
+        "dispatched": 0,
+        "failed": 1,
+    }
+    assert (
+        stale_command.run_id,
+        stale_command.logical_operation,
+    ) not in uow.image_generation_candidates
+    stale_event = next(
+        event
+        for event in uow.outbox_events
+        if event.get("logicalOperation") == stale_command.logical_operation
+    )
+    assert stale_event["status"] == "reconciliation_required"
+
+    before = (
+        len(uow.provider_calls),
+        len(uow.state.asset_versions),
+        len(uow.image_generation_candidates),
+    )
+    assert (
+        len(uow.provider_calls),
+        len(uow.state.asset_versions),
+        len(uow.image_generation_candidates),
+    ) == before
 
     uow.asset_bible_tasks["pending"] = type(
         "PendingTask", (), {"project_id": project.id, "target_id": "shot-1", "status": "pending"}
@@ -636,3 +936,40 @@ async def test_image_generation_continuity_gate_and_unreferenced_candidate(tmp_p
     blocked = replace(command, logical_operation="image.generate:2")
     with pytest.raises(ValidationDomainError, match="continuity_revision_pending"):
         await service.execute(blocked)
+
+    del uow.asset_bible_tasks["pending"]
+
+    class ResponseLostImageProvider:
+        def __init__(self) -> None:
+            self.correlation_ids: list[str] = []
+
+        def generate_image(self, *args: object, **kwargs: object) -> object:
+            del kwargs
+            self.correlation_ids.append(str(args[2]))
+            raise TimeoutError("response lost after remote accept")
+
+        def edit_image(self, *args: object, **kwargs: object) -> object:
+            del kwargs
+            self.correlation_ids.append(str(args[2]))
+            raise TimeoutError("response lost after remote accept")
+
+    lost_operation = replace(command, logical_operation="image.generate:response-loss")
+    lost_provider = ResponseLostImageProvider()
+    response_lost_service = ImageGenerationService(
+        lambda: uow,
+        lost_provider,  # type: ignore[arg-type]
+        LocalWorkspaceAdapter(tmp_path / "response-loss-workspace"),
+        catalog,
+        AssetsService(lambda: uow),
+    )
+    with pytest.raises(TimeoutError, match="response lost"):
+        await response_lost_service.execute(lost_operation)
+    provider_call = uow.provider_calls[
+        uow.provider_call_keys[(lost_operation.run_id, lost_operation.logical_operation)]
+    ]
+    assert provider_call.status == "unknown"
+    assert provider_call.outbound_correlation
+    assert provider_call.lookup_outcome == "not_attempted"
+    assert lost_provider.correlation_ids == [provider_call.outbound_correlation]
+    with pytest.raises(ValidationDomainError, match="provider operation requires reconciliation"):
+        await response_lost_service.execute(lost_operation)

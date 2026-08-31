@@ -141,3 +141,28 @@ verified Provider terminal success SHALL 是 result `AssetVersion` 唯一 append
 #### Scenario:dependency 未配置
 - **WHEN** 后续候选生成所需 Provider 或媒体执行依赖未配置
 - **THEN** 系统显式记录未配置/失败状态，不自动 fallback、扣费或报告候选已生成
+
+### Requirement:已接受的 AssetEdit eligibility handoff
+系统 SHALL 在 AssetEdit accept 后仅追加 AcceptDecision/audit，并以同一既有 immutable AssetVersion 的 candidate/provenance/version/hash/target exact CAS 输出 owner-defined accepted/current storyboard-reference eligibility facts；不得追加或覆盖 AssetVersion，或直接添加 Timeline Clip/SoundCue。Timeline 仅可消费同项目、选定 Episode 且该事实仍为 current 的版本。
+
+#### Scenario:保持 Timeline reference 所有权分离
+- **WHEN** 用户接受一个 AssetEdit candidate
+- **THEN** edit owner 写 accept decision/audit，scenes owner 对同一 existing version 写 eligibility exact CAS；不追加或删除 AssetVersion、Timeline reference
+
+### Requirement:已接受 eligibility handoff 必须精确
+AssetEdit accepted/current handoff MUST 使用与 storyboard eligibility 相同的 candidate/provenance/AssetVersion id/revision/hash/project/episode/target CAS facts。
+
+#### Scenario:无效 acceptance 不得替换 current
+- **WHEN** 输入仅有 status、处于 stale、来自 foreign scope，或 hash/revision 不匹配
+- **THEN** current handoff 保持不变，且不写入 Timeline reference。
+
+### Requirement:Agent context 冻结 accepted AssetBible snapshot
+AssetEditSession、conversation turn、`AssetEditPlan` 与 `AssetEditExecution` SHALL 只读冻结 AssetBible owner 返回的 accepted `ResolvedContinuitySnapshot` ID/revision/hash 及必要 GenerationSpec/AssetVersion owner refs。AssetEdit MUST NOT 复制 AssetBible entry/override 内容、重新解析 override chain 或写 AssetBible。Plan generation、execute 与 accept MUST 重新校验 snapshot 和 `ContinuityRevisionTask` projection；snapshot incomplete/stale/foreign/hash-revision mismatch 或 target 存在 pending task 时，impact SHALL 显示 `continuity_stale` 并阻断后续副作用。
+
+#### Scenario:以当前连续性快照生成可审核 Plan
+- **WHEN** Session target 的 accepted resolved snapshot 完整、同项目且 revision/hash 匹配，没有 pending continuity task
+- **THEN** completed Agent turn 可冻结该 snapshot 生成 `pending_review` Plan，AssetBible current/entry/assignment 均不改变
+
+#### Scenario:连续性变化时阻断 execute 或 accept
+- **WHEN** Plan 创建后 snapshot 变为 stale、foreign、hash/revision 不匹配，或 AssetBible owner 为 target 创建 pending `ContinuityRevisionTask`
+- **THEN** owner 返回稳定 continuity conflict 并要求显式解决任务后重建 Plan；不创建 Agent/Provider request、execution、Outbox、ProviderCall、Candidate、AcceptDecision、scenes current 或 Timeline mutation

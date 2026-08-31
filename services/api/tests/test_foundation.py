@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from video_agent_api.app import create_app
-from video_agent_api.db import check_database
+from video_agent_api.db import ReadinessRequirements, assess_readiness, check_database
 from video_agent_api.domain.schemas import RevisionUpdateCommand, WorkflowDraftBoundary
 from video_agent_api.domain.services import (
     ImmutableVersionError,
@@ -62,6 +62,82 @@ def test_domain_revision_state_and_immutable_versions() -> None:
             scope_ids=[],
             definition={"nodes": []},
         )
+
+
+def test_readiness_requires_all_runtime_prerequisites_not_only_select_one() -> None:
+    ready = assess_readiness(
+        ReadinessRequirements(
+            database=True,
+            migration_head=True,
+            catalog_bootstrap=True,
+            resource_probe=True,
+            capacity_probe=True,
+            queue=True,
+            workspace=True,
+            selected_capability="ready",
+        )
+    )
+    assert ready.status == "ready"
+
+    old_head = assess_readiness(
+        ReadinessRequirements(
+            database=True,
+            migration_head=False,
+            catalog_bootstrap=True,
+            resource_probe=True,
+            capacity_probe=True,
+            queue=True,
+            workspace=True,
+            selected_capability="ready",
+        )
+    )
+    assert old_head.status == "not_ready"
+    assert old_head.diagnostics == ("migration_head_unavailable",)
+
+    unconfigured = assess_readiness(
+        ReadinessRequirements(
+            database=True,
+            migration_head=True,
+            catalog_bootstrap=True,
+            resource_probe=True,
+            capacity_probe=True,
+            queue=True,
+            workspace=True,
+            selected_capability="unconfigured",
+        )
+    )
+    assert unconfigured.status == "unconfigured"
+    assert unconfigured.diagnostics == ("selected_capability_unconfigured",)
+
+    renderer_missing = assess_readiness(
+        ReadinessRequirements(
+            database=True,
+            migration_head=True,
+            catalog_bootstrap=True,
+            resource_probe=True,
+            capacity_probe=True,
+            queue=True,
+            workspace=True,
+            selected_capability="renderer_unconfigured",
+        )
+    )
+    assert renderer_missing.status == "renderer_unconfigured"
+    assert renderer_missing.diagnostics == ("renderer_unconfigured",)
+
+    renderer_unsupported = assess_readiness(
+        ReadinessRequirements(
+            database=True,
+            migration_head=True,
+            catalog_bootstrap=True,
+            resource_probe=True,
+            capacity_probe=True,
+            queue=True,
+            workspace=True,
+            selected_capability="renderer_capability_unsupported",
+        )
+    )
+    assert renderer_unsupported.status == "renderer_capability_unsupported"
+    assert renderer_unsupported.diagnostics == ("renderer_capability_unsupported",)
 
 
 def test_workflow_draft_boundary_consumes_the_contract_example() -> None:

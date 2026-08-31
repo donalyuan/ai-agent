@@ -27,7 +27,7 @@ from video_agent_api.domain.errors import RevisionConflictError
 
 API_ROOT = Path(__file__).parents[1]
 ASSET_BIBLE_MIGRATION = "0014_asset_bible_owner"
-CURRENT_HEAD = "0023_export_dispatch_owner"
+CURRENT_HEAD = "0029_lookup_binding"
 ACTOR_UUID = "00000000-0000-4000-8000-000000000701"
 ASSET_BIBLE_TABLES = {
     "asset_bibles",

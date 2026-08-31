@@ -13,11 +13,13 @@ from video_agent_api.application.asset_bible import (
     AssetBibleService,
     InitialEntrySpec,
 )
+from video_agent_api.application.runtime_composition import CatalogRuntimeComposition
 from video_agent_api.domain.creative import (
     CreativeBriefSourceBindingSnapshot,
     CreativeBriefVersion,
 )
 from video_agent_api.domain.errors import ProjectAccessForbiddenError, ValidationDomainError
+from video_agent_api.domain.provider_ops import ProviderCall
 from video_agent_api.domain.text_review import (
     CANONICAL_TEXT_KINDS,
     TEXT_KIND_ALLOWLIST,
@@ -27,6 +29,12 @@ from video_agent_api.domain.text_review import (
     TextReviewBatch,
 )
 from video_agent_api.ports.contracts import AdapterNotConfiguredError, ModelSelection, TextModelPort
+from video_agent_api.providers.text import OpenAICompatibleTextModelAdapter
+from video_agent_api.resilience import (
+    OperationsResilienceCoordinator,
+    admission_from_refs,
+    admission_refs,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +48,16 @@ class GenerateTextBatchCommand:
     requested_kinds: tuple[str, ...] = CANONICAL_TEXT_KINDS
     scope_ids: tuple[str, ...] = ("project",)
     correlation_id: str = "local-text"
+
+
+@dataclass(frozen=True, slots=True)
+class TextGenerationOperation:
+    """HTTP-visible command state before the Generation activity runs."""
+
+    id: str
+    run_id: str
+    logical_operation: str
+    status: str = "pending"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,11 +86,12 @@ class TextProviderCallRecorder(Protocol):
         model_id: str,
         capability_snapshot_id: str | None,
         request_fingerprint: str,
+        admission_refs: dict[str, object] | None = None,
     ) -> object: ...
 
     async def claim_text_provider_call(
         self, run_id: str, logical_operation: str
-    ) -> tuple[object, bool]: ...
+    ) -> tuple[ProviderCall, bool]: ...
 
     async def finalize_provider_call(
         self,
@@ -184,10 +203,166 @@ class TextGenerationService:
         uow_factory: Any,
         provider: TextModelPort | None = None,
         catalog: TextProviderCallRecorder | None = None,
+        *,
+        resilience: OperationsResilienceCoordinator | None = None,
+        live_composition: CatalogRuntimeComposition | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._provider = provider
         self._catalog = catalog
+        self._resilience = resilience
+        self._live_composition = live_composition
+
+    @staticmethod
+    def _enqueue_payload(command: GenerateTextBatchCommand) -> dict[str, object]:
+        brief = command.brief_snapshot
+        payload: dict[str, object] = {
+            "projectId": command.project_id,
+            "runId": command.run_id,
+            "briefRevision": command.brief_revision,
+            "selection": {
+                "providerId": command.selection.provider_id,
+                "profileId": command.selection.profile_id,
+                "modelId": command.selection.model_id,
+                "adapterKey": command.selection.adapter_key,
+                "defaultParameters": dict(command.selection.default_parameters),
+            },
+            "brief": {
+                "creativeBriefId": brief.creative_brief_id,
+                "projectId": brief.project_id,
+                "subject": brief.subject,
+                "genre": brief.genre,
+                "audience": brief.audience,
+                "characterPremise": brief.character_premise,
+                "style": brief.style,
+                "episodeDurationSeconds": brief.episode_duration_seconds,
+                "episodeCount": brief.episode_count,
+                "scenesPerEpisode": brief.scenes_per_episode,
+                "shotsPerScene": brief.shots_per_scene,
+                "revision": brief.revision,
+                "schemaVersion": brief.schema_version,
+                "payloadHash": brief.payload_hash,
+            },
+            "requestedKinds": list(command.requested_kinds),
+            "scopeIds": list(command.scope_ids),
+            "correlationId": command.correlation_id,
+        }
+        if command.source_binding_snapshot is not None:
+            source = command.source_binding_snapshot
+            payload["source"] = {
+                "projectId": source.project_id,
+                "sourceMaterialId": source.source_material_id,
+                "sourceMaterialRevision": source.source_material_revision,
+                "sourceContentHash": source.source_content_hash,
+                "creativeBriefId": source.creative_brief_id,
+                "creativeBriefRevision": source.creative_brief_revision,
+                "creativeBriefPayloadHash": source.creative_brief_payload_hash,
+                "parseStatus": source.parse_status,
+                "validationStatus": source.validation_status,
+                "bindingStatus": source.binding_status,
+                "bindingVersion": source.binding_version,
+                "schemaVersion": source.schema_version,
+            }
+        return payload
+
+    async def enqueue(self, command: GenerateTextBatchCommand) -> TextGenerationOperation:
+        """Persist a Generation command without invoking a provider or creating a call."""
+        if command.requested_kinds != CANONICAL_TEXT_KINDS:
+            raise ValidationDomainError("text generation requires the complete canonical graph")
+        if command.scope_ids != (command.project_id,):
+            raise ValidationDomainError("text generation scope is invalid")
+        payload = self._enqueue_payload(command)
+        request_fingerprint = _payload_hash(payload)
+        async with self._uow_factory() as uow:
+            run = uow.workflow_runs.get(command.run_id)
+            if run is None or run.project_id != command.project_id or run.status != "running":
+                raise ValidationDomainError("text generation requires a running Run")
+            node = next((item for item in run.nodes if item.node_key == "text.generate"), None)
+            if node is None or node.status != "running":
+                raise ValidationDomainError(
+                    "text generation requires the running text.generate NodeRun"
+                )
+            if node.execution_route != "generation":
+                raise ValidationDomainError("text generation NodeRun is frozen to legacy route")
+            event_id = hashlib.sha256(
+                f"text.generation.requested:{command.run_id}:{node.logical_operation}:{request_fingerprint}".encode()
+            ).hexdigest()
+            operation_id = hashlib.sha256(
+                f"text-generation:{command.run_id}:{node.logical_operation}".encode()
+            ).hexdigest()
+            if self._resilience is not None:
+                from video_agent_api.resilience import admission_from_refs, admission_refs
+
+                frozen = (
+                    admission_from_refs(node.admission_refs)
+                    if node.admission_refs is not None
+                    else self._resilience.freeze(
+                        command.project_id,
+                        "text.generate",
+                        f"{command.run_id}:{node.logical_operation}",
+                    )
+                )
+                admitted = self._resilience.revalidate(frozen)
+                if not admitted.allowed:
+                    raise ValidationDomainError(
+                        admitted.diagnostic or "text_resource_admission_blocked"
+                    )
+                node.admission_refs = admission_refs(admitted)
+                node.operation_snapshot = {
+                    **(node.operation_snapshot or {}),
+                    "resource": node.admission_refs,
+                    "capacity": node.admission_refs,
+                }
+            for event in uow.outbox_events:
+                if event.get("eventId") == event_id:
+                    return TextGenerationOperation(
+                        operation_id, command.run_id, node.logical_operation
+                    )
+            uow.outbox_events.append(
+                {
+                    "type": "text.generation.requested",
+                    "eventId": event_id,
+                    "status": "pending",
+                    "projectId": command.project_id,
+                    "runId": command.run_id,
+                    "logicalOperation": node.logical_operation,
+                    "nodeRunId": node.id,
+                    "nodeRevision": node.revision,
+                    "requestFingerprint": request_fingerprint,
+                    "executionRoute": "generation",
+                    "workflowType": "text-generation",
+                    "taskQueue": "generation-tasks",
+                    "schemaVersion": "1.0.0",
+                    "command": payload,
+                    "resourceAdmission": node.admission_refs,
+                }
+            )
+            await uow.commit()
+        return TextGenerationOperation(operation_id, command.run_id, node.logical_operation)
+
+    async def _resolve_provider(
+        self,
+        command: GenerateTextBatchCommand,
+        capability_snapshot_id: str | None,
+        capability_revision: int | None,
+        profile_revision: int | None,
+    ) -> tuple[TextModelPort, ModelSelection]:
+        if self._live_composition is None:
+            if self._provider is None:
+                raise AdapterNotConfiguredError("agentscope_text_runtime_unconfigured")
+            return self._provider, command.selection
+        composed = await self._live_composition.resolve_provider(
+            command.selection.profile_id,
+            command.selection.model_id,
+            "text.generate",
+            project_id=command.project_id,
+            expected_profile_revision=profile_revision,
+            expected_capability_snapshot_id=capability_snapshot_id,
+            expected_capability_revision=capability_revision,
+        )
+        if not isinstance(composed.port, OpenAICompatibleTextModelAdapter):
+            raise ValidationDomainError("text live provider adapter is incompatible")
+        return composed.port, composed.identity.selection(command.selection.default_parameters)
 
     async def generate(self, command: GenerateTextBatchCommand) -> TextReviewBatch:
         if not command.requested_kinds or any(
@@ -201,8 +376,11 @@ class TextGenerationService:
         if not command.project_id or not command.run_id or command.brief_revision < 1:
             raise ValidationDomainError("text generation owner snapshot is invalid")
         capability_snapshot_id: str | None = None
+        capability_revision: int | None = None
+        profile_revision: int | None = None
         text_node_id = ""
         text_logical_operation = ""
+        frozen_admission_refs: dict[str, object] | None = None
         async with self._uow_factory() as uow:
             project = await uow.projects.get(command.project_id)
             run = uow.workflow_runs.get(command.run_id)
@@ -218,10 +396,28 @@ class TextGenerationService:
             _validate_run_selection(uow, run.selection_snapshot, command.selection)
             text_node_id = text_nodes[0].id
             text_logical_operation = text_nodes[0].logical_operation
-            raw_capability_id = run.selection_snapshot.get("capabilitySnapshotId")
-            capability_snapshot_id = (
-                raw_capability_id if isinstance(raw_capability_id, str) else None
+            frozen_capabilities = run.selection_snapshot.get("capabilitySnapshots")
+            frozen_capability = (
+                frozen_capabilities.get("text.generate")
+                if isinstance(frozen_capabilities, dict)
+                else None
             )
+            if not isinstance(frozen_capability, dict):
+                raise ValidationDomainError("text generation capability snapshot is invalid")
+            raw_capability_id = frozen_capability.get("id")
+            raw_capability_revision = frozen_capability.get("revision")
+            raw_profile_revision = run.selection_snapshot.get("profileRevision")
+            if (
+                not isinstance(raw_capability_id, str)
+                or isinstance(raw_capability_revision, bool)
+                or not isinstance(raw_capability_revision, int)
+                or isinstance(raw_profile_revision, bool)
+                or not isinstance(raw_profile_revision, int)
+            ):
+                raise ValidationDomainError("text generation frozen catalog identity is invalid")
+            capability_snapshot_id = raw_capability_id
+            capability_revision = raw_capability_revision
+            profile_revision = raw_profile_revision
             current_brief = getattr(project, "creative_brief_current", None) or (
                 uow.creative_brief_current.get(command.project_id)
             )
@@ -275,8 +471,39 @@ class TextGenerationService:
                 ),
                 None,
             )
-        if self._provider is None and existing_batch is None:
-            raise AdapterNotConfiguredError("agentscope_text_runtime_unconfigured")
+            if self._resilience is not None and existing_batch is None:
+                node = text_nodes[0]
+                try:
+                    if node.admission_refs is None:
+                        # A Generation-route activity consumes an owner intent; it
+                        # cannot invent a replacement admission after restart.
+                        if node.execution_route == "generation":
+                            raise ValidationDomainError("text_resource_admission_missing")
+                        frozen = self._resilience.freeze(
+                            command.project_id,
+                            "text.generate",
+                            f"{command.run_id}:{node.logical_operation}",
+                        )
+                    else:
+                        frozen = admission_from_refs(node.admission_refs)
+                except (KeyError, TypeError, ValueError) as error:
+                    raise ValidationDomainError("text_resource_admission_invalid") from error
+                admission = self._resilience.revalidate(frozen)
+                if not admission.allowed:
+                    raise ValidationDomainError(
+                        admission.diagnostic or "text_resource_admission_blocked"
+                    )
+                if node.admission_refs is None:
+                    node.admission_refs = admission_refs(admission)
+                    node.revision += 1
+                    await uow.commit()
+                frozen_admission_refs = dict(node.admission_refs)
+        provider: TextModelPort | None = None
+        resolved_selection = command.selection
+        if existing_batch is None:
+            provider, resolved_selection = await self._resolve_provider(
+                command, capability_snapshot_id, capability_revision, profile_revision
+            )
         provider_prompt = {
             "projectId": command.project_id,
             "runId": command.run_id,
@@ -300,6 +527,7 @@ class TextGenerationService:
                 model_id=command.selection.model_id,
                 request_fingerprint=request_fingerprint,
                 capability_snapshot_id=capability_snapshot_id,
+                admission_refs=frozen_admission_refs,
             )
             if existing_batch is not None:
                 await self._catalog.finalize_provider_call(
@@ -308,27 +536,36 @@ class TextGenerationService:
                     status="succeeded",
                     provider_request_id=_batch_provider_request_id(existing_batch),
                 )
-                return existing_batch
-            _call, acquired = await self._catalog.claim_text_provider_call(
+                return cast(TextReviewBatch, existing_batch)
+            call, acquired = await self._catalog.claim_text_provider_call(
                 command.run_id, text_logical_operation
             )
             if not acquired:
                 raise ValidationDomainError("text provider operation requires reconciliation")
         elif existing_batch is not None:
-            return existing_batch
-        assert self._provider is not None
+            return cast(TextReviewBatch, existing_batch)
+        assert provider is not None
+        provider_correlation = (
+            call.outbound_correlation if self._catalog is not None else command.correlation_id
+        )
+        if not provider_correlation:
+            raise ValidationDomainError("text provider correlation is unavailable")
         result = None
         try:
-            result = self._provider.generate_text(prompt, command.selection, command.correlation_id)
+            result = provider.generate_text(prompt, resolved_selection, provider_correlation)
             candidates = _candidate_graph_from_provider(
                 command, result.request_id, result.payload.get("payload")
             )
         except Exception as error:
             if self._catalog is not None:
+                # A transport exception has no reliable remote terminal result.
+                # Preserve the owner ledger as unknown so restart handling can
+                # reconcile its frozen correlation instead of submitting again.
+                terminal_status = "unknown" if result is None else "failed"
                 await self._catalog.finalize_provider_call(
                     command.run_id,
                     text_logical_operation,
-                    status="failed",
+                    status=terminal_status,
                     failure_code=type(error).__name__,
                     provider_request_id=result.request_id if result is not None else None,
                 )
@@ -359,7 +596,7 @@ class TextGenerationService:
                 None,
             )
             if existing is not None:
-                return existing
+                return cast(TextReviewBatch, existing)
             uow.text_review_batches[batch.id] = batch
             for candidate in candidates:
                 uow.text_candidates[candidate.id] = candidate
@@ -430,7 +667,7 @@ class TextGenerationService:
                 {"type": f"text.batch.{decided.status}", "batchId": decided.id}
             )
             await uow.commit()
-            return decided
+            return cast(TextReviewBatch, decided)
 
     async def get_batch(
         self, batch_id: str, *, project_scope: str | None = None
@@ -441,7 +678,7 @@ class TextGenerationService:
                 raise ValidationDomainError("text review batch not found")
             if project_scope is not None and batch.project_id != project_scope:
                 raise ProjectAccessForbiddenError(project_scope)
-            return batch
+            return cast(TextReviewBatch, batch)
 
     async def list_batches(self, project_id: str) -> list[TextReviewBatch]:
         async with self._uow_factory() as uow:
@@ -472,7 +709,7 @@ class TextGenerationService:
             if existing is not None:
                 if existing.fingerprint != fingerprint:
                     raise ValidationDomainError("text owner ack fingerprint conflict")
-                return existing
+                return cast(TextOwnerHandoffAck, existing)
             ack = TextOwnerHandoffAck(
                 handoff.id, owner, owner_revision, fingerprint, correlation_id
             )

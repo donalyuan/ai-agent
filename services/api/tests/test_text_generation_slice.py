@@ -38,6 +38,11 @@ from video_agent_api.domain.text_review import StructuredTextCandidate
 from video_agent_api.ports.contracts import ModelSelection, PortResult
 from video_agent_api.ports.mocks import DeterministicMockProvider, build_mock_text_output
 from video_agent_api.providers.text import OpenAICompatibleTextModelAdapter
+from video_agent_api.resilience import (
+    OperationsResilienceCoordinator,
+    RuntimeResourceSnapshot,
+    capacity_snapshot,
+)
 
 
 @dataclass
@@ -90,6 +95,32 @@ class UsageTextProvider:
                 "payload": build_mock_text_output(prompt),
                 "usage": {"input_tokens": 11, "output_tokens": 22, "prompt": "secret"},
             },
+        )
+
+
+@dataclass
+class AmbiguousTextProvider:
+    calls: int = 0
+
+    def generate_text(
+        self, prompt: str, selection: ModelSelection, correlation_id: str
+    ) -> PortResult:
+        del prompt, selection, correlation_id
+        self.calls += 1
+        raise RuntimeError("response lost after submit")
+
+
+@dataclass
+class CorrelatedTextProvider:
+    correlation_ids: list[str]
+
+    def generate_text(
+        self, prompt: str, selection: ModelSelection, correlation_id: str
+    ) -> PortResult:
+        del selection
+        self.correlation_ids.append(correlation_id)
+        return PortResult(
+            "correlated-request", correlation_id, {"payload": build_mock_text_output(prompt)}
         )
 
 
@@ -217,6 +248,47 @@ async def test_output_allowlist_and_owner_scope_fail_before_provider() -> None:
                 scope_ids=(project.id,),
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_text_resource_admission_rejects_before_provider_call() -> None:
+    uow, _projects, _service, project_id, run_id, brief = await _text_context()
+    provider = CountingTextProvider()
+    unavailable = RuntimeResourceSnapshot(
+        cpu_count=4,
+        available_concurrency=4,
+        memory_available_bytes=1024,
+        memory_limit_bytes=2048,
+        disk_free_bytes=None,
+        disk_total_bytes=None,
+        captured_at="2026-08-26T00:00:00+00:00",
+        error="resource probe unavailable",
+    )
+    service = TextGenerationService(
+        lambda: uow,
+        provider,
+        CatalogService(lambda: uow),
+        resilience=OperationsResilienceCoordinator(
+            unavailable,
+            capacity_snapshot(unavailable, project_id),
+        ),
+    )
+
+    with pytest.raises(ValidationDomainError, match="resource_probe_unavailable"):
+        await service.generate(
+            GenerateTextBatchCommand(
+                project_id,
+                run_id,
+                brief.revision,
+                _model_selection(uow),
+                brief,
+                scope_ids=(project_id,),
+            )
+        )
+
+    assert provider.calls == 0
+    assert uow.provider_calls == {}
+    assert uow.text_review_batches == {}
     assert provider.calls == 0
     assert uow.text_candidates == {}
     assert uow.text_review_batches == {}
@@ -268,6 +340,51 @@ async def test_text_generation_records_success_and_sanitized_usage() -> None:
     assert call.provider_request_id == "usage-request"
     assert call.native_usage == {"input_tokens": 11, "output_tokens": 22}
     assert call.capability_snapshot_id is not None
+
+
+async def test_text_generation_transport_ambiguity_stays_unknown_without_candidates() -> None:
+    uow, _projects, _service, project_id, run_id, brief = await _text_context()
+    provider = AmbiguousTextProvider()
+    service = TextGenerationService(lambda: uow, provider, CatalogService(lambda: uow))
+
+    with pytest.raises(RuntimeError, match="response lost"):
+        await service.generate(
+            GenerateTextBatchCommand(
+                project_id,
+                run_id,
+                brief.revision,
+                _model_selection(uow),
+                brief,
+                scope_ids=(project_id,),
+            )
+        )
+
+    call = next(iter(uow.provider_calls.values()))
+    assert provider.calls == 1
+    assert call.status == "unknown"
+    assert uow.text_review_batches == {}
+    assert uow.text_candidates == {}
+
+
+async def test_text_generation_submit_uses_frozen_provider_call_correlation() -> None:
+    uow, _projects, _service, project_id, run_id, brief = await _text_context()
+    provider = CorrelatedTextProvider([])
+    service = TextGenerationService(lambda: uow, provider, CatalogService(lambda: uow))
+    command = GenerateTextBatchCommand(
+        project_id,
+        run_id,
+        brief.revision,
+        _model_selection(uow),
+        brief,
+        scope_ids=(project_id,),
+        correlation_id="caller-controlled-correlation",
+    )
+
+    await service.generate(command)
+
+    call = next(iter(uow.provider_calls.values()))
+    assert provider.correlation_ids == [call.outbound_correlation]
+    assert call.outbound_correlation != command.correlation_id
 
 
 async def test_text_generation_retry_finalizes_existing_batch_without_resubmission() -> None:
@@ -885,7 +1002,7 @@ def test_skill_route_http_requires_explicit_current_selection() -> None:
     assert uow.provider_calls == {}
 
 
-def test_openai_compatible_text_adapter_retries_only_retryable_failures() -> None:
+def test_openai_compatible_text_adapter_does_not_repeat_ambiguous_submit() -> None:
     calls: list[int] = []
 
     def retry_then_success(request: httpx.Request) -> httpx.Response:
@@ -910,9 +1027,9 @@ def test_openai_compatible_text_adapter_retries_only_retryable_failures() -> Non
         max_retries=2,
         transport=httpx.MockTransport(retry_then_success),
     )
-    result = adapter.generate_text("prompt", selection, "correlation")
-    assert result.request_id == "request-2"
-    assert calls == [1, 2]
+    with pytest.raises(httpx.HTTPStatusError):
+        adapter.generate_text("prompt", selection, "correlation")
+    assert calls == [1]
 
     non_retry_calls = 0
 

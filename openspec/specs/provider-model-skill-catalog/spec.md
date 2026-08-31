@@ -166,3 +166,16 @@ Model delete command SHALL 在 mutation 前查询 CapabilitySnapshot、ProviderC
 #### Scenario:拒绝删除已被引用的模型
 - **WHEN** 用户删除存在历史引用或 reference proof unavailable 的 Model
 - **THEN** owner 返回 `model_in_use`/`reference_proof_unavailable` 和 disable action，Model 及全部历史引用保持可读，零默认值或 snapshot 覆盖
+
+### Requirement:八项 Skill Registry 与 runnable feature gate
+系统 SHALL 为 `drama-skills`、`novel-writing`、`zy-cinematic-realism`、`seedance-2.0`、`storyboard-tiktok-video-skill`、`hell-grind/cinedance-higgsfield`、`hell-grind/acting`、`hell-grind/lira` 保存 provenance、approval、enabled。`drama-skills` 与 `novel-writing` SHALL 为 `provenance=verified_snapshot`、`approval=approved`、`enabled=true`；其他六项 SHALL 为 `provenance=pending_provenance`、`approval=not_approved`、`enabled=false`。`drama-mvp-a-default` SHALL 只绑定前两项 approved revision；后六项 MUST NOT 成为 Worker 启动或默认 Run 前置，只有 node `allowedSkills`、`requiredCapabilities` 与 `selectionMode=fixed|inherit` 都满足时才可按需读取。
+
+每个 Provider/Profile/Model operation SHALL 保存 `adapterInstalled`、catalog `approval`、`operationCapabilitySnapshot`、`runnable`、`featureGate`。首次显式 connection-test/probe 必须具备已安装 adapter、`approval=approved`、`featureGate=MVP-A`、用户 explicit live opt-in、已选 profile、可解析 credential 和显式 timeout，但 MUST NOT 要求既有 snapshot 或 `runnable=true`，也 MUST NOT 因 disabled-for-run 被拒绝；成功时 SHALL 冻结 successfully probed `operationCapabilitySnapshot`。snapshot 缺失、`runnable=false` 与 disabled-for-run 仅阻断 enable/default、Run resolve 和 live operation invocation；后者仅可用于同时满足 installed、approved、successfully probed snapshot、`runnable=true`、`featureGate=MVP-A` 的 operation。MVP-B candidate、uninstalled、not-approved 或缺 explicit live opt-in/profile/credential/timeout 的 operation MUST 零 probe/外部调用；TTS/ASR、MiniMax H3、Seedance 2.5 和 Agnes 未选中 mode SHALL `runnable=false`。默认测试组合 MUST 使用 `Mock Provider +` 显式 Local test/offline profile（adapter identity=`local_workspace`），并保持 explicit live opt-in；运行开始后 Adapter/Profile MUST 冻结。
+
+#### Scenario:首次 probe 不由完整 runnable gate 拒绝
+- **WHEN** 用户对已安装、approved、`featureGate=MVP-A` 的 candidate 以 explicit live opt-in、已选 profile、可解析 credential 和 timeout 发起首次 connection-test/probe，且尚无 snapshot 或 `runnable=false`
+- **THEN** 系统仅执行该显式 probe；成功后冻结 successfully probed snapshot，不启用/default/Run resolve，失败保留原始诊断且不产生任何其他外部调用
+
+#### Scenario:拒绝不具备首次 probe 前置或完整 runnable action 的 operation
+- **WHEN** Worker 或设置命令对 uninstalled/not-approved/MVP-B candidate、或缺 explicit live opt-in/profile/credential/timeout 的 operation 请求首次 probe，或对 snapshot-missing/`runnable=false`/disabled-for-run 的 operation 执行 enable/default/Run resolve/live invocation
+- **THEN** 系统保留 catalog 状态并返回 validation/unconfigured；前一类不发起 connection-test 或外部调用，后一类不 resolve 或 invoke，且均不读取非允许 Skill

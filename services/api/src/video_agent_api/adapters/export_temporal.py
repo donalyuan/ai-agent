@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from temporalio import activity, workflow
 from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
@@ -87,13 +87,16 @@ async def episode_export_execute(payload: dict[str, object]) -> dict[str, object
     project_id = _required(payload, "projectId")
     job_id = _required(payload, "jobId")
     try:
-        return await _episode_export_worker.execute(
-            ExecuteExportJobCommand(
-                project_id=project_id,
-                job_id=job_id,
-                workspace=_episode_export_workspace_root / job_id,
-                correlation_id=activity.info().activity_id,
-            )
+        return cast(
+            dict[str, object],
+            await _episode_export_worker.execute(
+                ExecuteExportJobCommand(
+                    project_id=project_id,
+                    job_id=job_id,
+                    workspace=_episode_export_workspace_root / job_id,
+                    correlation_id=activity.info().activity_id,
+                )
+            ),
         )
     except StorageRetryableError:
         raise

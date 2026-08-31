@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +13,12 @@ from video_agent_api.application.assets import AssetsService
 from video_agent_api.application.projects_episodes import ProjectsEpisodesService
 from video_agent_api.domain.media import MediaDerivative, MediaInspection, source_fingerprint
 from video_agent_api.ports.storage import StorageProfile
+from video_agent_api.resilience import (
+    OperationsResilienceCoordinator,
+    RuntimeResourceSnapshot,
+    capacity_snapshot,
+)
+from video_agent_api.runtime import RuntimeSettings
 
 CONTENT = b"abc"
 HASH = hashlib.sha256(CONTENT).hexdigest()
@@ -249,6 +256,15 @@ def test_reservation_register_is_idempotent_and_public_responses_are_safe() -> N
     assert first.status_code == second.status_code == 201
     assert first.json()["id"] == second.json()["id"]
     assert len(uow.state.asset_versions) == 1
+    media_events = [
+        event
+        for event in uow.state.outbox_events
+        if event.get("type") == "media.dispatch.requested"
+    ]
+    assert len(media_events) == 1
+    assert media_events[0]["operation"] == "pipeline"
+    assert media_events[0]["discriminator"] == "uploaded_source"
+    assert media_events[0]["assetVersionId"] == first.json()["id"]
     for response in (first, second, client.get(f"/v1/assets/{asset['id']}/versions")):
         assert "objectKey" not in response.text
         assert "workspace://" not in response.text
@@ -604,6 +620,99 @@ def test_upload_admission_resolves_profile_and_rejects_invalid_snapshot_before_w
         response = client.post(path, json={**payload, "storageProfileId": profile_id})
         assert response.status_code == 422, response.text
         assert len(uow.state.asset_reservations) == before
+
+
+def test_upload_resource_admission_rejects_before_reservation_or_outbox() -> None:
+    uow = InMemoryUnitOfWork()
+    unavailable = RuntimeResourceSnapshot(
+        cpu_count=4,
+        available_concurrency=4,
+        memory_available_bytes=1024,
+        memory_limit_bytes=2048,
+        disk_free_bytes=None,
+        disk_total_bytes=None,
+        captured_at="2026-08-26T00:00:00+00:00",
+        error="resource probe unavailable",
+    )
+    assets = AssetsService(
+        lambda: uow,
+        resilience_factory=lambda scope: OperationsResilienceCoordinator(
+            unavailable, capacity_snapshot(unavailable, scope)
+        ),
+    )
+    client = TestClient(
+        create_app(
+            readiness_probe=lambda: True,
+            projects_episodes_service=ProjectsEpisodesService(lambda: uow),
+            assets_service=assets,
+        )
+    )
+    project = client.post("/v1/projects", json={"name": "Blocked upload"}).json()
+    client.headers["X-Project-Scope"] = str(project["id"])
+    asset = _create_asset(client, project["id"])
+    path = f"/v1/projects/{project['id']}/assets/{asset['id']}/reservations"
+    before = (len(uow.state.asset_reservations), len(uow.outbox_events))
+
+    response = client.post(path, json=_reservation_payload(client, project["id"], asset))
+
+    assert response.status_code == 422
+    assert "resource_probe_unavailable" in response.text
+    assert (len(uow.state.asset_reservations), len(uow.outbox_events)) == before
+
+
+def test_upload_restart_revalidates_frozen_admission_before_multipart_side_effect(
+    tmp_path: Path,
+) -> None:
+    uow = InMemoryUnitOfWork()
+    healthy = RuntimeResourceSnapshot(
+        cpu_count=4,
+        available_concurrency=4,
+        memory_available_bytes=2048,
+        memory_limit_bytes=4096,
+        disk_free_bytes=8 * 1024 * 1024,
+        disk_total_bytes=16 * 1024 * 1024,
+        captured_at="2026-08-26T00:00:00+00:00",
+    )
+    assets = AssetsService(
+        lambda: uow,
+        resilience_factory=lambda scope: OperationsResilienceCoordinator(
+            healthy, capacity_snapshot(healthy, scope)
+        ),
+    )
+    app = create_app(
+        readiness_probe=lambda: True,
+        settings=RuntimeSettings("mock", "local_workspace", tmp_path),
+        projects_episodes_service=ProjectsEpisodesService(lambda: uow),
+        assets_service=assets,
+    )
+    client = TestClient(app)
+    project = client.post("/v1/projects", json={"name": "Restart upload"}).json()
+    client.headers["X-Project-Scope"] = str(project["id"])
+    asset = _create_asset(client, project["id"])
+    path = f"/v1/projects/{project['id']}/assets/{asset['id']}/reservations"
+    created = client.post(path, json=_reservation_payload(client, project["id"], asset))
+    assert created.status_code == 201, created.text
+    reservation = created.json()
+    assert uow.state.asset_reservations[reservation["id"]].admission_refs
+
+    changed = replace(healthy, revision=2)
+    app.state.assets_service = AssetsService(
+        lambda: uow,
+        resilience_factory=lambda scope: OperationsResilienceCoordinator(
+            changed, capacity_snapshot(changed, scope)
+        ),
+    )
+    sessions_before = list((tmp_path / ".multipart").glob("*/session.json"))
+    versions_before = len(uow.state.asset_versions)
+    response = client.post(
+        f"/v1/projects/{project['id']}/asset-reservations/{reservation['id']}/uploads/resume",
+        json={"correlationId": "restart", "schemaVersion": SCHEMA},
+    )
+
+    assert response.status_code == 422
+    assert "resource_snapshot_stale" in response.text
+    assert list((tmp_path / ".multipart").glob("*/session.json")) == sessions_before
+    assert len(uow.state.asset_versions) == versions_before
 
 
 @pytest.mark.parametrize("foreign", ["foreign-project", "missing"])

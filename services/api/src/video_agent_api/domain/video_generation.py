@@ -34,6 +34,9 @@ class VideoOperation:
         "pending", "submitted", "running", "submission_unknown", "succeeded", "failed", "cancelled"
     ] = "pending"
     provider_request_id: str | None = None
+    outbound_correlation: str | None = None
+    lookup_outcome: str = "not_attempted"
+    admission_refs: dict[str, object] | None = None
     revision: int = 1
     id: str = field(default_factory=lambda: str(uuid4()))
     cancel_requested: bool = False
@@ -43,6 +46,12 @@ class VideoOperation:
     observation_fingerprints: tuple[str, ...] = ()
     source_candidate_id: str | None = None
     source_provenance: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in VIDEO_STATES:
+            raise ValidationDomainError("video operation state is invalid")
+        if not self.project_id or not self.run_id or not self.logical_operation:
+            raise ValidationDomainError("video operation identity is incomplete")
 
     def transition(self, target: str) -> None:
         if target not in VIDEO_STATES:

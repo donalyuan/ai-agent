@@ -23,6 +23,7 @@ from video_agent_api.domain.exports import (
 )
 from video_agent_api.ports.contracts import ExportDownloadGrantPort, StoredObjectRef
 from video_agent_api.ports.rendering import FfmpegRenderPort
+from video_agent_api.resilience import OperationsResilienceCoordinator, admission_refs
 
 
 class ExportService:
@@ -32,11 +33,34 @@ class ExportService:
         renderer: FfmpegRenderPort,
         download_grants: ExportDownloadGrantPort | None = None,
         storage: Any | None = None,
+        resilience: OperationsResilienceCoordinator | None = None,
+        renderer_identity: dict[str, object] | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._renderer = renderer
         self._download_grants = download_grants
         self._storage = storage
+        self._resilience = resilience
+        # Test renderers may omit identity; production subprocess renderers must
+        # receive the complete composed identity and never get a fabricated one.
+        if renderer_identity is not None:
+            self._renderer_identity = dict(renderer_identity)
+        elif renderer.__class__.__name__ == "MockFfmpegRenderAdapter":
+            self._renderer_identity = {
+                "profileId": "local-test-renderer",
+                "profileRevision": 1,
+                "capabilitySnapshotId": "local-test-capability",
+                "capabilityRevision": 1,
+            }
+        else:
+            self._renderer_identity = {}
+
+    def configure_renderer(
+        self, renderer: FfmpegRenderPort, renderer_identity: dict[str, object]
+    ) -> None:
+        """Install a renderer only after its durable catalog identity was resolved."""
+        self._renderer = renderer
+        self._renderer_identity = dict(renderer_identity)
 
     async def probe_renderer(self, project_id: str) -> dict[str, object]:
         async with self._uow_factory() as uow:
@@ -63,6 +87,21 @@ class ExportService:
             raise ValidationDomainError("export storage is unconfigured")
         if not storage_profile_id or storage_profile_revision is None:
             raise ValidationDomainError("export StorageProfile selection is required")
+        frozen_admissions: dict[tuple[str, str], dict[str, object]] = {}
+        if self._resilience is not None:
+            for selection in parsed:
+                operation_key = (
+                    f"export:{project_id}:{idempotency_key}:{selection.episode_id}:"
+                    f"{selection.timeline_version_id}"
+                )
+                admission = self._resilience.freeze(project_id, "export.render", operation_key)
+                if not admission.allowed:
+                    raise ValidationDomainError(
+                        admission.diagnostic or "export_resource_admission_blocked"
+                    )
+                frozen_admissions[(selection.episode_id, selection.timeline_version_id)] = (
+                    admission_refs(admission)
+                )
         # Renderer capability is a prerequisite, never a post-submit background surprise.
         renderer_capability = self._renderer.probe()
         async with self._uow_factory() as uow:
@@ -107,6 +146,9 @@ class ExportService:
                     storage_profile_id,
                     storage_profile_revision,
                     renderer_capability,
+                    frozen_admissions.get(
+                        (selection.episode_id, selection.timeline_version_id), {}
+                    ),
                 )
                 prepared.append((selection, snapshot))
 
@@ -360,6 +402,7 @@ class ExportService:
         storage_profile_id: str,
         storage_profile_revision: int,
         renderer_capability: Any,
+        frozen_admission_refs: dict[str, object],
     ) -> ExportExecutionSnapshot:
         storage = self._storage
         if storage is None:
@@ -373,6 +416,10 @@ class ExportService:
                 "profileId": storage_profile_id,
                 "projectId": project_id,
                 "revision": storage_profile_revision,
+                "bucket": "workspace",
+                "endpoint": "workspace://local",
+                "region": "local",
+                "bucketBindingId": "local-workspace",
             }
         else:
             profile = uow.storage_profiles.get(storage_profile_id)
@@ -392,6 +439,9 @@ class ExportService:
                 "projectId": profile.project_id,
                 "revision": profile.revision,
                 "bucketBindingId": profile.bucket_binding_id,
+                "bucket": profile.bucket,
+                "endpoint": profile.endpoint,
+                "region": profile.region,
                 "credentialRef": profile.credential_ref,
             }
         capability_payload = {
@@ -412,6 +462,15 @@ class ExportService:
             "yuv420p": renderer_capability.yuv420p,
             "mp4Muxer": renderer_capability.mp4_muxer,
             "mp4Demuxer": renderer_capability.mp4_demuxer,
+        }
+        renderer_base = {
+            key: value
+            for key, value in self._renderer_identity.items()
+            if key not in {"snapshotId", "capability"}
+        }
+        renderer_identity = {
+            **renderer_base,
+            "snapshotId": _payload_hash({**renderer_base, "capability": renderer_payload}),
         }
 
         inputs: list[ExportInputSnapshot] = []
@@ -625,10 +684,12 @@ class ExportService:
             profile_payload,
             profile_hash,
             capability_payload,
+            renderer_identity,
             renderer_payload,
             plan.canonical_payload(),
             tuple(inputs),
             audit_facts,
+            admission_refs=dict(frozen_admission_refs),
         )
 
     async def diagnostic(self, target: ExportDiagnosticTarget) -> dict[str, object]:

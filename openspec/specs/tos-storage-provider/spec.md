@@ -150,3 +150,39 @@ GPT Image、Agnes 和 FFmpeg/timeline SHALL 只通过 StoragePort 的 workspace/
 #### Scenario:reject invalid verification or stale binding
 - **WHEN** MIME/size/checksum/authorization 校验失败，或 AssetVersion reservation/SourceMaterial revision foreign/stale/conflict
 - **THEN** 返回 `media_validation_failed`、scope/`asset_registration_conflict` 或 binding conflict，零后续 binding/paid Run 写入；已登记但无法绑定的版本保持可审计且不得隐式换源
+
+### Requirement:Audio upload handoff boundary
+系统 SHALL 将 Local/TOS upload 完成后的 verified `StoredObjectRef` 交给 Assets owner append audio AssetVersion；Storage MUST 不创建 AssetVersion、Timeline Clip 或 SoundCue。任一 upload/verify/authorization/license failure MUST 返回诊断，且不产生 cue/clip 或伪成功。
+
+#### Scenario:hand off verified background music
+- **WHEN** 用户的 project-scoped audio upload 完成校验
+- **THEN** storage 只返回 verified StoredObjectRef，后续 Assets append 和用户选择仍为独立明确步骤
+
+### Requirement:Operations resilience ownership boundary
+系统 SHALL 将磁盘 soft/hard threshold、全局 admission、Worker/API capacity diagnostics、手工 backup/restore runbook 与 checksum/ETag restore drill 归 `implement-operations-resilience`；TOS adapter 只返回 transport/object metadata facts，不拥有跨系统策略。
+
+#### Scenario:reject capacity or restore policy in TOS adapter
+- **WHEN** TOS adapter 试图依据磁盘阈值拒绝 upload/generation/export、自动执行跨系统 backup/restore，或在数据库 manifest 未由 resilience coordinator 验证时报告恢复成功
+- **THEN** architecture/contract test 失败，adapter 只保留原始 transport facts，且不创建 intent、ProviderCall、UploadSession、ExportJob、AssetVersion 或成功恢复状态
+
+### Requirement:2 GiB 素材链路验收
+系统 SHALL 将 `2_147_483_648` bytes 作为阶段一实际媒体上传链路的验收样本下限，而非平台最大值。创建 UploadSession 前 MUST 读取冻结 StorageProfile multipart/object-size capability 和 operations-resilience capacity admission。支持时 SHALL 对不入库源码仓库的有效媒体 fixture 完成 streaming multipart、至少一次中断恢复、complete/stat/size/SHA-256/ETag/MIME verification、单一 AssetVersion registration 和 Media Worker inspection/proxy；默认快速测试可用逻辑 size/manifest fake，但不得替代阶段退出的一次 actual-byte evidence。
+
+#### Scenario:完成实际 2 GiB 可恢复媒体链路
+- **WHEN** explicit Local/TOS test profile 支持该大小且容量 admission 通过，上传在至少一个 part 后中断并重启恢复
+- **THEN** 系统复用同一 reservation/session/operation，验证完整对象，只登记一个 AssetVersion 并生成匹配 source fingerprint 的 inspection/proxy evidence；报告记录 actual bytes、part manifest、checksum 和 profile capability revision
+
+#### Scenario:大小或空间不支持时前置拒绝
+- **WHEN** profile object/part limit、part count 或本地可用容量无法支持 2 GiB fixture
+- **THEN** 系统在创建 UploadSession、part 或 workspace file 前返回 `storage_object_size_unsupported` 或 resource admission diagnostic，不截断、拆分为多个版本、切换 adapter 或报告链路通过
+
+### Requirement:ExportArtifact storage handoff
+Timeline/export owner SHALL 为 MP4、SRT 和 light 分别提供稳定 export operation key、job/artifact identity、StorageProfile revision、declared MIME/size/checksum。StoragePort MUST 执行 upload/reconcile/stat/verification 并只返回 verified StoredObjectRef；Timeline/export owner 才可 append ExportArtifact 和推进 ExportJob。unknown/retry MUST 复用相同 key/fingerprint，MUST NOT 重新渲染、创建第二对象/Artifact、推进伪成功或 fallback。
+
+#### Scenario:上传并交接导出产物
+- **WHEN** export owner 为已渲染产物提交合法 intent，Storage 完成上传和 stat/checksum/MIME/size 验证
+- **THEN** Storage 返回同一 verified object fact，export owner 可登记一个对应 Artifact；Storage 本身不写 ExportJob/Artifact/RunEvent
+
+#### Scenario:导出上传未知时先 reconcile
+- **WHEN** upload complete 响应丢失、timeout 或 worker 重启
+- **THEN** Storage 以相同 operation/session/fingerprint 查询并返回既有结果或 unknown diagnostic，不重复 upload/object、不要求 rerender、不切换 profile

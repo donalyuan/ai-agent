@@ -82,6 +82,33 @@ class CapabilitySnapshot:
     retention_version: str = "1"
     hold: bool = False
 
+    def protocol(self, prefix: str) -> str | None:
+        """Return a provider-specific protocol value frozen in the snapshot.
+
+        Capability names are intentionally opaque to the catalog.  The small
+        ``key:value`` convention lets an adapter opt into a documented header
+        or lookup protocol without assuming that every provider speaks the
+        same wire contract.
+        """
+        marker = f"{prefix}:"
+        for capability in self.capabilities:
+            if capability.startswith(marker):
+                value = capability[len(marker) :].strip()
+                return value or None
+        return None
+
+    @property
+    def idempotency_key_header(self) -> str | None:
+        return self.protocol("idempotency-key-header")
+
+    @property
+    def correlation_header(self) -> str | None:
+        return self.protocol("correlation-header")
+
+    @property
+    def remote_lookup_protocol(self) -> str | None:
+        return self.protocol("remote-lookup")
+
 
 @dataclass(slots=True)
 class Provider:
@@ -112,6 +139,9 @@ class ProviderProfile:
     enabled: bool = False
     explicit_live_opt_in: bool = False
     credential_status: str = "unconfigured"
+    base_url: str | None = None
+    credential_ref: str | None = None
+    timeout_ms: int = 30_000
     revision: int = 1
     id: str = field(default_factory=lambda: str(uuid4()))
     operation_policies: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -119,6 +149,7 @@ class ProviderProfile:
     quota_snapshots: dict[str, ProviderQuotaSnapshot] = field(default_factory=dict)
     active_operations: dict[str, int] = field(default_factory=dict)
     request_windows: dict[str, tuple[int, float]] = field(default_factory=dict)
+    project_scope: tuple[str, ...] = ()
 
     def update(self, expected_revision: int, **changes: object) -> None:
         if expected_revision != self.revision:
@@ -164,6 +195,7 @@ class Model:
     profile_id: str
     model_key: str
     enabled: bool = False
+    default_parameters: dict[str, object] = field(default_factory=dict)
     revision: int = 1
     id: str = field(default_factory=lambda: str(uuid4()))
     historical_references: int = 0

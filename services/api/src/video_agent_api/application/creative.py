@@ -292,7 +292,7 @@ class CreativeService:
             if existing:
                 if existing.fingerprint != fingerprint:
                     raise ValidationDomainError("handoff id fingerprint conflict")
-                return existing
+                return cast(ProjectEpisodeTextHandoffAck, existing)
             project = await uow.projects.get(handoff.project_id)
             if project is None:
                 raise ProjectNotFoundError(handoff.project_id)

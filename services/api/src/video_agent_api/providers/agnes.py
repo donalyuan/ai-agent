@@ -5,6 +5,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Literal
+from urllib.parse import urljoin
+
+import httpx
 
 from video_agent_api.ports.contracts import (
     AdapterNotConfiguredError,
@@ -19,6 +22,12 @@ class AgnesVideoProvider(VideoGenerationPort):
     configured: bool = False
     operations: dict[str, dict[str, object]] | None = None
     transport: Callable[[str, dict[str, object], ModelSelection, str], PortResult] | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    http_transport: httpx.BaseTransport | None = None
+    timeout_seconds: float = 30.0
+    idempotency_key_header: str | None = None
+    correlation_header: str | None = None
 
     def probe_capabilities(self, advertised: list[dict[str, object]]) -> dict[str, object]:
         """Return one account-observed stable mode; callers persist this snapshot."""
@@ -68,14 +77,48 @@ class AgnesVideoProvider(VideoGenerationPort):
         selection: ModelSelection,
         correlation_id: str,
     ) -> PortResult:
-        if self.transport is None:
-            raise AdapterNotConfiguredError("agnes_video_transport_unconfigured")
         if self.operations is not None and operation not in self.operations:
             raise AdapterNotConfiguredError("agnes_video_operation_unconfigured")
-        result = self.transport(operation, payload, selection, correlation_id)
-        if not isinstance(result, PortResult):
+        if self.transport is not None:
+            result = self.transport(operation, payload, selection, correlation_id)
+            if not isinstance(result, PortResult):
+                raise ValueError("agnes_video_result_invalid")
+            return result
+        if not self.base_url or not self.api_key:
+            raise AdapterNotConfiguredError("agnes_video_transport_unconfigured")
+        if operation not in {"submit", "poll"}:
+            raise AdapterNotConfiguredError("agnes_video_operation_unconfigured")
+        base = self.base_url.rstrip("/") + "/"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        if self.idempotency_key_header:
+            headers[self.idempotency_key_header] = correlation_id
+        if self.correlation_header:
+            headers[self.correlation_header] = correlation_id
+        with httpx.Client(transport=self.http_transport, follow_redirects=False) as client:
+            if operation == "submit":
+                response = client.post(
+                    urljoin(base, "videos"),
+                    headers=headers,
+                    json={"model": selection.model_id, "prompt": payload["prompt"]},
+                    timeout=self.timeout_seconds,
+                )
+            else:
+                request_id = payload.get("providerRequestId")
+                if not isinstance(request_id, str) or not request_id:
+                    raise ValueError("agnes_video_request_id_invalid")
+                response = client.get(
+                    urljoin(base, f"videos/{request_id}"),
+                    headers=headers,
+                    timeout=self.timeout_seconds,
+                )
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict):
             raise ValueError("agnes_video_result_invalid")
-        return result
+        request_id = body.get("id") or body.get("video_id") or payload.get("providerRequestId")
+        if not isinstance(request_id, str) or not request_id:
+            raise ValueError("agnes_video_result_request_id_missing")
+        return PortResult(request_id, correlation_id, dict(body))
 
     def validate_capability(self, operation: str, parameters: dict[str, object]) -> None:
         if self.operations is None or operation not in self.operations:
